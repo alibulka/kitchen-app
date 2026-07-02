@@ -198,6 +198,27 @@
   .ing-name { font-size: 15px; flex: 1; }
   .ing-qty { font-size: 17px; font-weight: 700; white-space: nowrap; }
 
+  /* ---- subpreps ---- */
+  .subprep-block {
+    background: var(--bg-subtle);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+  }
+  .subprep-block:last-child { margin-bottom: 0; }
+  .subprep-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+  .subprep-id { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+  .subprep-name { font-size: 15px; font-weight: 600; }
+  .subprep-ings { padding-left: 8px; border-left: 2px solid var(--border); margin: 6px 0 4px; }
+  .subprep-ing { padding: 5px 0; }
+  .subprep-ing .ing-name { font-size: 14px; color: var(--text-muted); }
+  .subprep-ing .ing-qty { font-size: 14px; font-weight: 600; }
+  .subprep-yield {
+    font-size: 13px; font-weight: 700; color: var(--ok);
+    margin-top: 6px; padding-top: 4px;
+    border-top: 1px dashed var(--border);
+  }
+
   /* ---- pack table ---- */
   .pack-table { width: 100%; border-collapse: collapse; min-width: 420px; }
   .pack-table th {
@@ -7093,8 +7114,23 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees}) {
     // ПОДЗАГОТОВКИ (только если есть)
     (item.subPreps||[]).length>0 && e('div',{className:'card-section'},
       e('div',{className:'section-label'},'Подзаготовки'),
-      (item.subPreps||[]).map(sp=>e('div',{key:sp.id,className:'ing-row'},
-        e('div',{className:'ing-name'},'ID #'+sp.id+' '+sp.name)
+      (item.subPreps||[]).map(sp=>e('div',{key:sp.id,className:'subprep-block'},
+        // Заголовок подзаготовки
+        e('div',{className:'subprep-header'},
+          e('span',{className:'subprep-id'},'ID #'+sp.id),
+          e('span',{className:'subprep-name'},sp.name)
+        ),
+        // Ингредиенты подзаготовки
+        (sp.ingredients||[]).length>0 && e('div',{className:'subprep-ings'},
+          (sp.ingredients||[]).map((ing,i)=>e('div',{key:i,className:'ing-row subprep-ing'},
+            e('div',{className:'ing-name'},ing.name),
+            ing.planAmount>0 && e('div',{className:'ing-qty'},
+              ing.planAmount.toLocaleString('ru-RU'),' ',(ing.unit||'г'))
+          ))
+        ),
+        // Выход подзаготовки
+        sp.yieldAmount>0 && e('div',{className:'subprep-yield'},
+          'Выход: '+sp.yieldAmount.toLocaleString('ru-RU')+' г')
       ))
     ),
 
@@ -7838,8 +7874,20 @@ function TechcardsTab({shift, allTechcards, activeTechcard, onApplyTechcard, onD
         let mainHasPackTable=false; // получила ли главная позиция уже pack table
         let inPackTable=false;
         let inIngredTable=false;
-        let lastIngredTable=null;   // последняя прочитанная таблица ингредиентов
-        let mainItemIngredTable=null; // таблица ингредиентов главной позиции (до подзаготовок)
+        let lastIngredTable=null;
+        let mainItemIngredTable=null; // ингредиенты главной позиции (сохраняем до первой подзаготовки)
+        let currentSubPrep=null;      // текущая подзаготовка
+
+        // Сохранить lastIngredTable в нужный владелец (подзаготовка или главная позиция)
+        function flushIngredTable(){
+          if(!lastIngredTable||lastIngredTable.length===0){lastIngredTable=null;return;}
+          if(currentSubPrep){
+            currentSubPrep.ingredients=lastIngredTable;
+          } else if(currentMainItem&&mainItemIngredTable===null){
+            mainItemIngredTable=lastIngredTable;
+          }
+          lastIngredTable=null;
+        }
 
         const isShopHeader=row=>/рабочее место/i.test(String(row[0]||''));
         const isPrepItem=row=>/^id#\d+/i.test(String(row[0]||'').trim());
@@ -7868,8 +7916,9 @@ function TechcardsTab({shift, allTechcards, activeTechcard, onApplyTechcard, onD
               if(existing){currentStation=existing;}
               else{currentStation={key,shop:shopName,name:stationName?shopName+' / '+stationName:shopName,items:[]};stations.push(currentStation);}
             }
-            currentMainItem=null; mainHasPackTable=false;
-            inPackTable=false; inIngredTable=false; lastIngredTable=null; mainItemIngredTable=null;
+            flushIngredTable();
+            currentMainItem=null; currentSubPrep=null; mainHasPackTable=false;
+            inPackTable=false; inIngredTable=false; mainItemIngredTable=null;
             continue;
           }
 
@@ -7880,18 +7929,17 @@ function TechcardsTab({shift, allTechcards, activeTechcard, onApplyTechcard, onD
             if(m){
               const newItem={id:Number(m[1]),name:m[2].trim()};
               if(currentMainItem && !mainHasPackTable){
-                // все ID# до pack table главной позиции — её подзаготовки
-                // сохраняем таблицу ингредиентов главной позиции до того, как подзаготовка её перетрёт
-                if(mainItemIngredTable===null && lastIngredTable && lastIngredTable.length>0){
-                  mainItemIngredTable=lastIngredTable;
-                }
+                // сохраняем ингредиенты предыдущей подзаготовки / главной позиции
+                flushIngredTable();
                 if(!currentMainItem.subPreps) currentMainItem.subPreps=[];
-                currentMainItem.subPreps.push(newItem);
+                currentSubPrep=newItem;
+                currentMainItem.subPreps.push(currentSubPrep);
               } else {
                 // новая главная позиция
+                flushIngredTable();
                 currentMainItem=newItem;
+                currentSubPrep=null;
                 mainHasPackTable=false;
-                lastIngredTable=null;
                 mainItemIngredTable=null;
                 currentStation.items.push(currentMainItem);
               }
@@ -7901,12 +7949,12 @@ function TechcardsTab({shift, allTechcards, activeTechcard, onApplyTechcard, onD
 
           // Pack table — проверяем ДО inIngredTable, чтобы не поглотить header
           if(isPackHeader(row)){
-            // сохраняем таблицу ингредиентов к главной позиции
-            // mainItemIngredTable — сохранили до подзаготовок; lastIngredTable — если подзаготовок нет
-            const finalIngreds=mainItemIngredTable||(lastIngredTable&&lastIngredTable.length>0?lastIngredTable:null);
-            if(currentMainItem && finalIngreds){
-              currentMainItem.ingredients=finalIngreds;
+            // сохраняем ингредиенты последней подзаготовки / главной позиции
+            flushIngredTable();
+            if(currentMainItem && mainItemIngredTable){
+              currentMainItem.ingredients=mainItemIngredTable;
             }
+            currentSubPrep=null;
             mainHasPackTable=true;
             inPackTable=true; inIngredTable=false;
             continue;
@@ -7919,7 +7967,14 @@ function TechcardsTab({shift, allTechcards, activeTechcard, onApplyTechcard, onD
             continue;
           }
           if(inIngredTable){
-            if(/^вес готовой/i.test(s0)){inIngredTable=false;continue;}
+            if(/^вес готовой/i.test(s0)){
+              const yieldAmt=Number(String(row[3]||'').replace(/\s/g,''))||0;
+              if(yieldAmt>0){
+                if(currentSubPrep) currentSubPrep.yieldAmount=yieldAmt;
+                else if(currentMainItem) currentMainItem.yieldAmount=yieldAmt;
+              }
+              inIngredTable=false;continue;
+            }
             const ingId=Number(row[0]);
             const ingName=String(row[1]||'').trim();
             const netto=Number(String(row[3]||'').replace(/\s/g,''))||0;

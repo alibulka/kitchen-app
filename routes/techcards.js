@@ -22,19 +22,24 @@ async function buildTechcard(id) {
   `, [id]);
 
   const { rows: subPrepRows } = await pool.query(`
-    SELECT isp.item_id, isp.sub_item_id, isp.sub_item_name
+    SELECT isp.item_id, isp.sub_item_id, isp.sub_item_name, i.yield_amount
     FROM item_sub_preps isp
+    LEFT JOIN items i ON i.item_id = isp.sub_item_id
     WHERE isp.item_id IN (
       SELECT item_id FROM techcard_station_items WHERE techcard_id = $1
     )
     ORDER BY isp.item_id, isp.sort_order
   `, [id]);
 
+  // Ингредиенты главных позиций + ингредиенты подзаготовок
   const { rows: ingredRows } = await pool.query(`
     SELECT ii.item_id, ii.ing_id, ii.ing_name, ii.plan_amount, ii.unit
     FROM item_ingredients ii
     WHERE ii.item_id IN (
       SELECT item_id FROM techcard_station_items WHERE techcard_id = $1
+      UNION
+      SELECT sub_item_id FROM item_sub_preps
+      WHERE item_id IN (SELECT item_id FROM techcard_station_items WHERE techcard_id = $1)
     )
     ORDER BY ii.item_id, ii.sort_order
   `, [id]);
@@ -44,16 +49,22 @@ async function buildTechcard(id) {
     FROM techcard_pack_lines WHERE techcard_id = $1 ORDER BY item_id, line_idx
   `, [id]);
 
-  const subPrepsMap = {};
-  for (const r of subPrepRows) {
-    if (!subPrepsMap[r.item_id]) subPrepsMap[r.item_id] = [];
-    subPrepsMap[r.item_id].push({ id: r.sub_item_id, name: r.sub_item_name });
-  }
-
+  // Строим ingredMap для всех item_id (главные + подзаготовки)
   const ingredMap = {};
   for (const r of ingredRows) {
     if (!ingredMap[r.item_id]) ingredMap[r.item_id] = [];
     ingredMap[r.item_id].push({ id: r.ing_id, name: r.ing_name, planAmount: r.plan_amount, unit: r.unit });
+  }
+
+  const subPrepsMap = {};
+  for (const r of subPrepRows) {
+    if (!subPrepsMap[r.item_id]) subPrepsMap[r.item_id] = [];
+    subPrepsMap[r.item_id].push({
+      id:          r.sub_item_id,
+      name:        r.sub_item_name,
+      yieldAmount: r.yield_amount || 0,
+      ingredients: ingredMap[r.sub_item_id] || []
+    });
   }
 
   const itemsMap = {};
@@ -92,19 +103,39 @@ async function saveTechcardData(client, techcardId, items, stations) {
   for (const st of (stations || [])) {
     for (const item of (st.items || [])) {
       await client.query(
-        'INSERT INTO items(item_id, name, updated_at) VALUES($1,$2,NOW()::text) ON CONFLICT(item_id) DO UPDATE SET name=$2, updated_at=NOW()::text',
-        [item.id, item.name]
+        'INSERT INTO items(item_id, name, yield_amount, updated_at) VALUES($1,$2,$3,NOW()::text) ON CONFLICT(item_id) DO UPDATE SET name=$2, yield_amount=$3, updated_at=NOW()::text',
+        [item.id, item.name, item.yieldAmount || 0]
       );
+
+      // Подзаготовки: сохраняем как отдельные items с ингредиентами
       if (item.subPreps && item.subPreps.length > 0) {
         await client.query('DELETE FROM item_sub_preps WHERE item_id = $1', [item.id]);
         for (let i = 0; i < item.subPreps.length; i++) {
           const sp = item.subPreps[i];
+          // Подзаготовка — тоже item в глобальном каталоге
           await client.query(
-            'INSERT INTO item_sub_preps(item_id,sub_item_id,sub_item_name,sort_order) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',
+            'INSERT INTO items(item_id, name, yield_amount, updated_at) VALUES($1,$2,$3,NOW()::text) ON CONFLICT(item_id) DO UPDATE SET name=$2, yield_amount=$3, updated_at=NOW()::text',
+            [sp.id, sp.name, sp.yieldAmount || 0]
+          );
+          await client.query(
+            'INSERT INTO item_sub_preps(item_id,sub_item_id,sub_item_name,sort_order) VALUES($1,$2,$3,$4) ON CONFLICT(item_id,sub_item_id) DO UPDATE SET sub_item_name=$3, sort_order=$4',
             [item.id, sp.id, sp.name, i]
           );
+          // Ингредиенты подзаготовки
+          if (sp.ingredients && sp.ingredients.length > 0) {
+            await client.query('DELETE FROM item_ingredients WHERE item_id = $1', [sp.id]);
+            for (let j = 0; j < sp.ingredients.length; j++) {
+              const ing = sp.ingredients[j];
+              await client.query(
+                'INSERT INTO item_ingredients(item_id,sort_order,ing_id,ing_name,plan_amount,unit) VALUES($1,$2,$3,$4,$5,$6)',
+                [sp.id, j, ing.id, ing.name, ing.planAmount || 0, ing.unit || 'г']
+              );
+            }
+          }
         }
       }
+
+      // Ингредиенты главной позиции
       if (item.ingredients && item.ingredients.length > 0) {
         await client.query('DELETE FROM item_ingredients WHERE item_id = $1', [item.id]);
         for (let i = 0; i < item.ingredients.length; i++) {

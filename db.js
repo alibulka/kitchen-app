@@ -79,9 +79,10 @@ async function initDb() {
     );
 
     CREATE TABLE IF NOT EXISTS items (
-      item_id    INTEGER PRIMARY KEY,
-      name       TEXT    NOT NULL,
-      updated_at TEXT    NOT NULL DEFAULT (NOW()::text)
+      item_id      INTEGER PRIMARY KEY,
+      name         TEXT    NOT NULL,
+      yield_amount REAL    NOT NULL DEFAULT 0,
+      updated_at   TEXT    NOT NULL DEFAULT (NOW()::text)
     );
 
     CREATE TABLE IF NOT EXISTS item_sub_preps (
