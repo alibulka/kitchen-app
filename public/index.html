@@ -8000,6 +8000,21 @@ function TechcardsTab({shift, allTechcards, activeTechcard, onApplyTechcard, onD
         const totalItems=filteredStations.reduce((a,s)=>a+s.items.length,0);
         if(totalItems===0){setMessage('⚠ Позиции не найдены. Проверьте формат файла.');return;}
 
+        // DEBUG: вывод подзаготовок в консоль
+        console.group('📊 Парсинг Excel — подзаготовки');
+        filteredStations.forEach(st=>{
+          st.items.forEach(item=>{
+            if((item.subPreps||[]).length>0){
+              console.log(`${item.name} (ID#${item.id})`);
+              item.subPreps.forEach(sp=>{
+                console.log(`  ↳ [ID#${sp.id}] ${sp.name} | ингред: ${(sp.ingredients||[]).length} | выход: ${sp.yieldAmount||0}г`);
+                (sp.ingredients||[]).forEach(ing=>console.log(`      - ${ing.name}: ${ing.planAmount}г`));
+              });
+            }
+          });
+        });
+        console.groupEnd();
+
         const baseName=file.name.replace(/\.[^.]+$/,'');
         setTcName(baseName);
         setParsed({stations:filteredStations, packLines, filename:file.name, previewRows:rows.slice(0,5)});
