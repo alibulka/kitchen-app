@@ -1,39 +1,46 @@
 const express = require('express');
 const router = express.Router();
-const db = require('../db');
+const { pool } = require('../db');
 
-// GET /api/employees
-router.get('/', (req, res) => {
-  const rows = db.prepare(
-    'SELECT id, name, shop FROM employees WHERE active = 1 ORDER BY shop, name'
-  ).all();
-  res.json({ employees: rows });
+router.get('/', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT id, name, shop FROM employees WHERE active = 1 ORDER BY shop, name'
+    );
+    res.json({ employees: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// POST /api/employees — добавить одного сотрудника
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   const { id, name, shop } = req.body;
   if (!name || !shop) return res.status(400).json({ error: 'name and shop required' });
   if (!id)            return res.status(400).json({ error: 'id required' });
 
-  db.prepare(`
-    INSERT INTO employees(id, name, shop, active, updated_at)
-    VALUES(?, ?, ?, 1, datetime('now'))
-    ON CONFLICT(id) DO UPDATE SET
-      name = excluded.name, shop = excluded.shop,
-      active = 1, updated_at = excluded.updated_at
-  `).run(id, name.trim(), shop.trim());
-
-  res.json({ ok: true });
+  try {
+    await pool.query(`
+      INSERT INTO employees(id, name, shop, active, updated_at)
+      VALUES($1, $2, $3, 1, NOW()::text)
+      ON CONFLICT(id) DO UPDATE SET
+        name = $2, shop = $3, active = 1, updated_at = NOW()::text
+    `, [id, name.trim(), shop.trim()]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// DELETE /api/employees/:id — деактивировать (не удалять физически,
-// чтобы сохранить историческую привязку в shift_item_employees)
-router.delete('/:id', (req, res) => {
-  db.prepare(
-    'UPDATE employees SET active = 0, updated_at = datetime(\'now\') WHERE id = ?'
-  ).run(req.params.id);
-  res.json({ ok: true });
+router.delete('/:id', async (req, res) => {
+  try {
+    await pool.query(
+      "UPDATE employees SET active = 0, updated_at = NOW()::text WHERE id = $1",
+      [req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;

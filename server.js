@@ -5,6 +5,8 @@ const { WebSocketServer } = require('ws');
 const cors = require('cors');
 const path = require('path');
 
+const { pool, initDb } = require('./db');
+
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
@@ -21,11 +23,13 @@ app.use('/api/shifts',    require('./routes/shifts'));
 app.use('/api/employees', require('./routes/employees'));
 app.use('/api/techcards', require('./routes/techcards'));
 
-// Справочник цехов из БД
-const db = require('./db');
-app.get('/api/shops', (_req, res) => {
-  const rows = db.prepare('SELECT name FROM shops ORDER BY sort_order').all();
-  res.json({ shops: rows.map(r => r.name) });
+app.get('/api/shops', async (_req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT name FROM shops ORDER BY sort_order');
+    res.json({ shops: rows.map(r => r.name) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/', (req, res) => {
@@ -39,8 +43,15 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 const PORT = process.env.PORT || 3000;
-// Keep-alive: connections held max 5s, enough for UI navigation without exhausting browser's 6-connection pool
 server.keepAliveTimeout = 5000;
-server.listen(PORT, () => {
-  console.log(`Kitchen server running on http://localhost:${PORT}`);
-});
+
+initDb()
+  .then(() => {
+    server.listen(PORT, () => {
+      console.log(`Kitchen server running on http://localhost:${PORT}`);
+    });
+  })
+  .catch(err => {
+    console.error('Failed to initialize database:', err);
+    process.exit(1);
+  });
