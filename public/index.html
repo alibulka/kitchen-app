@@ -206,13 +206,16 @@
     margin-bottom: 8px;
   }
   .subprep-block:last-child { margin-bottom: 0; }
-  .subprep-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+  .subprep-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+  .subprep-usage { margin-left: auto; font-size: 13px; font-weight: 700; color: var(--accent, #2563eb); white-space: nowrap; }
   .subprep-id { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
   .subprep-name { font-size: 15px; font-weight: 600; }
   .subprep-ings { padding-left: 8px; border-left: 2px solid var(--border); margin: 6px 0 4px; }
   .subprep-ing { padding: 5px 0; }
   .subprep-ing .ing-name { font-size: 14px; color: var(--text-muted); }
   .subprep-ing .ing-qty { font-size: 14px; font-weight: 600; }
+  .subprep-block-nested { background: var(--bg-hover,rgba(0,0,0,.04)); border-radius: 8px; padding: 6px 10px; margin: 4px 0; }
+  .subprep-yield-nested { font-size: 12px; color: var(--muted); margin-top: 2px; }
   .subprep-yield {
     font-size: 13px; font-weight: 700; color: var(--ok);
     margin-top: 6px; padding-top: 4px;
@@ -3785,6 +3788,85 @@ const STATIONS_CATALOG_FROM_EXCEL = [
       },
     ]
   },
+  {
+    key: "gotovaya_eda_prochee",
+    shop: "Готовая еда",
+    name: "Готовая еда / Прочее",
+    items: [
+      {id:12265, name:"Вареный рис Японика в пароварке", yieldAmount:1320.0, yieldUnit:"г"},
+      {id:12575, name:"Взбитый творожный крем с кремчизом", yieldAmount:0, yieldUnit:"г"},
+      {id:12635, name:"Взбитый белок", yieldAmount:86.0, yieldUnit:"г"},
+      {id:12671, name:"Творожная основа с кремчизом", yieldAmount:360.0, yieldUnit:"г"},
+    ]
+  },
+  {
+    key: "gotovaya_eda_plita",
+    shop: "Готовая еда",
+    name: "Готовая еда / Плита",
+    items: [
+      {id:4727,  name:"Бланшированная фасоль зеленая стручковая с/м", yieldAmount:1200.0, yieldUnit:"г"},
+      {id:12258, name:"Бланшированные бобы эдамаме", yieldAmount:600.0, yieldUnit:"г"},
+      {id:12310, name:"Блинчики выпеченные (50 гр/шт)", yieldAmount:0, yieldUnit:"г"},
+      {id:4740,  name:"Тесто для блинов", yieldAmount:0, yieldUnit:"г"},
+      {id:4425,  name:"Молоко 1,5% / Перетаривание", yieldAmount:300.0, yieldUnit:"г"},
+      {id:4190,  name:"Вареная гречка", yieldAmount:1800.0, yieldUnit:"г"},
+      {id:4512,  name:"Вареная гречневая лапша", yieldAmount:2850.0, yieldUnit:"г"},
+      {id:11433, name:"Вареный булгур со специями", yieldAmount:0, yieldUnit:"г"},
+      {id:5573,  name:"Сушеные томаты + паприка", yieldAmount:900.0, yieldUnit:"г"},
+      {id:12647, name:"Вареный зелёный булгур", yieldAmount:0, yieldUnit:"г"},
+      {id:12135, name:"Зелёный бульон", yieldAmount:0, yieldUnit:"г"},
+      {id:5160,  name:"Шпинат свежий / Перебрать", yieldAmount:34.0, yieldUnit:"г"},
+      {id:4649,  name:"Лук красный очищенный", yieldAmount:900.0, yieldUnit:"г"},
+      {id:1612,  name:"Жареные шампиньоны", yieldAmount:120.0, yieldUnit:"г"},
+      {id:12702, name:"Запаренный кускус с пряностями", yieldAmount:1350.0, yieldUnit:"г"},
+      {id:12607, name:"Обжаренная зеленая фасоль с лимонным перцем", yieldAmount:400.0, yieldUnit:"г"},
+      {id:11430, name:"Овсяная каша готовая", yieldAmount:0, yieldUnit:"г"},
+      {id:9926,  name:"Омлет яичный на крахмале", yieldAmount:0, yieldUnit:"г"},
+      {id:8251,  name:"Меланж в бутылке «Удобное яйцо» / Перетаривание", yieldAmount:600.0, yieldUnit:"г"},
+      {id:9947,  name:"Паста пенне Pasteroni вареная", yieldAmount:540.0, yieldUnit:"г"},
+      {id:12642, name:"Паста фузилли Pasteroni вареная", yieldAmount:1680.0, yieldUnit:"г"},
+    ]
+  },
+  {
+    key: "gotovaya_eda_konvektomat",
+    shop: "Готовая еда",
+    name: "Готовая еда / Конвектомат",
+    items: [
+      {id:12772, name:"Аджапсандал", yieldAmount:0, yieldUnit:"г"},
+      {id:12770, name:"Перец красный жареный (кусочки)", yieldAmount:0, yieldUnit:"г"},
+      {id:4348,  name:"Перец свежий красный обработанный", yieldAmount:616.0, yieldUnit:"г"},
+      {id:12769, name:"Баклажан запеченный (четверть кольца)", yieldAmount:0, yieldUnit:"г"},
+      {id:4557,  name:"Баклажаны свежие обработанные", yieldAmount:906.0, yieldUnit:"г"},
+      {id:12771, name:"Красный лук жареный (кубик 2х2 см)", yieldAmount:0, yieldUnit:"г"},
+      {id:4649,  name:"Лук красный очищенный", yieldAmount:210.0, yieldUnit:"г"},
+      {id:8249,  name:"Томаты консервированные измельченные / Перетаривание", yieldAmount:2420.0, yieldUnit:"г"},
+      {id:5938,  name:"Баклажан запеченный (ломтики)", yieldAmount:0, yieldUnit:"г"},
+      {id:11391, name:"Готовые сырники для кафе 50 гр/шт", yieldAmount:2400.0, yieldUnit:"г"},
+      {id:12039, name:"Готовые фрикадельки из курицы / Фасовка", yieldAmount:900.0, yieldUnit:"г"},
+      {id:12738, name:"Грузинский куриный шашлычок / Фасовка", yieldAmount:1100.0, yieldUnit:"г"},
+      {id:12037, name:"Запеченная курица филе со специями / Фасовка", yieldAmount:3600.0, yieldUnit:"г"},
+      {id:5644,  name:"Запеченная свекла / Бруски", yieldAmount:0, yieldUnit:"г"},
+      {id:12605, name:"Свекла очищенная / Брусок 1,5 см", yieldAmount:560.0, yieldUnit:"г"},
+      {id:11380, name:"Итальянская фриттата", yieldAmount:0, yieldUnit:"г"},
+      {id:11381, name:"Масса омлетная для фриттаты", yieldAmount:0, yieldUnit:"г"},
+      {id:4550,  name:"Свежая петрушка обработанная (50% стеблей)", yieldAmount:132.0, yieldUnit:"г"},
+      {id:4431,  name:"Лук зеленый обработанный", yieldAmount:86.0, yieldUnit:"г"},
+      {id:4425,  name:"Молоко 1,5% / Перетаривание", yieldAmount:1760.0, yieldUnit:"г"},
+      {id:12766, name:"Кабачок запеченный (ломтики)", yieldAmount:0, yieldUnit:"г"},
+      {id:4331,  name:"Кабачки свежие обработанные", yieldAmount:880.0, yieldUnit:"г"},
+      {id:12592, name:"Картофель беби запеченный с травами / Половинки", yieldAmount:600.0, yieldUnit:"г"},
+      {id:11813, name:"Картофель запеченный / Кубик 2х2 см", yieldAmount:0, yieldUnit:"г"},
+      {id:11812, name:"Картофель свежий очищенный для су-вид", yieldAmount:1200.0, yieldUnit:"г"},
+      {id:11437, name:"Кебабы из курицы / Фасовка", yieldAmount:900.0, yieldUnit:"г"},
+      {id:12595, name:"Котлеты из тунца готовые", yieldAmount:550.0, yieldUnit:"г"},
+      {id:9930,  name:"Креветки Су-вид без хвостов для кафе", yieldAmount:0, yieldUnit:"г"},
+      {id:5187,  name:"Креветки 26/30 дефростированные", yieldAmount:540.0, yieldUnit:"г"},
+      {id:11440, name:"Куриный шашлычок в панировке из специй / Фасовка", yieldAmount:240.0, yieldUnit:"г"},
+      {id:9955,  name:"Помидоры черри запеченные (целиком)", yieldAmount:0, yieldUnit:"г"},
+      {id:226,   name:"Помидоры черри / Помыть", yieldAmount:330.0, yieldUnit:"г"},
+      {id:12774, name:"Чевапчичи готовые / Фасовка", yieldAmount:1320.0, yieldUnit:"г"},
+    ]
+  },
 ];
 
 const EXCEL_PACK_LINES = {
@@ -6782,9 +6864,6 @@ const INITIAL_EMPLOYEES = [
 const SAUCE_MILK_SHOPS = ['Соусный цех', 'Молочный цех'];
 
 function getShopEmployees(shopName, allEmployees) {
-  if (SAUCE_MILK_SHOPS.includes(shopName)) {
-    return allEmployees.filter(e => SAUCE_MILK_SHOPS.includes(e.shop));
-  }
   return allEmployees.filter(e => e.shop === shopName);
 }
 
@@ -6847,7 +6926,7 @@ async function loadShopsFromServer() {
     const { shops } = await r.json();
     return shops;
   } catch(e) {
-    return ['Горячий цех','Сухой цех','Рыбный цех','Молочный цех','Мясной цех','Соусный цех','Овощной цех','Цех готовой еды'];
+    return ['Горячий цех','Сухой цех','Рыбный цех','Молочный цех','Мясной цех','Соусный цех','Овощной цех','Готовая еда'];
   }
 }
 async function loadShift(dateKey) {
@@ -6858,12 +6937,15 @@ async function loadShift(dateKey) {
     return shift || null;
   } catch(e) { return null; }
 }
+// Уникальный ID вкладки — сервер вернёт его в WS-бродкасте, и мы проигнорируем свои же апдейты
+const MY_CLIENT_ID = Math.random().toString(36).slice(2);
+
 async function saveShift(dateKey, data) {
   try {
     await fetch(`/api/shifts/${dateKey}`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({shift: data})
+      body: JSON.stringify({shift: data, clientId: MY_CLIENT_ID})
     });
   } catch(e) {}
 }
@@ -7062,7 +7144,7 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees}) {
   const toggleEmp=(empId)=>{
     const cur=shift.doneBy[itemKey]||[];
     const isRemoving=cur.includes(empId);
-    const next=isRemoving?cur.filter(x=>x!==empId):[...cur,empId];
+    const next=isRemoving?[]:[empId];
     // Removing last employee → uncheck done
     const newDone=next.length===0&&isDone
       ? {...shift.doneFlags,[itemKey]:false}
@@ -7111,27 +7193,34 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees}) {
       isDone && e('div',{className:'done-badge'},'✓ Готово')
     ),
 
-    // ПОДЗАГОТОВКИ (только если есть)
+    // ПОДЗАГОТОВКИ (рекурсивно, любая глубина)
     (item.subPreps||[]).length>0 && e('div',{className:'card-section'},
       e('div',{className:'section-label'},'Подзаготовки'),
-      (item.subPreps||[]).map(sp=>e('div',{key:sp.id,className:'subprep-block'},
-        // Заголовок подзаготовки
-        e('div',{className:'subprep-header'},
-          e('span',{className:'subprep-id'},'ID #'+sp.id),
-          e('span',{className:'subprep-name'},sp.name)
-        ),
-        // Ингредиенты подзаготовки
-        (sp.ingredients||[]).length>0 && e('div',{className:'subprep-ings'},
-          (sp.ingredients||[]).map((ing,i)=>e('div',{key:i,className:'ing-row subprep-ing'},
-            e('div',{className:'ing-name'},ing.name),
-            ing.planAmount>0 && e('div',{className:'ing-qty'},
-              ing.planAmount.toLocaleString('ru-RU'),' ',(ing.unit||'г'))
-          ))
-        ),
-        // Выход подзаготовки
-        sp.yieldAmount>0 && e('div',{className:'subprep-yield'},
-          'Выход: '+sp.yieldAmount.toLocaleString('ru-RU')+' г')
-      ))
+      (function renderSubPreps(sps,depth){
+        return sps.map(sp=>e('div',{
+          key:sp.id,
+          className: depth===0?'subprep-block':'subprep-block-nested',
+          style: depth>1?{marginLeft:(depth-1)*10+'px'}:undefined
+        },
+          e('div',{className:'subprep-header'},
+            e('span',{className:'subprep-id'},'ID #'+sp.id),
+            e('span',{className:'subprep-name'},sp.name),
+            sp.usageAmount>0 && e('span',{className:'subprep-usage'},sp.usageAmount.toLocaleString('ru-RU'),'г')
+          ),
+          // Вложенные подзаготовки (рекурсия)
+          (sp.subPreps||[]).length>0 && renderSubPreps(sp.subPreps||[], depth+1),
+          // Ингредиенты текущей подзаготовки
+          (sp.ingredients||[]).length>0 && e('div',{className:'subprep-ings'},
+            (sp.ingredients||[]).map((ing,i)=>e('div',{key:i,className:'ing-row subprep-ing'},
+              e('div',{className:'ing-name'},ing.name),
+              ing.planAmount>0 && e('div',{className:'ing-qty'},
+                ing.planAmount.toLocaleString('ru-RU'),' ',(ing.unit||'г'))
+            ))
+          ),
+          sp.yieldAmount>0 && e('div',{className: depth===0?'subprep-yield':'subprep-yield-nested'},
+            'Выход: '+sp.yieldAmount.toLocaleString('ru-RU')+' г')
+        ));
+      })(item.subPreps||[], 0)
     ),
 
     // ИНГРЕДИЕНТЫ (только если есть)
@@ -7184,22 +7273,31 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
   const pct=items.length>0?Math.round(doneCount/items.length*100):0;
   const pillColor=doneCount===items.length?'var(--ok)':'var(--warn)';
 
-  // displayOrder: current visual order of item IDs
-  const [displayOrder,setDisplayOrder]=useState(()=>items.map(i=>i.id));
+  // displayOrder: current visual order of item IDs — done items изначально снизу
+  const [displayOrder,setDisplayOrder]=useState(()=>{
+    const todoIds=items.filter(i=>!shift.doneFlags[`${station.key}-${i.id}`]).map(i=>i.id);
+    const doneIds=items.filter(i=>!!shift.doneFlags[`${station.key}-${i.id}`]).map(i=>i.id);
+    return [...todoIds,...doneIds];
+  });
   // sinkingIds: items currently in the fade-out phase before moving
   const [sinkingIds,setSinkingIds]=useState(()=>new Set());
   // settledIds: items that just moved to bottom (play slide-in animation briefly)
   const [settledIds,setSettledIds]=useState(()=>new Set());
 
-  const prevDoneRef=useRef({});
+  // Инициализируем с текущим состоянием, чтобы уже выполненные позиции не мелькали в "Надо выполнить"
+  const prevDoneRef=useRef(
+    Object.fromEntries(items.map(i=>[i.id,!!shift.doneFlags[`${station.key}-${i.id}`]]))
+  );
   const timersRef=useRef({});
 
   // Reset when station changes
   useEffect(()=>{
-    setDisplayOrder(items.map(i=>i.id));
+    const todoIds=items.filter(i=>!shift.doneFlags[`${station.key}-${i.id}`]).map(i=>i.id);
+    const doneIds=items.filter(i=>!!shift.doneFlags[`${station.key}-${i.id}`]).map(i=>i.id);
+    setDisplayOrder([...todoIds,...doneIds]);
     setSinkingIds(new Set());
     setSettledIds(new Set());
-    prevDoneRef.current={};
+    prevDoneRef.current=Object.fromEntries(items.map(i=>[i.id,!!shift.doneFlags[`${station.key}-${i.id}`]]));
     Object.values(timersRef.current).forEach(clearTimeout);
     timersRef.current={};
   },[station.key]);
@@ -7395,11 +7493,15 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTechcar
   const [filterShop,setFilterShop]=useState('');
   const [filterStation,setFilterStation]=useState('');
   const [filterStatus,setFilterStatus]=useState('');
+  const [filterEmployee,setFilterEmployee]=useState('');
   const [sortCol,setSortCol]=useState('');
   const [sortDir,setSortDir]=useState('asc');
 
   // Сбрасываем фильтр станции при смене цеха
   useEffect(()=>{setFilterStation('');},[filterShop]);
+
+  // Список уникальных сотрудников для фильтра
+  const employeeOptions=useMemo(()=>[...new Set(allEmployees.map(e=>e.name))].sort(),[allEmployees]);
 
   useEffect(()=>{
     if(periodMode==='today'){setPeriodShifts(null);return;}
@@ -7440,8 +7542,9 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTechcar
           }
           const empIds=s.doneBy[ik]||[];
           const empNames=empIds.map(id=>{const emp=allEmployees.find(x=>x.id===id);return emp?emp.name:id;}).join(', ')||'—';
+          const pct=planQty>0?Math.round(factQty/planQty*100):0;
           rows.push({date:dk,station:station.name,shop:station.shop,name:item.name,
-            planQty,factQty,unit:item.packPlan?.unit||'уп',done:isDone,employee:empNames});
+            planQty,factQty,pct,unit:item.packPlan?.unit||'уп',done:isDone,employee:empNames});
         });
       });
     };
@@ -7460,6 +7563,7 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTechcar
     if(filterStation) rows=rows.filter(r=>r.station===filterStation);
     if(filterStatus==='done') rows=rows.filter(r=>r.done);
     if(filterStatus==='todo') rows=rows.filter(r=>!r.done);
+    if(filterEmployee) rows=rows.filter(r=>r.employee.includes(filterEmployee));
     if(sortCol){
       rows.sort((a,b)=>{
         let av=a[sortCol],bv=b[sortCol];
@@ -7468,7 +7572,7 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTechcar
       });
     }
     return rows;
-  },[allRows,filterShop,filterText,filterStation,filterStatus,sortCol,sortDir]);
+  },[allRows,filterShop,filterText,filterStation,filterStatus,filterEmployee,sortCol,sortDir]);
 
   const toggleSort=(col)=>{
     if(sortCol===col) setSortDir(d=>d==='asc'?'desc':'asc');
@@ -7583,8 +7687,12 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTechcar
           e('option',{value:'done'},'✓ Готово'),
           e('option',{value:'todo'},'В работе')
         ),
-        (filterText||filterShop||filterStation||filterStatus) && e('button',{className:'btn-secondary',
-          onClick:()=>{setFilterText('');setFilterShop('');setFilterStation('');setFilterStatus('');}},
+        e('select',{className:'filter-select',value:filterEmployee,onChange:ev=>setFilterEmployee(ev.target.value)},
+          e('option',{value:''},'Все сотрудники'),
+          employeeOptions.map(n=>e('option',{key:n,value:n},n))
+        ),
+        (filterText||filterShop||filterStation||filterStatus||filterEmployee) && e('button',{className:'btn-secondary',
+          onClick:()=>{setFilterText('');setFilterShop('');setFilterStation('');setFilterStatus('');setFilterEmployee('');}},
           '✕ Сбросить')
       ),
       e('div',{style:{overflowX:'auto'}},
@@ -7630,7 +7738,7 @@ function EmployeesTab({employees, onSave}) {
   const [list, setList]=useState(()=>[...employees]);
   const [newName, setNewName]=useState('');
   const [newShop, setNewShop]=useState('Горячий цех');
-  const [shops, setShops]=useState(['Горячий цех','Сухой цех','Рыбный цех','Молочный цех','Мясной цех','Соусный цех','Овощной цех','Цех готовой еды']);
+  const [shops, setShops]=useState(['Горячий цех','Сухой цех','Рыбный цех','Молочный цех','Мясной цех','Соусный цех','Овощной цех','Готовая еда']);
 
   useEffect(()=>{
     loadShopsFromServer().then(s=>{setShops(s);if(s.length>0)setNewShop(s[0]);});
@@ -7870,23 +7978,27 @@ function TechcardsTab({shift, allTechcards, activeTechcard, onApplyTechcard, onD
         const stations=[];
         const packLines={};
         let currentStation=null;
-        let currentMainItem=null;   // текущая главная позиция
-        let mainHasPackTable=false; // получила ли главная позиция уже pack table
         let inPackTable=false;
         let inIngredTable=false;
         let lastIngredTable=null;
-        let mainItemIngredTable=null; // ингредиенты главной позиции (сохраняем до первой подзаготовки)
-        let currentSubPrep=null;      // текущая подзаготовка
+        let lastWasSubPrepId=false;
+        // Стек вместо фиксированных переменных — поддерживает любую глубину вложенности.
+        // Каждый элемент: {item, hasOwnIngredTable}
+        // prepStack[0] — главная позиция, prepStack[1..N] — подзаготовки
+        let prepStack=[];
 
-        // Сохранить lastIngredTable в нужный владелец (подзаготовка или главная позиция)
+        function stackTop(){ return prepStack[prepStack.length-1]||null; }
+
         function flushIngredTable(){
-          if(!lastIngredTable||lastIngredTable.length===0){lastIngredTable=null;return;}
-          if(currentSubPrep){
-            currentSubPrep.ingredients=lastIngredTable;
-          } else if(currentMainItem&&mainItemIngredTable===null){
-            mainItemIngredTable=lastIngredTable;
-          }
+          if(!lastIngredTable||!lastIngredTable.length){lastIngredTable=null;return;}
+          const top=stackTop();
+          if(top) top.item.ingredients=lastIngredTable;
           lastIngredTable=null;
+        }
+
+        function resetStacks(){
+          prepStack=[]; lastIngredTable=null; lastWasSubPrepId=false;
+          inPackTable=false; inIngredTable=false;
         }
 
         const isShopHeader=row=>/рабочее место/i.test(String(row[0]||''));
@@ -7917,8 +8029,7 @@ function TechcardsTab({shift, allTechcards, activeTechcard, onApplyTechcard, onD
               else{currentStation={key,shop:shopName,name:stationName?shopName+' / '+stationName:shopName,items:[]};stations.push(currentStation);}
             }
             flushIngredTable();
-            currentMainItem=null; currentSubPrep=null; mainHasPackTable=false;
-            inPackTable=false; inIngredTable=false; mainItemIngredTable=null;
+            resetStacks();
             continue;
           }
 
@@ -7928,20 +8039,35 @@ function TechcardsTab({shift, allTechcards, activeTechcard, onApplyTechcard, onD
             const m=s0.match(/^id#(\d+)\s+заготовка:\s*(.+)/i);
             if(m){
               const newItem={id:Number(m[1]),name:m[2].trim()};
-              if(currentMainItem && !mainHasPackTable){
-                // сохраняем ингредиенты предыдущей подзаготовки / главной позиции
+              const top=stackTop();
+              if(!top){
+                // Первая позиция в цехе
+                prepStack=[{item:newItem,hasOwnIngredTable:false}];
+                currentStation.items.push(newItem);
+                lastWasSubPrepId=false;
+              } else if(top.hasOwnIngredTable){
+                // Сиблинг: текущий top уже получил свою таблицу ингредиентов → новый элемент того же уровня
                 flushIngredTable();
-                if(!currentMainItem.subPreps) currentMainItem.subPreps=[];
-                currentSubPrep=newItem;
-                currentMainItem.subPreps.push(currentSubPrep);
+                prepStack.pop();
+                const parent=stackTop();
+                if(parent){
+                  if(!parent.item.subPreps) parent.item.subPreps=[];
+                  parent.item.subPreps.push(newItem);
+                  prepStack.push({item:newItem,hasOwnIngredTable:false});
+                  lastWasSubPrepId=true;
+                } else {
+                  // Вернулись к корневому уровню → новая главная позиция
+                  prepStack=[{item:newItem,hasOwnIngredTable:false}];
+                  currentStation.items.push(newItem);
+                  lastWasSubPrepId=false;
+                }
               } else {
-                // новая главная позиция
+                // Дочерний: текущий top ещё не получил свою таблицу ингредиентов → newItem вложен глубже
                 flushIngredTable();
-                currentMainItem=newItem;
-                currentSubPrep=null;
-                mainHasPackTable=false;
-                mainItemIngredTable=null;
-                currentStation.items.push(currentMainItem);
+                if(!top.item.subPreps) top.item.subPreps=[];
+                top.item.subPreps.push(newItem);
+                prepStack.push({item:newItem,hasOwnIngredTable:false});
+                lastWasSubPrepId=true;
               }
             }
             continue;
@@ -7949,35 +8075,45 @@ function TechcardsTab({shift, allTechcards, activeTechcard, onApplyTechcard, onD
 
           // Pack table — проверяем ДО inIngredTable, чтобы не поглотить header
           if(isPackHeader(row)){
-            // сохраняем ингредиенты последней подзаготовки / главной позиции
-            flushIngredTable();
-            if(currentMainItem && mainItemIngredTable){
-              currentMainItem.ingredients=mainItemIngredTable;
+            // Закрываем все открытые уровни стека
+            while(prepStack.length>0){
+              flushIngredTable();
+              prepStack.pop();
             }
-            currentSubPrep=null;
-            mainHasPackTable=true;
             inPackTable=true; inIngredTable=false;
+            lastWasSubPrepId=false;
             continue;
           }
 
           // Таблица ингредиентов — проверяем ДО inIngredTable, чтобы начать новую
           if(isIngredHeader(row)){
+            if(lastWasSubPrepId){
+              // Таблица принадлежит текущему top (только что добавленному ID#)
+              const top=stackTop();
+              if(top) top.hasOwnIngredTable=true;
+            } else {
+              // Не после ID# → переход: текущий top (если уже получил свою таблицу) завершён → pop
+              const top=stackTop();
+              if(top && top.hasOwnIngredTable && prepStack.length>1){
+                flushIngredTable(); // сохраняем ингредиенты текущего top
+                prepStack.pop();    // поднимаемся к родителю
+              }
+              // иначе: top ещё не получил свою таблицу → эта таблица для него
+            }
+            lastWasSubPrepId=false;
             inIngredTable=true; inPackTable=false;
             lastIngredTable=[];
             continue;
           }
           if(inIngredTable){
             if(/^вес готовой/i.test(s0)){
+              // Явное завершение подзаготовки — выход из текущего уровня стека
               const yieldAmt=Number(String(row[3]||'').replace(/\s/g,''))||0;
-              if(yieldAmt>0){
-                if(currentSubPrep) currentSubPrep.yieldAmount=yieldAmt;
-                else if(currentMainItem) currentMainItem.yieldAmount=yieldAmt;
-              }
-              // Блок подзаготовки завершён — сохраняем её ингредиенты и сбрасываем
-              // Следующая таблица ингредиентов будет принадлежать главной позиции
-              if(currentSubPrep){
+              const top=stackTop();
+              if(top){
+                if(yieldAmt>0) top.item.yieldAmount=yieldAmt;
                 flushIngredTable();
-                currentSubPrep=null;
+                if(prepStack.length>1) prepStack.pop(); // оставляем главную позицию в стеке
               }
               inIngredTable=false;continue;
             }
@@ -8006,18 +8142,15 @@ function TechcardsTab({shift, allTechcards, activeTechcard, onApplyTechcard, onD
         const totalItems=filteredStations.reduce((a,s)=>a+s.items.length,0);
         if(totalItems===0){setMessage('⚠ Позиции не найдены. Проверьте формат файла.');return;}
 
-        // DEBUG: вывод подзаготовок в консоль
+        // DEBUG: рекурсивный вывод подзаготовок
+        function debugItem(item,indent){
+          console.log(indent+`[ID#${item.id}] ${item.name} | ингред: ${(item.ingredients||[]).length} | выход: ${item.yieldAmount||0}г`);
+          (item.ingredients||[]).forEach(ing=>console.log(indent+`  - ${ing.name}: ${ing.planAmount}г`));
+          (item.subPreps||[]).forEach(sp=>debugItem(sp,indent+'  ↳ '));
+        }
         console.group('📊 Парсинг Excel — подзаготовки');
         filteredStations.forEach(st=>{
-          st.items.forEach(item=>{
-            if((item.subPreps||[]).length>0){
-              console.log(`${item.name} (ID#${item.id})`);
-              item.subPreps.forEach(sp=>{
-                console.log(`  ↳ [ID#${sp.id}] ${sp.name} | ингред: ${(sp.ingredients||[]).length} | выход: ${sp.yieldAmount||0}г`);
-                (sp.ingredients||[]).forEach(ing=>console.log(`      - ${ing.name}: ${ing.planAmount}г`));
-              });
-            }
-          });
+          st.items.forEach(item=>{ if((item.subPreps||[]).length>0) debugItem(item,''); });
         });
         console.groupEnd();
 
@@ -8267,7 +8400,8 @@ function App() {
     ws.onmessage=(e)=>{
       try {
         const msg=JSON.parse(e.data);
-        if(msg.type==='shift_updated' && msg.date===shift.date){
+        // Игнорируем собственные апдейты (clientId совпадает с нашим)
+        if(msg.type==='shift_updated' && msg.date===shift.date && msg.clientId!==MY_CLIENT_ID){
           setShift(msg.shift);
         }
       } catch(_){}

@@ -1,7 +1,11 @@
-const { Pool } = require('pg');
+// Единая точка подключения к БД.
+// Локально — SQLite (node:sqlite через db-sqlite.js).
+// На Replit — PostgreSQL (DATABASE_URL).
+// Оба адаптера экспортируют одинаковый интерфейс: pool.query / pool.withTransaction.
 
-// Создание таблиц (одинаковый SQL для обоих адаптеров — pgToSqlite конвертирует для SQLite)
 async function initDb(pool) {
+  const q = (sql, p) => pool.query(sql, p).catch(() => {});
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS employees (
       id         TEXT PRIMARY KEY,
@@ -101,6 +105,18 @@ async function initDb(pool) {
     )
   `);
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS sub_prep_ingredients (
+      item_id     INTEGER NOT NULL,
+      sub_item_id INTEGER NOT NULL,
+      sort_order  INTEGER NOT NULL DEFAULT 0,
+      ing_id      INTEGER NOT NULL,
+      ing_name    TEXT    NOT NULL,
+      plan_amount REAL    NOT NULL DEFAULT 0,
+      unit        TEXT    NOT NULL DEFAULT 'г',
+      PRIMARY KEY (item_id, sub_item_id, sort_order)
+    )
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS techcard_stations (
       techcard_id  INTEGER NOT NULL REFERENCES techcards(id) ON DELETE CASCADE,
       station_key  TEXT    NOT NULL,
@@ -133,44 +149,51 @@ async function initDb(pool) {
     )
   `);
 
-  // Индексы
   for (const sql of [
     'CREATE INDEX IF NOT EXISTS idx_shifts_date   ON shifts(date)',
     'CREATE INDEX IF NOT EXISTS idx_sis_station   ON shift_item_status(station_key, shift_date)',
     'CREATE INDEX IF NOT EXISTS idx_tc_si         ON techcard_station_items(techcard_id, station_key)',
     'CREATE INDEX IF NOT EXISTS idx_tc_pack_lines ON techcard_pack_lines(techcard_id, item_id)',
     'CREATE INDEX IF NOT EXISTS idx_sfn_shift     ON shift_facts_n(shift_date)',
-  ]) {
-    await pool.query(sql).catch(() => {});
-  }
+  ]) { await q(sql); }
 
-  // Справочник цехов
-  const shopNames = [
+  const shops = [
     'Горячий цех', 'Сухой цех', 'Рыбный цех',
     'Молочный цех', 'Мясной цех', 'Соусный цех', 'Овощной цех',
-    'Цех готовой еды'
+    'Готовая еда',
   ];
-  for (let i = 0; i < shopNames.length; i++) {
-    await pool.query(
-      'INSERT INTO shops(name, sort_order) VALUES($1, $2) ON CONFLICT(name) DO NOTHING',
-      [shopNames[i], i]
-    ).catch(() => {});
+  for (let i = 0; i < shops.length; i++) {
+    await q('INSERT INTO shops(name, sort_order) VALUES($1, $2) ON CONFLICT(name) DO NOTHING', [shops[i], i]);
   }
 
-  console.log(`Database initialized (${process.env.DATABASE_URL ? 'PostgreSQL' : 'SQLite'})`);
+  console.log(`DB ready (${process.env.DATABASE_URL ? 'PostgreSQL' : 'SQLite'})`);
 }
 
 let pool;
 
 if (process.env.DATABASE_URL) {
-  // Продакшн: PostgreSQL (Replit)
   const { Pool } = require('pg');
   pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
+    ssl: { rejectUnauthorized: false },
   });
+
+  // pg не имеет withTransaction — добавляем
+  pool.withTransaction = async function(fn) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await fn(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  };
 } else {
-  // Локальная разработка: SQLite
   pool = require('./db-sqlite').pool;
 }
 
