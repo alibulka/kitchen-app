@@ -8,6 +8,14 @@ const sqlite = new DatabaseSync(dbPath);
 sqlite.exec('PRAGMA journal_mode = WAL;');
 sqlite.exec('PRAGMA foreign_keys = ON;');
 
+// Миграции: добавляем колонки если их нет
+const migrations = [
+  "ALTER TABLE items ADD COLUMN yield_amount REAL NOT NULL DEFAULT 0",
+];
+for (const sql of migrations) {
+  try { sqlite.exec(sql); } catch {} // игнорируем если уже есть
+}
+
 // Конвертируем $1,$2,... → ?, ?, ...  и массив параметров
 function toSqlite(sql, params) {
   const converted = sql.replace(/\$\d+/g, '?');

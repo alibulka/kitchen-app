@@ -7973,6 +7973,12 @@ function TechcardsTab({shift, allTechcards, activeTechcard, onApplyTechcard, onD
                 if(currentSubPrep) currentSubPrep.yieldAmount=yieldAmt;
                 else if(currentMainItem) currentMainItem.yieldAmount=yieldAmt;
               }
+              // Блок подзаготовки завершён — сохраняем её ингредиенты и сбрасываем
+              // Следующая таблица ингредиентов будет принадлежать главной позиции
+              if(currentSubPrep){
+                flushIngredTable();
+                currentSubPrep=null;
+              }
               inIngredTable=false;continue;
             }
             const ingId=Number(row[0]);
