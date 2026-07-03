@@ -106,14 +106,15 @@ async function initDb(pool) {
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS sub_prep_ingredients (
-      item_id     INTEGER NOT NULL,
-      sub_item_id INTEGER NOT NULL,
-      sort_order  INTEGER NOT NULL DEFAULT 0,
-      ing_id      INTEGER NOT NULL,
-      ing_name    TEXT    NOT NULL,
-      plan_amount REAL    NOT NULL DEFAULT 0,
-      unit        TEXT    NOT NULL DEFAULT 'г',
-      PRIMARY KEY (item_id, sub_item_id, sort_order)
+      grandparent_item_id INTEGER NOT NULL DEFAULT 0,
+      item_id             INTEGER NOT NULL,
+      sub_item_id         INTEGER NOT NULL,
+      sort_order          INTEGER NOT NULL DEFAULT 0,
+      ing_id              INTEGER NOT NULL,
+      ing_name            TEXT    NOT NULL,
+      plan_amount         REAL    NOT NULL DEFAULT 0,
+      unit                TEXT    NOT NULL DEFAULT 'г',
+      PRIMARY KEY (grandparent_item_id, item_id, sub_item_id, sort_order)
     )
   `);
   await pool.query(`
