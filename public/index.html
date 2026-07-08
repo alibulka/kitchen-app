@@ -77,7 +77,7 @@
   /* ---- station tabs ---- */
   .station-tabs {
     display: flex; gap: 6px; overflow-x: auto;
-    padding: 14px 20px 0; background: var(--surface);
+    padding: 14px 20px 0; background: var(--bg);
     border-bottom: 2px solid var(--border);
     -webkit-overflow-scrolling: touch;
   }
@@ -7059,14 +7059,11 @@ function SvgSort({dir='none',size=12}) {
 // ============================================================
 // PACK TABLE
 // ============================================================
-function PackTable({packLines, facts, onFactChange, itemKey}) {
+function PackTable({packLines, facts, onFactChange, itemKey,
+                    doneFlags, doneBy, onLineEmp, shopEmployees}) {
   const hasDestination = packLines.some(l => l.destination);
-  const totalPlan = packLines.reduce((s,l)=>s+(Number(l.qty)||0)+(Number(l.fromWarehouse)||0),0);
-  const totalFact = packLines.reduce((s,l,i)=>{
-    const k=`${itemKey}-pl-${i}`;
-    const v=parseFloat(facts[k]);
-    return s+(isNaN(v)?(Number(l.qty)||0):v)+(Number(l.fromWarehouse)||0);
-  },0);
+  const hasEmps = shopEmployees && shopEmployees.length > 0 && onLineEmp;
+  const colSpan = 4 + (hasDestination ? 2 : 0);
 
   return e('div',{style:{overflowX:'auto'}},
     e('table',{className:'pack-table'},
@@ -7081,26 +7078,61 @@ function PackTable({packLines, facts, onFactChange, itemKey}) {
         )
       ),
       e('tbody',null,
-        ...packLines.map((line,i)=>{
+        ...packLines.flatMap((line,i)=>{
           const k=`${itemKey}-pl-${i}`;
           const planQty=Number(line.qty)||0;
           const factVal=facts[k]!==undefined?facts[k]:planQty;
-          return e('tr',{key:i},
-            e('td',null,line.volume||'—'),
-            e('td',null,line.packName||line.pack||'—'),
-            hasDestination && e('td',null,line.destination||'—'),
-            hasDestination && e('td',{className:'num'},line.fromWarehouse!==undefined?line.fromWarehouse:'0'),
-            e('td',{className:'num'},e('strong',{style:{fontSize:16}},planQty,' уп')),
-            e('td',{className:'num'},
-              e('input',{
-                type:'number',step:1,min:0,
-                className:'pack-fact-input',
-                value:factVal,
-                onChange:ev=>onFactChange(k, ev.target.value)
-              })
+          const lineDone=!!(doneFlags&&doneFlags[k]);
+          const lineEmpIds=(doneBy&&doneBy[k])||[];
+          return [
+            e('tr',{key:`r-${i}`,style:{background:lineDone?'var(--ok-bg)':''}},
+              e('td',null,line.volume||'—'),
+              e('td',null,line.packName||line.pack||'—'),
+              hasDestination && e('td',null,line.destination||'—'),
+              hasDestination && e('td',{className:'num'},line.fromWarehouse!==undefined?line.fromWarehouse:'0'),
+              e('td',{className:'num'},e('strong',{style:{fontSize:16}},planQty,' уп')),
+              e('td',{className:'num'},
+                e('input',{
+                  type:'number',step:1,min:0,
+                  className:'pack-fact-input',
+                  value:factVal,
+                  onFocus:ev=>ev.target.select(),
+                  onChange:ev=>onFactChange(k, ev.target.value)
+                })
+              )
+            ),
+            hasEmps && e('tr',{key:`emp-${i}`},
+              e('td',{colSpan,style:{
+                padding:'6px 10px 10px',
+                background:lineDone?'var(--ok-bg)':'var(--bg)',
+                borderTop:'none'
+              }},
+                e('div',{style:{display:'flex',gap:8,flexWrap:'wrap'}},
+                  shopEmployees.map(emp=>{
+                    const sel=lineEmpIds.includes(emp.id);
+                    return e('button',{
+                      key:emp.id,
+                      onClick:()=>onLineEmp(i, emp.id),
+                      style:{
+                        display:'flex',alignItems:'center',gap:6,
+                        padding:'10px 16px',borderRadius:24,
+                        border:`2px solid ${sel?'var(--ok)':'var(--border)'}`,
+                        background:sel?'var(--ok)':'var(--surface)',
+                        color:sel?'white':'var(--text)',
+                        fontSize:15,fontWeight:sel?700:500,
+                        cursor:'pointer',transition:'all 0.15s',
+                        minHeight:44
+                      }
+                    },
+                      sel && e('span',{style:{fontSize:16,lineHeight:1}},'✓'),
+                      emp.name
+                    );
+                  })
+                )
+              )
             )
-          );
-        }),
+          ];
+        })
       )
     )
   );
@@ -7126,8 +7158,6 @@ function EmployeeToggles({employees, selectedIds, onToggle, warn}) {
 // ============================================================
 function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees}) {
   const itemKey=`${stationKey}-${item.id}`;
-  const isDone=!!shift.doneFlags[itemKey];
-  const selectedEmpIds=shift.doneBy[itemKey]||[];
   const [noEmpWarn,setNoEmpWarn]=useState(false);
 
   // pack lines: tech card override → EXCEL base → packPlan fallback
@@ -7139,27 +7169,39 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees}) {
     return [{volume, packName, qty:item.packPlan.qty, destination:'', fromWarehouse:undefined}];
   })() : []);
 
+  // isDone: all pack lines checked (or single flag for items without pack lines)
+  const isDone = packLines.length > 0
+    ? packLines.every((_,i)=>!!shift.doneFlags[`${itemKey}-pl-${i}`])
+    : !!shift.doneFlags[itemKey];
+
   const setFact=(k,v)=>onShiftChange({...shift,facts:{...shift.facts,[k]:v}});
 
+  // Per-line employee: tap to assign, tap again to remove
+  const onLineEmp=(lineIdx,empId)=>{
+    const lineKey=`${itemKey}-pl-${lineIdx}`;
+    const cur=shift.doneBy[lineKey]||[];
+    const isRemoving=cur.includes(empId);
+    const next=isRemoving?[]:[empId];
+    const newFlags={...shift.doneFlags,[lineKey]:!isRemoving};
+    newFlags[itemKey]=packLines.every((_,i)=>!!newFlags[`${itemKey}-pl-${i}`]);
+    onShiftChange({...shift,doneFlags:newFlags,doneBy:{...shift.doneBy,[lineKey]:next}});
+  };
+
+  // Old single-toggle (only for items without pack lines)
+  const selectedEmpIds=shift.doneBy[itemKey]||[];
   const toggleEmp=(empId)=>{
     const cur=shift.doneBy[itemKey]||[];
     const isRemoving=cur.includes(empId);
     const next=isRemoving?[]:[empId];
-    // Removing last employee → uncheck done
     const newDone=next.length===0&&isDone
       ? {...shift.doneFlags,[itemKey]:false}
       : shift.doneFlags;
-    // Adding employee → auto-mark done
-    const finalDone=!isRemoving
-      ? {...newDone,[itemKey]:true}
-      : newDone;
+    const finalDone=!isRemoving?{...newDone,[itemKey]:true}:newDone;
     onShiftChange({...shift,doneBy:{...shift.doneBy,[itemKey]:next},doneFlags:finalDone});
     setNoEmpWarn(false);
   };
-
   const toggleDone=()=>{
     if(!isDone&&selectedEmpIds.length===0){
-      // Can't mark done without selecting an employee first
       setNoEmpWarn(true);
       setTimeout(()=>setNoEmpWarn(false),1600);
       return;
@@ -7168,10 +7210,7 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees}) {
   };
 
   const mainIngs=(item.ingredients||[]).filter(i=>!i.isSubprep);
-
   const totalPlan=packLines.reduce((s,l)=>s+(Number(l.qty)||0)+(Number(l.fromWarehouse)||0),0);
-  const totalPlanPack=packLines[0]?.packName||packLines[0]?.pack||'';
-  const totalPlanVol=packLines[0]?.volume||'';
 
   return e('div',{className:'item-card'+(isDone?' done':''),style:{
     border: noEmpWarn?'2.5px solid var(--danger)':'',
@@ -7181,9 +7220,12 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees}) {
 
     // HEADER
     e('div',{className:'item-header'},
-      e('button',{className:'done-toggle'+(isDone?' checked':''),onClick:toggleDone},
-        isDone && e(SvgCheck,{size:28,color:'white'})
-      ),
+      packLines.length===0
+        ? e('button',{className:'done-toggle'+(isDone?' checked':''),onClick:toggleDone},
+            isDone && e(SvgCheck,{size:28,color:'white'}))
+        : e('div',{className:'done-toggle'+(isDone?' checked':''),
+            style:{cursor:'default',display:'flex',alignItems:'center',justifyContent:'center'}},
+            isDone && e(SvgCheck,{size:28,color:'white'})),
       e('div',{style:{flex:1,minWidth:0}},
         e('div',{className:'item-id'},'ID #'+item.id),
         e('p',{className:'item-name'},item.name),
@@ -7207,9 +7249,7 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees}) {
             e('span',{className:'subprep-name'},sp.name),
             sp.usageAmount>0 && e('span',{className:'subprep-usage'},sp.usageAmount.toLocaleString('ru-RU'),'г')
           ),
-          // Вложенные подзаготовки (рекурсия)
           (sp.subPreps||[]).length>0 && renderSubPreps(sp.subPreps||[], depth+1),
-          // Ингредиенты текущей подзаготовки
           (sp.ingredients||[]).length>0 && e('div',{className:'subprep-ings'},
             (sp.ingredients||[]).map((ing,i)=>e('div',{key:i,className:'ing-row subprep-ing'},
               e('div',{className:'ing-name'},ing.name),
@@ -7233,31 +7273,34 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees}) {
       ))
     ),
 
-    // ИТОГОВЫЕ ПОЗИЦИИ
-    e('div',{className:'card-section'},
+    // ИТОГОВЫЕ ПОЗИЦИИ с чекпоинтами по строкам
+    packLines.length>0 && e('div',{className:'card-section'},
       e('div',{className:'section-label'},'▼ Итоговые позиции — что нужно сделать'),
-      e(PackTable,{packLines,facts:shift.facts,onFactChange:setFact,itemKey})
+      e(PackTable,{packLines,facts:shift.facts,onFactChange:setFact,itemKey,
+                   doneFlags:shift.doneFlags,doneBy:shift.doneBy,
+                   onLineEmp,shopEmployees})
     ),
 
-    // ФИНАЛЬНЫЙ ИТОГ (крупно)
+    // ФИНАЛЬНЫЙ ИТОГ
     e('div',{className:'card-section',style:{background: isDone?'var(--ok-bg)':'var(--bg-subtle)'}},
       e('div',{className:'final-result'},
         e('div',{className:'final-result-label'},'ИТОГ'),
         e('div',{className:'final-result-value'},totalPlan,' уп')
       ),
-
-      // WHO DID IT
-      e('div',{className:'section-label',style:{marginTop:14}},
-        'Кто выполнил:',
-        noEmpWarn && e('span',{style:{marginLeft:10,color:'var(--danger)',fontWeight:700,fontSize:14}},
-          '← выберите сотрудника')),
-      e(EmployeeToggles,{employees:shopEmployees,selectedIds:selectedEmpIds,onToggle:toggleEmp,warn:noEmpWarn}),
-      selectedEmpIds.length>0 && e('div',{
-        style:{marginTop:10,fontSize:15,color:'var(--ok)',fontWeight:700}
-      },'Выполнил(а): '+selectedEmpIds.map(id=>{
-        const emp=shopEmployees.find(x=>x.id===id);
-        return emp?emp.name:id;
-      }).join(', '))
+      // Сотрудник — только для позиций без pack lines (старый режим)
+      packLines.length===0 && e('div',null,
+        e('div',{className:'section-label',style:{marginTop:14}},
+          'Кто выполнил:',
+          noEmpWarn && e('span',{style:{marginLeft:10,color:'var(--danger)',fontWeight:700,fontSize:14}},
+            '← выберите сотрудника')),
+        e(EmployeeToggles,{employees:shopEmployees,selectedIds:selectedEmpIds,onToggle:toggleEmp,warn:noEmpWarn}),
+        selectedEmpIds.length>0 && e('div',{
+          style:{marginTop:10,fontSize:15,color:'var(--ok)',fontWeight:700}
+        },'Выполнил(а): '+selectedEmpIds.map(id=>{
+          const emp=shopEmployees.find(x=>x.id===id);
+          return emp?emp.name:id;
+        }).join(', '))
+      )
     )
   );
 }
@@ -7419,8 +7462,8 @@ function KitchenShopPage({shopGroup, shift, onShiftChange, allEmployees, onBack,
           style:{
             flex:'0 0 auto',padding:'6px 14px',borderRadius:20,border:'none',
             fontSize:13,fontWeight:isActive?700:500,cursor:isActive?'default':'pointer',
-            background:isActive?'var(--accent)':'rgba(255,255,255,0.08)',
-            color:isActive?'white':'rgba(255,255,255,0.7)',
+            background:isActive?'var(--accent)':'var(--bg-subtle)',
+            color:isActive?'white':'var(--text)',
             transition:'background 0.2s'
           }
         }, g.shop+(pct!==null?' '+pct+'%':''));
@@ -7540,8 +7583,12 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTechcar
             const v=parseFloat((s.facts||{})[`${ik}-pl-0`]);
             factQty=isDone?(isNaN(v)?planQty:v):(isNaN(v)?0:v);
           }
-          const empIds=s.doneBy[ik]||[];
-          const empNames=empIds.map(id=>{const emp=allEmployees.find(x=>x.id===id);return emp?emp.name:id;}).join(', ')||'—';
+          // Collect employees from all pack line checkpoints + main key
+          const allEmpIds=[...new Set([
+            ...(s.doneBy[ik]||[]),
+            ...((packLines&&packLines.length>0)?packLines.flatMap((_,i)=>s.doneBy[`${ik}-pl-${i}`]||[]):[])
+          ])];
+          const empNames=allEmpIds.map(id=>{const emp=allEmployees.find(x=>x.id===id);return emp?emp.name:id;}).join(', ')||'—';
           const pct=planQty>0?Math.round(factQty/planQty*100):0;
           rows.push({date:dk,station:station.name,shop:station.shop,name:item.name,
             planQty,factQty,pct,unit:item.packPlan?.unit||'уп',done:isDone,employee:empNames});
@@ -7851,8 +7898,9 @@ function ShiftReportPanel({dk, allEmployees, onClose}) {
         const isDone=!!(data.shift.doneFlags||{})[ik];
         const pl=(data.shift.itemPackLines||{})[item.id]||EXCEL_PACK_LINES[item.id]||null;
         const planQty=pl?pl.reduce((a,l)=>a+(Number(l.qty)||0)+(Number(l.fromWarehouse)||0),0):(item.packPlan?.qty||0);
-        const empIds=(data.shift.doneBy||{})[ik]||[];
-        const emps=empIds.map(id=>{const e=allEmployees.find(x=>x.id===id);return e?e.name:id;}).join(', ')||'—';
+        const _doneBy=data.shift.doneBy||{};
+        const allEmpIds=[...new Set([...(_doneBy[ik]||[]),...(pl?pl.flatMap((_,i)=>_doneBy[`${ik}-pl-${i}`]||[]):[]) ])];
+        const emps=allEmpIds.map(id=>{const e=allEmployees.find(x=>x.id===id);return e?e.name:id;}).join(', ')||'—';
         rows.push([station.shop,station.name.replace(station.shop+' / ',''),item.name,planQty,isDone?'Да':'Нет',emps]);
       });
     });
