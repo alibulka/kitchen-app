@@ -24,6 +24,33 @@ for (const sql of migrations) {
   try { sqlite.exec(sql); } catch {}
 }
 
+// Добавляем company к techcards если нет
+{
+  const cols = sqlite.prepare('PRAGMA table_info(techcards)').all();
+  if (!cols.some(c => c.name === 'company')) {
+    sqlite.exec(`ALTER TABLE techcards ADD COLUMN company TEXT NOT NULL DEFAULT 'EE'`);
+    console.log('Migration: added company to techcards');
+  }
+}
+
+// Добавляем ud_techcard_id к shifts если нет
+{
+  const cols = sqlite.prepare('PRAGMA table_info(shifts)').all();
+  if (!cols.some(c => c.name === 'ud_techcard_id')) {
+    sqlite.exec(`ALTER TABLE shifts ADD COLUMN ud_techcard_id INTEGER REFERENCES techcards(id)`);
+    console.log('Migration: added ud_techcard_id to shifts');
+  }
+}
+
+// Добавляем source к techcard_pack_lines если нет
+{
+  const cols = sqlite.prepare('PRAGMA table_info(techcard_pack_lines)').all();
+  if (cols.length > 0 && !cols.some(c => c.name === 'source')) {
+    sqlite.exec(`ALTER TABLE techcard_pack_lines ADD COLUMN source TEXT NOT NULL DEFAULT 'EE'`);
+    console.log('Migration: added source to techcard_pack_lines');
+  }
+}
+
 // Добавляем grandparent_item_id если его нет (контекстно-зависимые граммовки подзаготовок)
 {
   const cols = sqlite.prepare('PRAGMA table_info(sub_prep_ingredients)').all();
@@ -55,40 +82,43 @@ for (const sql of migrations) {
 // ─── SQL: pg → SQLite ────────────────────────────────────────────────────────
 
 // Конвертируем подмножество pg-синтаксиса в SQLite.
-// Правила перечислены явно — без магических regex-цепочек.
-function normalize(sql) {
-  return sql
-    .replace(/\$\d+/g, '?')                                        // $1,$2 → ?
-    .replace(/NOW\(\)::text/gi, "datetime('now')")                  // pg cast
-    .replace(/NOW\(\)/gi,       "datetime('now')")
-    .replace(/SERIAL PRIMARY KEY/gi, 'INTEGER PRIMARY KEY AUTOINCREMENT')
-    .replace(/SMALLINT/gi, 'INTEGER')
-    .replace(/RETURNING id/gi, '');                                 // обрабатываем через lastInsertRowid
+// Возвращает {sql, params} — params могут быть расширены если $N повторяются.
+function normalize(sql, params = []) {
+  let outParams = [];
+  // Заменяем $N на ? и строим правильный массив params (с дублированием если $N повторяется)
+  const outSql = sql.replace(/\$(\d+)/g, (_, n) => {
+    outParams.push(params[Number(n) - 1]);
+    return '?';
+  });
+
+  return {
+    sql: outSql
+      .replace(/NOW\(\)::text/gi, "datetime('now')")
+      .replace(/NOW\(\)/gi,       "datetime('now')")
+      .replace(/SERIAL PRIMARY KEY/gi, 'INTEGER PRIMARY KEY AUTOINCREMENT')
+      .replace(/SMALLINT/gi, 'INTEGER')
+      .replace(/RETURNING id/gi, ''),
+    params: outParams.length > 0 ? outParams : params,
+  };
 }
 
 function execQuery(sql, params = []) {
-  const s = normalize(sql);
+  const { sql: s, params: p } = normalize(sql, params);
   try {
     if (/^\s*(SELECT|WITH)/i.test(s)) {
-      const rows = params.length
-        ? sqlite.prepare(s).all(...params)
-        : sqlite.prepare(s).all();
+      const rows = p.length ? sqlite.prepare(s).all(...p) : sqlite.prepare(s).all();
       return { rows };
     }
     // INSERT ... RETURNING id — возвращаем lastInsertRowid
     if (/returning/i.test(sql)) {
-      const info = params.length
-        ? sqlite.prepare(s).run(...params)
-        : sqlite.prepare(s).run();
+      const info = p.length ? sqlite.prepare(s).run(...p) : sqlite.prepare(s).run();
       return { rows: [{ id: info.lastInsertRowid }] };
     }
     // INSERT / UPDATE / DELETE
-    const info = params.length
-      ? sqlite.prepare(s).run(...params)
-      : sqlite.prepare(s).run();
+    const info = p.length ? sqlite.prepare(s).run(...p) : sqlite.prepare(s).run();
     return { rows: [], rowCount: info.changes };
   } catch (e) {
-    throw new Error(`SQLite error: ${e.message}\nSQL: ${s}\nParams: ${JSON.stringify(params)}`);
+    throw new Error(`SQLite error: ${e.message}\nSQL: ${s}\nParams: ${JSON.stringify(p)}`);
   }
 }
 

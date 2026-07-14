@@ -6,7 +6,7 @@ const { pool } = require('../db');
 
 async function buildTechcard(id) {
   const { rows: [row] } = await pool.query(
-    'SELECT id, name, filename, created_at FROM techcards WHERE id = $1', [id]
+    'SELECT id, name, filename, company, items_json, created_at FROM techcards WHERE id = $1', [id]
   );
   if (!row) return null;
 
@@ -51,7 +51,7 @@ async function buildTechcard(id) {
       ORDER BY ii.item_id, ii.sort_order
     `, [id]),
     pool.query(`
-      SELECT item_id, line_idx, volume, pack_name, destination, from_warehouse, qty
+      SELECT item_id, line_idx, volume, pack_name, destination, from_warehouse, qty, source
       FROM techcard_pack_lines WHERE techcard_id = $1 ORDER BY item_id, line_idx
     `, [id]),
   ]);
@@ -84,9 +84,19 @@ async function buildTechcard(id) {
 
   // ─── Карты для быстрого поиска ───────────────────────────────────────────────
 
-  const ingredMap = groupBy(ingredRows, 'item_id', r => ({
-    id: r.ing_id, name: r.ing_name, planAmount: r.plan_amount, unit: r.unit,
-  }));
+  // Граммовки ингредиентов: сначала пробуем per-techcard данные из items_json,
+  // иначе — глобальная таблица item_ingredients (для обратной совместимости)
+  const parsedJson = (() => { try { return JSON.parse(row.items_json || '{}'); } catch { return {}; } })();
+  const perTcIngAmounts = parsedJson.ingAmounts || null;
+
+  const ingredMap = perTcIngAmounts
+    ? Object.fromEntries(Object.entries(perTcIngAmounts).map(([itemId, ings]) => [
+        Number(itemId),
+        ings.map(ing => ({ id: ing.id, name: ing.name, planAmount: ing.planAmount || 0, unit: ing.unit || 'г' }))
+      ]))
+    : groupBy(ingredRows, 'item_id', r => ({
+        id: r.ing_id, name: r.ing_name, planAmount: r.plan_amount, unit: r.unit,
+      }));
 
   // Трёхуровневый ключ позволяет различать граммовки одной подзаготовки в разных контекстах
   const subIngredMap = {};
@@ -143,9 +153,11 @@ async function buildTechcard(id) {
   const items = groupBy(packLineRows, 'item_id', r => ({
     volume: r.volume, packName: r.pack_name,
     destination: r.destination, fromWarehouse: r.from_warehouse, qty: r.qty,
+    source: r.source || 'EE',
   }));
 
-  return { ...row, items, stations };
+  const { items_json: _, ...rowWithoutJson } = row;
+  return { ...rowWithoutJson, items, stations };
 }
 
 // ─── Запись техкарты ─────────────────────────────────────────────────────────
@@ -225,8 +237,8 @@ async function saveTechcardData(client, techcardId, items, stations) {
     for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
       const line = lines[lineIdx];
       await client.query(
-        'INSERT INTO techcard_pack_lines(techcard_id, item_id, line_idx, volume, pack_name, destination, from_warehouse, qty) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(techcard_id, item_id, line_idx) DO UPDATE SET volume=$4, pack_name=$5, destination=$6, from_warehouse=$7, qty=$8',
-        [techcardId, Number(itemId), lineIdx, line.volume || '', line.packName || '', line.destination || '', line.fromWarehouse || 0, line.qty || 0]
+        'INSERT INTO techcard_pack_lines(techcard_id, item_id, line_idx, volume, pack_name, destination, from_warehouse, qty, source) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(techcard_id, item_id, line_idx) DO UPDATE SET volume=$4, pack_name=$5, destination=$6, from_warehouse=$7, qty=$8, source=$9',
+        [techcardId, Number(itemId), lineIdx, line.volume || '', line.packName || '', line.destination || '', line.fromWarehouse || 0, line.qty || 0, line.source || 'EE']
       );
     }
   }
@@ -237,7 +249,7 @@ async function saveTechcardData(client, techcardId, items, stations) {
 router.get('/', async (req, res) => {
   try {
     const { rows } = await pool.query(
-      'SELECT id, name, filename, created_at FROM techcards ORDER BY created_at DESC'
+      'SELECT id, name, filename, company, created_at FROM techcards ORDER BY company, created_at DESC'
     );
     res.json({ techcards: rows });
   } catch (err) {
@@ -256,16 +268,29 @@ router.get('/:id', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { name, filename, items, stations } = req.body;
+  const { name, filename, items, stations, company } = req.body;
   if (!name) return res.status(400).json({ error: 'name required' });
+  const co = (company === 'УД') ? 'УД' : 'EE';
 
   try {
     const { id } = await pool.withTransaction(async (client) => {
+      // Сохраняем граммовки ингредиентов per-techcard в items_json
+      const ingAmounts = {};
+      for (const st of (stations || [])) {
+        for (const item of (st.items || [])) {
+          if (item.ingredients?.length) ingAmounts[item.id] = item.ingredients;
+        }
+      }
       const { rows: [tc] } = await client.query(
-        "INSERT INTO techcards(name, filename, items_json) VALUES($1,$2,'{}') RETURNING id",
-        [name, filename || null]
+        'INSERT INTO techcards(name, filename, company, items_json) VALUES($1,$2,$3,$4) RETURNING id',
+        [name, filename || null, co, JSON.stringify({ ingAmounts })]
       );
-      await saveTechcardData(client, tc.id, items || {}, stations || []);
+      // Tag each pack line with source = company
+      const taggedItems = {};
+      for (const [itemId, lines] of Object.entries(items || {})) {
+        taggedItems[itemId] = (lines || []).map(l => ({ ...l, source: co }));
+      }
+      await saveTechcardData(client, tc.id, taggedItems, stations || []);
       return tc;
     });
     res.json({ id, ok: true });

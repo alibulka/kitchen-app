@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Кухонный трекер</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍳</text></svg>">
 <style>
   :root {
     --bg: #F0EDE8;
@@ -126,8 +127,8 @@
   .item-card {
     background: var(--surface);
     border: 2px solid var(--border);
-    border-radius: 18px;
-    margin-bottom: 18px;
+    border-radius: 14px;
+    margin-bottom: 32px;
     overflow: hidden;
   }
   .item-card.done {
@@ -149,14 +150,14 @@
   .item-wrapper.settled { animation: slideIn 0.4s ease; }
   .item-header {
     display: flex; align-items: center; gap: 16px;
-    padding: 18px 20px;
-    background: var(--bg-subtle);
-    border-bottom: 2px solid var(--border);
+    padding: 14px 20px;
+    background: #3b3530;
+    border-bottom: 2px solid #2a2420;
   }
-  .item-card.done .item-header { background: var(--ok-bg); border-color: var(--ok); }
-  .item-id { font-size: 12px; color: var(--muted); font-weight: 700; margin-bottom: 3px; text-transform: uppercase; }
-  .item-name { font-size: 20px; font-weight: 800; line-height: 1.25; margin: 0; }
-  .item-yield { font-size: 14px; color: var(--muted); margin: 5px 0 0; }
+  .item-card.done .item-header { background: #2e4a28; border-color: var(--ok); }
+  .item-id { font-size: 12px; color: rgba(255,255,255,0.65); font-weight: 700; margin-bottom: 3px; text-transform: uppercase; }
+  .item-name { font-size: 20px; font-weight: 800; line-height: 1.25; margin: 0; color: #fff; }
+  .item-yield { font-size: 14px; color: rgba(255,255,255,0.6); margin: 5px 0 0; }
   .done-badge {
     background: var(--ok); color: white;
     padding: 6px 14px; border-radius: 999px;
@@ -168,8 +169,8 @@
   .done-toggle {
     flex-shrink: 0; width: 54px; height: 54px;
     border-radius: 14px;
-    border: 2.5px solid var(--border);
-    background: var(--surface);
+    border: 2.5px solid rgba(255,255,255,0.35);
+    background: rgba(255,255,255,0.9);
     display: flex; align-items: center; justify-content: center;
     transition: all 0.12s;
   }
@@ -179,9 +180,11 @@
 
   /* ---- section divider inside card ---- */
   .card-section {
-    padding: 16px 20px;
-    border-bottom: 2px solid var(--border);
+    margin: 0;
+    padding: 10px 16px;
+    border-bottom: 1.5px solid var(--border);
   }
+  .card-section:last-child { border-bottom: none; }
   .item-card.done .card-section { border-color: var(--ok); }
   .section-label {
     font-size: 11px; font-weight: 800; color: var(--muted);
@@ -191,12 +194,12 @@
 
   /* ---- ingredients ---- */
   .ing-row {
-    display: flex; align-items: center; gap: 12px;
-    padding: 10px 0; border-bottom: 1px solid var(--bg-subtle);
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 0; border-bottom: 1px solid var(--bg-subtle);
   }
   .ing-row:last-child { border-bottom: none; }
   .ing-name { font-size: 15px; flex: 1; }
-  .ing-qty { font-size: 17px; font-weight: 700; white-space: nowrap; }
+  .ing-qty { font-size: 16px; font-weight: 700; white-space: nowrap; }
 
   /* ---- subpreps ---- */
   .subprep-block {
@@ -223,15 +226,15 @@
   }
 
   /* ---- pack table ---- */
-  .pack-table { width: 100%; border-collapse: collapse; min-width: 420px; }
+  .pack-table { width: 100%; border-collapse: collapse; min-width: 360px; border-radius: 8px; overflow: hidden; }
   .pack-table th {
-    text-align: left; padding: 10px 12px;
+    text-align: left; padding: 6px 10px;
     background: var(--bg-subtle);
-    font-size: 12px; font-weight: 700; color: var(--muted);
-    border-bottom: 2px solid var(--border); white-space: nowrap;
+    font-size: 11px; font-weight: 700; color: var(--muted);
+    border-bottom: 1px solid var(--border); white-space: nowrap; letter-spacing: 0.04em;
   }
   .pack-table th.num { text-align: right; }
-  .pack-table td { padding: 11px 12px; border-bottom: 1px solid var(--bg-subtle); font-size: 15px; vertical-align: middle; }
+  .pack-table td { padding: 5px 10px; border-bottom: 1px solid var(--bg-subtle); font-size: 15px; vertical-align: middle; }
   .pack-table td.num { text-align: right; }
   .pack-table .total-row td {
     background: var(--bg-subtle); font-weight: 800;
@@ -250,11 +253,11 @@
   .emp-toggles.emp-warn { animation: warnPulse 0.4s ease 2; }
   @keyframes warnPulse { 0%{outline:none} 50%{outline:3px solid var(--danger);border-radius:10px;} 100%{outline:none} }
   .emp-toggle {
-    padding: 12px 20px; border-radius: 14px;
+    padding: 8px 16px; border-radius: 12px;
     border: 2.5px solid var(--border);
     background: var(--surface); color: var(--text);
-    font-size: 16px; font-weight: 700;
-    min-height: 52px; min-width: 100px;
+    font-size: 15px; font-weight: 700;
+    min-height: 42px; min-width: 80px;
     transition: all 0.1s;
   }
   .emp-toggle.selected {
@@ -404,6 +407,18 @@
     box-shadow: 0 4px 20px rgba(0,0,0,0.2);
     z-index: 100; pointer-events: none;
   }
+
+  /* ---- scroll to top ---- */
+  .scroll-top-btn {
+    position: fixed; bottom: 28px; right: 24px; z-index: 50;
+    width: 50px; height: 50px; border-radius: 50%;
+    background: var(--accent); color: white;
+    border: none; font-size: 22px; cursor: pointer;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+    display: flex; align-items: center; justify-content: center;
+    transition: opacity 0.2s, transform 0.2s;
+  }
+  .scroll-top-btn:active { transform: scale(0.92); }
 
   /* ---- save bar ---- */
   .save-bar {
@@ -6763,23 +6778,63 @@ const EXCEL_PACK_LINES = {
   ]
 };
 
-function getCatalogForDate(dateKey, activeTechcard) {
-  if (!activeTechcard) return [];
-  // New format: techcard has stations parsed from Excel
-  if (activeTechcard.stations && activeTechcard.stations.length > 0) {
-    return activeTechcard.stations;
+function getStationsFromTc(tc, source) {
+  if (!tc) return [];
+  if (tc.stations && tc.stations.length > 0) {
+    return tc.stations.map(s => ({
+      ...s,
+      items: s.items.map(i => ({ ...i, source }))
+    }));
   }
-  // Legacy fallback: filter static catalog by item IDs
-  if (!activeTechcard.items || Object.keys(activeTechcard.items).length === 0) {
-    return STATIONS_CATALOG_FROM_EXCEL;
-  }
-  const tcItemIds = new Set(Object.keys(activeTechcard.items).map(String));
+  if (!tc.items || Object.keys(tc.items).length === 0) return STATIONS_CATALOG_FROM_EXCEL;
+  const tcItemIds = new Set(Object.keys(tc.items).map(String));
   return STATIONS_CATALOG_FROM_EXCEL
     .map(station => ({
       ...station,
-      items: station.items.filter(item => tcItemIds.has(String(item.id)))
+      items: station.items.filter(item => tcItemIds.has(String(item.id))).map(i => ({ ...i, source }))
     }))
     .filter(station => station.items.length > 0);
+}
+
+function mergeStations(eeStations, udStations) {
+  const merged = eeStations.map(s => ({ ...s, items: s.items.map(i => ({ ...i })) }));
+  const stMap = {};
+  merged.forEach(s => { stMap[s.key] = s; });
+
+  for (const udSt of udStations) {
+    if (!stMap[udSt.key]) {
+      merged.push({ ...udSt });
+      stMap[udSt.key] = merged[merged.length - 1];
+    } else {
+      const eeSt = stMap[udSt.key];
+      for (const udItem of udSt.items) {
+        const eeItemIdx = eeSt.items.findIndex(i => i.id === udItem.id);
+        if (eeItemIdx === -1) {
+          eeSt.items.push({ ...udItem });
+        } else {
+          // Суммируем ингредиенты
+          const eeItem = eeSt.items[eeItemIdx];
+          const ingMap = {};
+          for (const ing of (eeItem.ingredients || [])) ingMap[ing.id] = { ...ing };
+          for (const ing of (udItem.ingredients || [])) {
+            if (ingMap[ing.id]) ingMap[ing.id].planAmount = (ingMap[ing.id].planAmount || 0) + (ing.planAmount || 0);
+            else ingMap[ing.id] = { ...ing };
+          }
+          eeSt.items[eeItemIdx] = { ...eeItem, source: 'both', ingredients: Object.values(ingMap) };
+        }
+      }
+    }
+  }
+  return merged;
+}
+
+function getCatalogForDate(dateKey, eeTc, udTc) {
+  if (!eeTc && !udTc) return [];
+  const eeStations = getStationsFromTc(eeTc, 'EE');
+  const udStations = getStationsFromTc(udTc, 'УД');
+  if (!udTc) return eeStations;
+  if (!eeTc) return udStations;
+  return mergeStations(eeStations, udStations);
 }
 
 function stationToKey(shopName, stationName) {
@@ -6984,11 +7039,11 @@ async function loadTechCard(id) {
     return techcard || null;
   } catch(e) { return null; }
 }
-async function saveTechCardToServer(name, filename, items, stations) {
+async function saveTechCardToServer(name, filename, items, stations, company) {
   const r = await fetch('/api/techcards', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({name, filename, items, stations})
+    body: JSON.stringify({name, filename, items, stations, company: company||'EE'})
   });
   if (!r.ok) throw new Error('Ошибка сохранения техкарты');
   return await r.json();
@@ -7061,24 +7116,38 @@ function SvgSort({dir='none',size=12}) {
 // ============================================================
 function PackTable({packLines, facts, onFactChange, itemKey,
                     doneFlags, doneBy, onLineEmp, shopEmployees}) {
-  const hasDestination = packLines.some(l => l.destination);
-  const hasEmps = shopEmployees && shopEmployees.length > 0 && onLineEmp;
-  const colSpan = 4 + (hasDestination ? 2 : 0);
+  // Сортировка: группируем по типу упаковки, внутри группы — по возрастанию объёма
+  const parseVolume = v => parseFloat((v||'0').replace(',','.')) || 0;
+  const packOrder = [...new Set(packLines.map(l => l.packName||''))];
+  const sortedLines = [...packLines].sort((a,b) => {
+    const pi = packOrder.indexOf(a.packName||'') - packOrder.indexOf(b.packName||'');
+    if (pi !== 0) return pi;
+    return parseVolume(a.volume) - parseVolume(b.volume);
+  });
+  // Сохраняем маппинг оригинальных индексов для корректной работы ключей facts/doneFlags
+  const origIndex = sortedLines.map(l => packLines.indexOf(l));
 
-  return e('div',{style:{overflowX:'auto'}},
+  const hasDestination = packLines.some(l => l.destination);
+  // Показываем бейдж ЕЕ/УД когда хотя бы у одной строки есть source (данные из техкарты)
+  const hasSource = packLines.some(l => l.source);
+  const hasEmps = shopEmployees && shopEmployees.length > 0 && onLineEmp;
+  const colSpan = 4 + (hasDestination ? 1 : 0) + (hasSource ? 1 : 0);
+
+  return e('div',{style:{overflowX:'auto',borderRadius:10,overflow:'hidden'}},
     e('table',{className:'pack-table'},
       e('thead',null,
         e('tr',null,
           e('th',null,'Объём'),
           e('th',null,'Упаковка'),
           hasDestination && e('th',null,'Назначение'),
-          hasDestination && e('th',{className:'num'},'Со склада'),
+          hasSource && e('th',null,''),
           e('th',{className:'num'},'План'),
           e('th',{className:'num'},'Факт'),
         )
       ),
       e('tbody',null,
-        ...packLines.flatMap((line,i)=>{
+        ...sortedLines.flatMap((line,si)=>{
+          const i=origIndex[si];
           const k=`${itemKey}-pl-${i}`;
           const planQty=Number(line.qty)||0;
           const factVal=facts[k]!==undefined?facts[k]:planQty;
@@ -7089,7 +7158,13 @@ function PackTable({packLines, facts, onFactChange, itemKey,
               e('td',null,line.volume||'—'),
               e('td',null,line.packName||line.pack||'—'),
               hasDestination && e('td',null,line.destination||'—'),
-              hasDestination && e('td',{className:'num'},line.fromWarehouse!==undefined?line.fromWarehouse:'0'),
+              hasSource && e('td',null,
+                line.source === 'УД'
+                  ? e('span',{style:{fontSize:13,fontWeight:700,padding:'3px 9px',borderRadius:6,background:'#EEF2FF',color:'#4F46E5'}},'УД')
+                  : line.source
+                    ? e('span',{style:{fontSize:13,fontWeight:700,padding:'3px 9px',borderRadius:6,background:'#FFF7ED',color:'#C2410C'}},'ЕЕ')
+                    : null
+              ),
               e('td',{className:'num'},e('strong',{style:{fontSize:16}},planQty,' уп')),
               e('td',{className:'num'},
                 e('input',{
@@ -7103,28 +7178,28 @@ function PackTable({packLines, facts, onFactChange, itemKey,
             ),
             hasEmps && e('tr',{key:`emp-${i}`},
               e('td',{colSpan,style:{
-                padding:'6px 10px 10px',
+                padding:'4px 8px 6px',
                 background:lineDone?'var(--ok-bg)':'var(--bg)',
                 borderTop:'none'
               }},
-                e('div',{style:{display:'flex',gap:8,flexWrap:'wrap'}},
+                e('div',{style:{display:'flex',gap:6,flexWrap:'wrap'}},
                   shopEmployees.map(emp=>{
                     const sel=lineEmpIds.includes(emp.id);
                     return e('button',{
                       key:emp.id,
                       onClick:()=>onLineEmp(i, emp.id),
                       style:{
-                        display:'flex',alignItems:'center',gap:6,
-                        padding:'10px 16px',borderRadius:24,
+                        display:'flex',alignItems:'center',gap:5,
+                        padding:'7px 12px',borderRadius:20,
                         border:`2px solid ${sel?'var(--ok)':'var(--border)'}`,
                         background:sel?'var(--ok)':'var(--surface)',
                         color:sel?'white':'var(--text)',
-                        fontSize:15,fontWeight:sel?700:500,
+                        fontSize:13,fontWeight:sel?700:500,
                         cursor:'pointer',transition:'all 0.15s',
-                        minHeight:44
+                        minHeight:32
                       }
                     },
-                      sel && e('span',{style:{fontSize:16,lineHeight:1}},'✓'),
+                      sel && e('span',{style:{fontSize:13,lineHeight:1}},'✓'),
                       emp.name
                     );
                   })
@@ -7163,7 +7238,7 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees}) {
   // pack lines: tech card → EXCEL base (only without active techcard) → packPlan fallback
   const tcLines=(shift.itemPackLines||{})[item.id];
   const overriddenLines=tcLines
-    || (shift.techcardId ? null : EXCEL_PACK_LINES[item.id])
+    || (shift.techcardId||shift.udTechcardId ? null : EXCEL_PACK_LINES[item.id])
     || null;
   const packLines = overriddenLines || (item.packPlan ? (()=>{
     const {volume,packName}=parsePackString(item.packPlan.pack);
@@ -7275,33 +7350,26 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees}) {
     ),
 
     // ИТОГОВЫЕ ПОЗИЦИИ с чекпоинтами по строкам
-    packLines.length>0 && e('div',{className:'card-section'},
-      e('div',{className:'section-label'},'▼ Итоговые позиции — что нужно сделать'),
+    packLines.length>0 && e('div',{className:'card-section',style:{padding:'8px 10px',overflow:'hidden'}},
+      e('div',{style:{padding:'0 2px 6px',fontSize:11,fontWeight:800,color:'var(--muted)',textTransform:'uppercase',letterSpacing:'0.07em'}},'▼ Итоговые позиции — что нужно сделать'),
       e(PackTable,{packLines,facts:shift.facts,onFactChange:setFact,itemKey,
                    doneFlags:shift.doneFlags,doneBy:shift.doneBy,
                    onLineEmp,shopEmployees})
     ),
 
-    // ФИНАЛЬНЫЙ ИТОГ
-    e('div',{className:'card-section',style:{background: isDone?'var(--ok-bg)':'var(--bg-subtle)'}},
-      e('div',{className:'final-result'},
-        e('div',{className:'final-result-label'},'ИТОГ'),
-        e('div',{className:'final-result-value'},totalPlan,' уп')
-      ),
-      // Сотрудник — только для позиций без pack lines (старый режим)
-      packLines.length===0 && e('div',null,
-        e('div',{className:'section-label',style:{marginTop:14}},
-          'Кто выполнил:',
-          noEmpWarn && e('span',{style:{marginLeft:10,color:'var(--danger)',fontWeight:700,fontSize:14}},
-            '← выберите сотрудника')),
-        e(EmployeeToggles,{employees:shopEmployees,selectedIds:selectedEmpIds,onToggle:toggleEmp,warn:noEmpWarn}),
-        selectedEmpIds.length>0 && e('div',{
-          style:{marginTop:10,fontSize:15,color:'var(--ok)',fontWeight:700}
-        },'Выполнил(а): '+selectedEmpIds.map(id=>{
-          const emp=shopEmployees.find(x=>x.id===id);
-          return emp?emp.name:id;
-        }).join(', '))
-      )
+    // Сотрудник — только для позиций без pack lines (старый режим)
+    packLines.length===0 && e('div',{className:'card-section',style:{background: isDone?'var(--ok-bg)':''}},
+      e('div',{className:'section-label'},
+        'Кто выполнил:',
+        noEmpWarn && e('span',{style:{marginLeft:10,color:'var(--danger)',fontWeight:700,fontSize:14}},
+          '← выберите сотрудника')),
+      e(EmployeeToggles,{employees:shopEmployees,selectedIds:selectedEmpIds,onToggle:toggleEmp,warn:noEmpWarn}),
+      selectedEmpIds.length>0 && e('div',{
+        style:{marginTop:10,fontSize:15,color:'var(--ok)',fontWeight:700}
+      },'Выполнил(а): '+selectedEmpIds.map(id=>{
+        const emp=shopEmployees.find(x=>x.id===id);
+        return emp?emp.name:id;
+      }).join(', '))
     )
   );
 }
@@ -7316,6 +7384,13 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
   const doneCount=items.filter(it=>shift.doneFlags[`${station.key}-${it.id}`]).length;
   const pct=items.length>0?Math.round(doneCount/items.length*100):0;
   const pillColor=doneCount===items.length?'var(--ok)':'var(--warn)';
+
+  const [showScrollTop,setShowScrollTop]=useState(false);
+  useEffect(()=>{
+    const onScroll=()=>setShowScrollTop(window.scrollY>300);
+    window.addEventListener('scroll',onScroll,{passive:true});
+    return ()=>window.removeEventListener('scroll',onScroll);
+  },[]);
 
   // displayOrder: current visual order of item IDs — done items изначально снизу
   const [displayOrder,setDisplayOrder]=useState(()=>{
@@ -7385,12 +7460,20 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
   },[shift.doneFlags]);
 
   const [statusTab,setStatusTab]=useState('todo');
+  const [search,setSearch]=useState('');
   const itemById=Object.fromEntries(items.map(i=>[i.id,i]));
   const orderedItems=displayOrder.map(id=>itemById[id]).filter(Boolean);
   // sinking items stay in todo while animating, then move to done
   const todoItems=orderedItems.filter(it=>!shift.doneFlags[`${station.key}-${it.id}`]||sinkingIds.has(it.id));
   const doneItems=orderedItems.filter(it=>!!shift.doneFlags[`${station.key}-${it.id}`]&&!sinkingIds.has(it.id));
-  const visibleItems=statusTab==='todo'?todoItems:doneItems;
+  const filterItems=list=>{
+    if(!search.trim()) return list;
+    const q=search.trim().toLowerCase();
+    return list.filter(it=>
+      String(it.id).includes(q) || (it.name||'').toLowerCase().includes(q)
+    );
+  };
+  const visibleItems=filterItems(statusTab==='todo'?todoItems:doneItems);
 
   const renderItem=(item)=>{
     const sinking=sinkingIds.has(item.id);
@@ -7403,14 +7486,23 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
 
   return e('div',{className:'kitchen-content'},
     e('div',{className:'kitchen-header'},
-      e('div',null,
+      e('div',{style:{flex:1,minWidth:0}},
         e('h1',{className:'kitchen-title'},station.name.replace(station.shop+' / ','')),
         e('p',{className:'kitchen-sub'},
           (station.loadTime?'Загрузка: '+station.loadTime+' · ':'')+items.length+' заготовок')
       ),
+      e('input',{
+        type:'text', placeholder:'Поиск…',
+        value:search, onChange:ev=>setSearch(ev.target.value),
+        style:{
+          width:180, padding:'8px 14px', borderRadius:12,
+          border:'2px solid var(--border)', background:'var(--surface)',
+          fontSize:15, color:'var(--text)', outline:'none', flexShrink:0,
+        }
+      }),
       e('div',{className:'progress-pill',
         style:{background:doneCount===items.length?'var(--ok-bg)':'var(--warn-bg)',
-               color:pillColor,border:`2px solid ${pillColor}`}
+               color:pillColor,border:`2px solid ${pillColor}`,flexShrink:0}
       }, `${doneCount} / ${items.length} · ${pct}%`)
     ),
     // Status tabs
@@ -7430,8 +7522,12 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
       ? e('div',{className:'empty-state'},'Нет заданий для этой станции')
       : visibleItems.length===0
         ? e('div',{className:'empty-state',style:{marginTop:40}},
-            statusTab==='todo'?'Все заготовки выполнены ✓':'Ещё ничего не выполнено')
-        : e('div',null,...visibleItems.map(renderItem))
+            search.trim() ? 'Ничего не найдено' : statusTab==='todo'?'Все заготовки выполнены ✓':'Ещё ничего не выполнено')
+        : e('div',null,...visibleItems.map(renderItem)),
+    showScrollTop && e('button',{
+      className:'scroll-top-btn',
+      onClick:()=>window.scrollTo({top:0,behavior:'smooth'})
+    },'⌃')
   );
 }
 
@@ -7525,8 +7621,8 @@ function WorkshopSelector({shopGroups, shift, onSelect}) {
 // ============================================================
 // MANAGER — DASHBOARD TAB
 // ============================================================
-function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTechcard}) {
-  const catalog=useMemo(()=>getCatalogForDate(dateKey,activeTechcard),[dateKey,activeTechcard]);
+function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, activeTcUD}) {
+  const catalog=useMemo(()=>getCatalogForDate(dateKey,activeTcEE,activeTcUD),[dateKey,activeTcEE,activeTcUD]);
   // periodMode: 'today' | 'date' | 'period'
   const [periodMode,setPeriodMode]=useState('today');
   const [singleDate,setSingleDate]=useState(dateKey);
@@ -7571,7 +7667,7 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTechcar
         station.items.forEach(item=>{
           const ik=`${station.key}-${item.id}`;
           const isDone=!!(s.doneFlags||{})[ik];
-          const packLines=(s.itemPackLines||{})[item.id] || EXCEL_PACK_LINES[item.id] || null;
+          const packLines=(s.itemPackLines||{})[item.id] || (s.techcardId||s.udTechcardId ? null : EXCEL_PACK_LINES[item.id]) || null;
           let planQty=item.packPlan?.qty||0;
           let factQty=0;
           if(packLines){
@@ -7861,9 +7957,10 @@ function ShiftReportPanel({dk, allEmployees, onClose}) {
       try {
         const s=await loadShift(dk);
         if(!s){setLoading(false);return;}
-        let tc=null;
-        if(s.techcardId) tc=await loadTechCard(s.techcardId);
-        const cat=getCatalogForDate(dk,tc);
+        let tcEE=null, tcUD=null;
+        if(s.techcardId) tcEE=await loadTechCard(s.techcardId);
+        if(s.udTechcardId) tcUD=await loadTechCard(s.udTechcardId);
+        const cat=getCatalogForDate(dk,tcEE,tcUD);
         const byShop={};
         let totalPlan=0,totalDone=0;
         cat.forEach(station=>{
@@ -7871,7 +7968,7 @@ function ShiftReportPanel({dk, allEmployees, onClose}) {
           station.items.forEach(item=>{
             const ik=`${station.key}-${item.id}`;
             const isDone=!!(s.doneFlags||{})[ik];
-            const pl=(s.itemPackLines||{})[item.id]||EXCEL_PACK_LINES[item.id]||null;
+            const pl=(s.itemPackLines||{})[item.id]||(s.techcardId||s.udTechcardId ? null : EXCEL_PACK_LINES[item.id])||null;
             const planQty=pl?pl.reduce((a,l)=>a+(Number(l.qty)||0)+(Number(l.fromWarehouse)||0),0):(item.packPlan?.qty||0);
             const factQty=isDone?planQty:0;
             byShop[station.shop].plan+=planQty;
@@ -7897,7 +7994,7 @@ function ShiftReportPanel({dk, allEmployees, onClose}) {
       station.items.forEach(item=>{
         const ik=`${station.key}-${item.id}`;
         const isDone=!!(data.shift.doneFlags||{})[ik];
-        const pl=(data.shift.itemPackLines||{})[item.id]||EXCEL_PACK_LINES[item.id]||null;
+        const pl=(data.shift.itemPackLines||{})[item.id]||(data.shift.techcardId||data.shift.udTechcardId ? null : EXCEL_PACK_LINES[item.id])||null;
         const planQty=pl?pl.reduce((a,l)=>a+(Number(l.qty)||0)+(Number(l.fromWarehouse)||0),0):(item.packPlan?.qty||0);
         const _doneBy=data.shift.doneBy||{};
         const allEmpIds=[...new Set([...(_doneBy[ik]||[]),...(pl?pl.flatMap((_,i)=>_doneBy[`${ik}-pl-${i}`]||[]):[]) ])];
@@ -8003,26 +8100,32 @@ function ShiftsTab({archiveIndex}) {
 // ============================================================
 // MANAGER — UPLOAD TAB (Excel tech card)
 // ============================================================
-function TechcardsTab({shift, allTechcards, activeTechcard, onApplyTechcard, onDeactivate, onRefreshTechcards}) {
+function TechcardsTab({shift, allTechcards, activeTcEE, activeTcUD, onApplyTechcard, onDeactivate, onRefreshTechcards}) {
   const [dragOver,setDragOver]=useState(false);
-  const [parsed,setParsed]=useState(null);   // {byId, filename, previewRows}
+  const [dragOverUD,setDragOverUD]=useState(false);
+  const [parsed,setParsed]=useState(null);
+  const [parsedUD,setParsedUD]=useState(null);
   const [tcName,setTcName]=useState('');
+  const [tcNameUD,setTcNameUD]=useState('');
   const [message,setMessage]=useState('');
+  const [messageUD,setMessageUD]=useState('');
   const [saving,setSaving]=useState(false);
+  const [savingUD,setSavingUD]=useState(false);
   const [deletingId,setDeletingId]=useState(null);
   const fileRef=useRef(null);
+  const fileRefUD=useRef(null);
 
-  const parseExcel=(file)=>{
+  const parseExcel=(file,setParsedFn,setMessageFn)=>{
     if(!file) return;
-    setMessage('');
-    setParsed(null);
+    setMessageFn('');
+    setParsedFn(null);
     const reader=new FileReader();
     reader.onload=(ev)=>{
       try {
         const wb=XLSX.read(ev.target.result,{type:'array'});
         const ws=wb.Sheets[wb.SheetNames[0]];
         const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
-        if(rows.length<2){setMessage('⚠ Файл пустой или неверный формат');return;}
+        if(rows.length<2){setMessageFn('⚠ Файл пустой или неверный формат');return;}
 
         const stations=[];
         const packLines={};
@@ -8189,7 +8292,7 @@ function TechcardsTab({shift, allTechcards, activeTechcard, onApplyTechcard, onD
 
         const filteredStations=stations.filter(s=>s.items.length>0&&!/неизвестно/i.test(s.shop));
         const totalItems=filteredStations.reduce((a,s)=>a+s.items.length,0);
-        if(totalItems===0){setMessage('⚠ Позиции не найдены. Проверьте формат файла.');return;}
+        if(totalItems===0){setMessageFn('⚠ Позиции не найдены. Проверьте формат файла.');return;}
 
         // DEBUG: рекурсивный вывод подзаготовок
         function debugItem(item,indent){
@@ -8204,148 +8307,140 @@ function TechcardsTab({shift, allTechcards, activeTechcard, onApplyTechcard, onD
         console.groupEnd();
 
         const baseName=file.name.replace(/\.[^.]+$/,'');
-        setTcName(baseName);
-        setParsed({stations:filteredStations, packLines, filename:file.name, previewRows:rows.slice(0,5)});
-        setMessage(`✓ Найдено ${totalItems} позиций в ${filteredStations.length} станциях. Введите название и сохраните.`);
+        setMessageFn(`✓ Найдено ${totalItems} позиций в ${filteredStations.length} станциях`);
+        setParsedFn({stations:filteredStations, packLines, filename:file.name, previewRows:rows.slice(0,5), baseName});
       } catch(err){
-        setMessage('Ошибка чтения файла: '+err.message);
+        setMessageFn('Ошибка чтения файла: '+err.message);
       }
     };
     reader.readAsArrayBuffer(file);
   };
 
-  const handleSave=async()=>{
-    if(!parsed||!tcName.trim()){setMessage('⚠ Введите название техкарты');return;}
-    setSaving(true);
+  const handleSave=async(company)=>{
+    const p=company==='УД'?parsedUD:parsed;
+    const n=company==='УД'?tcNameUD:tcName;
+    if(!p||!n.trim()){(company==='УД'?setMessageUD:setMessage)('⚠ Введите название');return;}
+    company==='УД'?setSavingUD(true):setSaving(true);
     try {
-      await saveTechCardToServer(tcName.trim(), parsed.filename, parsed.packLines, parsed.stations);
+      await saveTechCardToServer(n.trim(), p.filename, p.packLines, p.stations, company);
       await onRefreshTechcards();
-      setMessage('✓ Техкарта сохранена на сервере');
-      setParsed(null);
-      setTcName('');
+      (company==='УД'?setMessageUD:setMessage)('✓ Техкарта сохранена');
+      company==='УД'?(setParsedUD(null),setTcNameUD('')):(setParsed(null),setTcName(''));
     } catch(e){
-      setMessage('Ошибка: '+e.message);
+      (company==='УД'?setMessageUD:setMessage)('Ошибка: '+e.message);
     }
-    setSaving(false);
+    company==='УД'?setSavingUD(false):setSaving(false);
   };
 
   const handleDelete=async(id,name)=>{
-    const isActive=activeTechcard&&activeTechcard.id===id;
-    const msg=isActive
-      ? `Техкарта "${name}" сейчас активна в смене. При удалении смена останется без техкарты.\n\nУдалить всё равно?`
-      : `Удалить техкарту "${name}"? Это действие необратимо.`;
-    if(!confirm(msg)) return;
+    const isEE=activeTcEE&&activeTcEE.id===id;
+    const isUD=activeTcUD&&activeTcUD.id===id;
+    if(!confirm(`Удалить техкарту "${name}"?`)) return;
     setDeletingId(id);
     await deleteTechCardFromServer(id);
-    if(isActive) onDeactivate(); // сбросить activeTechcard в App
+    if(isEE) onDeactivate('EE');
+    if(isUD) onDeactivate('УД');
     await onRefreshTechcards();
     setDeletingId(null);
   };
 
   const fmtDate=dt=>dt?dt.replace('T',' ').slice(0,16):'-';
 
-  return e('div',null,
-    e('h2',{className:'page-title',style:{marginBottom:4}},'Техкарты'),
-    e('p',{className:'page-sub',style:{marginBottom:20}},'Загружайте Excel-файлы техкарт и выбирайте активную для текущей смены'),
+  const renderActiveCard=(tc,company)=>{
+    if(!tc) return e('div',{style:{padding:'10px 14px',borderRadius:10,border:'1px dashed var(--border)',
+        fontSize:13,color:'var(--muted)',marginBottom:8}},'Не применена');
+    return e('div',{style:{padding:'10px 14px',background:'var(--ok-bg)',borderRadius:10,
+        border:'1.5px solid var(--ok)',display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,marginBottom:8}},
+      e('div',null,
+        e('div',{style:{fontWeight:700,fontSize:14,color:'var(--ok)'}},'✓ '+tc.name),
+        e('div',{style:{fontSize:12,color:'var(--muted)',marginTop:2}},Object.keys(tc.items||{}).length+' позиций')
+      ),
+      e('button',{style:{padding:'4px 12px',borderRadius:8,border:'1.5px solid var(--warn)',
+          background:'transparent',color:'var(--warn)',fontSize:12,fontWeight:600,cursor:'pointer'},
+        onClick:()=>onDeactivate(company)},'Убрать')
+    );
+  };
 
-    // Активная техкарта
-    activeTechcard
-      ? e('div',{style:{marginBottom:20,padding:'14px 18px',background:'var(--ok-bg)',borderRadius:14,
-          border:'1.5px solid var(--ok)',display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap'}},
-          e('div',null,
-            e('div',{style:{fontWeight:700,fontSize:15,color:'var(--ok)'}},
-              '✓ Активна: '+activeTechcard.name),
-            e('div',{style:{fontSize:13,color:'var(--muted)',marginTop:2}},
-              Object.keys(activeTechcard.items||{}).length+' позиций')
-          ),
-          e('button',{
-            style:{padding:'6px 14px',borderRadius:8,border:'1.5px solid var(--warn)',
-              background:'transparent',color:'var(--warn)',fontSize:13,fontWeight:600,cursor:'pointer'},
-            onClick:onDeactivate
-          },'Деактивировать')
-        )
-      : e('div',{style:{marginBottom:20,padding:'12px 16px',background:'rgba(255,255,255,0.04)',
-          borderRadius:12,border:'1px dashed var(--border)',fontSize:14,color:'var(--muted)'}},
-          'Нет активной техкарты — задания цехам не формируются'
-        ),
+  const renderUploadBlock=(company)=>{
+    const p=company==='УД'?parsedUD:parsed;
+    const n=company==='УД'?tcNameUD:tcName;
+    const setN=company==='УД'?setTcNameUD:setTcName;
+    const msg=company==='УД'?messageUD:message;
+    const sv=company==='УД'?savingUD:saving;
+    const dov=company==='УД'?dragOverUD:dragOver;
+    const setDov=company==='УД'?setDragOverUD:setDragOver;
+    const ref=company==='УД'?fileRefUD:fileRef;
+    const tcs=allTechcards.filter(tc=>tc.company===company||(company==='EE'&&!tc.company));
+    const activeTc=company==='УД'?activeTcUD:activeTcEE;
+    const label=company==='УД'?'Ужин Дома':'Elementaree';
+    const accentColor=company==='УД'?'#4F46E5':'#C2410C';
+    const bgColor=company==='УД'?'#EEF2FF':'#FFF7ED';
 
-    // Список сохранённых
-    allTechcards.length>0 && e('div',{className:'card section-gap'},
-      e('p',{style:{fontWeight:700,fontSize:15,margin:'0 0 14px'}},'Сохранённые техкарты'),
-      allTechcards.map(tc=>e('div',{key:tc.id,
-        style:{display:'flex',alignItems:'center',gap:10,padding:'10px 0',
-          borderBottom:'1px solid var(--border)'}},
-        e('div',{style:{flex:1}},
-          e('div',{style:{fontWeight:600,fontSize:14}},tc.name),
-          e('div',{style:{fontSize:12,color:'var(--muted)'}},tc.filename||'',
-            ' · ',fmtDate(tc.created_at))
-        ),
-        activeTechcard&&activeTechcard.id===tc.id
-          ? e('button',{
-              style:{padding:'6px 14px',borderRadius:8,border:'1.5px solid var(--warn)',
-                background:'transparent',color:'var(--warn)',fontSize:13,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'},
-              onClick:onDeactivate
-            },'Деактивировать')
-          : e('button',{
-              style:{padding:'6px 14px',borderRadius:8,border:'1.5px solid var(--ok)',
-                background:'transparent',color:'var(--ok)',
-                fontSize:13,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'},
-              onClick:async()=>{const full=await loadTechCard(tc.id);if(full) onApplyTechcard(full);}
-            },'Применить'),
-        e('button',{
-          style:{padding:'6px 12px',borderRadius:8,border:'1.5px solid var(--danger)',
-            background:'transparent',color:'var(--danger)',fontSize:13,cursor:'pointer',
-            opacity:deletingId===tc.id?0.5:1},
-          onClick:()=>handleDelete(tc.id,tc.name),
-          disabled:deletingId===tc.id
-        }, deletingId===tc.id?'…':'Удалить')
-      ))
-    ),
-
-    // Загрузка нового файла
-    e('div',{className:'card section-gap'},
-      e('p',{style:{fontWeight:700,fontSize:15,margin:'0 0 12px'}},'Загрузить новую техкарту'),
-      e('div',{
-        className:'upload-drop'+(dragOver?' drag-over':''),
-        onDragOver:ev=>{ev.preventDefault();setDragOver(true);},
-        onDragLeave:()=>setDragOver(false),
-        onDrop:ev=>{ev.preventDefault();setDragOver(false);parseExcel(ev.dataTransfer.files[0]);},
-        onClick:()=>fileRef.current&&fileRef.current.click()
-      },
-        e('input',{type:'file',ref:fileRef,accept:'.xlsx,.xls',style:{display:'none'},
-          onChange:ev=>parseExcel(ev.target.files[0])}),
-        e(SvgUpload,{size:36,color:'var(--muted)'}),
-        e('div',{className:'upload-drop-title',style:{marginTop:10}},'Перетащите Excel сюда'),
-        e('div',{className:'upload-drop-sub'},'или нажмите для выбора (.xlsx, .xls)')
+    return e('div',{className:'card section-gap'},
+      e('div',{style:{display:'flex',alignItems:'center',gap:10,marginBottom:14}},
+        e('span',{style:{fontSize:12,fontWeight:700,padding:'3px 10px',borderRadius:8,
+            background:bgColor,color:accentColor}},company),
+        e('span',{style:{fontWeight:700,fontSize:16}},label)
       ),
 
-      message && e('div',{style:{marginTop:12,padding:'10px 14px',background:'var(--bg-subtle)',
-        borderRadius:10,fontSize:14,color:'var(--text)'}}, message),
+      renderActiveCard(activeTc, company),
 
-      parsed && e('div',{style:{marginTop:14}},
-        e('div',{style:{display:'flex',gap:10,alignItems:'center',marginBottom:10}},
-          e('input',{
-            type:'text',
-            className:'filter-input',
+      tcs.length>0 && e('div',{style:{marginBottom:12}},
+        tcs.map(tc=>e('div',{key:tc.id,
+          style:{display:'flex',alignItems:'center',gap:8,padding:'8px 0',borderBottom:'1px solid var(--border)'}},
+          e('div',{style:{flex:1}},
+            e('div',{style:{fontWeight:600,fontSize:14}},tc.name),
+            e('div',{style:{fontSize:11,color:'var(--muted)'}},fmtDate(tc.created_at))
+          ),
+          activeTc&&activeTc.id===tc.id
+            ? e('button',{style:{padding:'4px 12px',borderRadius:8,border:'1.5px solid var(--warn)',
+                background:'transparent',color:'var(--warn)',fontSize:12,fontWeight:600,cursor:'pointer'},
+                onClick:()=>onDeactivate(company)},'Убрать')
+            : e('button',{style:{padding:'4px 12px',borderRadius:8,border:`1.5px solid var(--ok)`,
+                background:'transparent',color:'var(--ok)',fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'},
+                onClick:async()=>{const full=await loadTechCard(tc.id);if(full) onApplyTechcard(full);}},'Применить'),
+          e('button',{style:{padding:'4px 10px',borderRadius:8,border:'1.5px solid var(--danger)',
+              background:'transparent',color:'var(--danger)',fontSize:12,cursor:'pointer',opacity:deletingId===tc.id?0.5:1},
+            onClick:()=>handleDelete(tc.id,tc.name),disabled:deletingId===tc.id},deletingId===tc.id?'…':'✕')
+        ))
+      ),
+
+      e('div',{
+        className:'upload-drop'+(dov?' drag-over':''),
+        onDragOver:ev=>{ev.preventDefault();setDov(true);},
+        onDragLeave:()=>setDov(false),
+        onDrop:ev=>{ev.preventDefault();setDov(false);parseExcel(ev.dataTransfer.files[0],company==='УД'?setParsedUD:setParsed,company==='УД'?setMessageUD:setMessage);},
+        onClick:()=>ref.current&&ref.current.click()
+      },
+        e('input',{type:'file',ref,accept:'.xlsx,.xls',style:{display:'none'},
+          onChange:ev=>parseExcel(ev.target.files[0],company==='УД'?setParsedUD:setParsed,company==='УД'?setMessageUD:setMessage)}),
+        e(SvgUpload,{size:28,color:'var(--muted)'}),
+        e('div',{className:'upload-drop-title',style:{marginTop:6,fontSize:14}},'Загрузить новую'),
+        e('div',{className:'upload-drop-sub',style:{fontSize:12}},'Excel (.xlsx, .xls)')
+      ),
+
+      msg && e('div',{style:{marginTop:10,padding:'8px 12px',background:'var(--bg-subtle)',
+          borderRadius:8,fontSize:13,color:'var(--text)'}},msg),
+
+      p && e('div',{style:{marginTop:12}},
+        e('div',{style:{display:'flex',gap:8,alignItems:'center',marginBottom:8}},
+          e('input',{type:'text',className:'filter-input',
             style:{flex:1,fontSize:14,padding:'8px 12px'},
-            placeholder:'Название техкарты (напр. "30 июня 2026")',
-            value:tcName,
-            onChange:ev=>setTcName(ev.target.value)
-          }),
-          e('button',{
-            className:'btn-primary',
-            onClick:handleSave,
-            disabled:saving||!tcName.trim()
-          }, saving?'Сохранение…':'💾 Сохранить на сервере')
-        ),
-        e('div',{className:'upload-preview',style:{overflowX:'auto'}},
-          e('table',null,
-            e('thead',null,e('tr',null,(parsed.previewRows[0]||[]).map((h,i)=>e('th',{key:i},h)))),
-            e('tbody',null,parsed.previewRows.slice(1).map((row,i)=>
-              e('tr',{key:i},row.map((c,j)=>e('td',{key:j},c)))))
-          )
+            placeholder:`Название (напр. "${label} 10 июля")`,
+            value:n||p.baseName||'',onChange:ev=>setN(ev.target.value)}),
+          e('button',{className:'btn-primary',onClick:()=>handleSave(company),
+            disabled:sv||!(n||p.baseName||'').trim()},sv?'Сохранение…':'💾 Сохранить')
         )
       )
+    );
+  };
+
+  return e('div',null,
+    e('h2',{className:'page-title',style:{marginBottom:4}},'Техкарты'),
+    e('p',{className:'page-sub',style:{marginBottom:20}},'Загружайте техкарты ЕЕ и УД. Одинаковые позиции суммируются'),
+    e('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(320px,1fr))',gap:20}},
+      renderUploadBlock('EE'),
+      renderUploadBlock('УД')
     )
   );
 }
@@ -8353,7 +8448,8 @@ function TechcardsTab({shift, allTechcards, activeTechcard, onApplyTechcard, onD
 // ============================================================
 // MANAGER PAGE
 // ============================================================
-function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesChange, archiveIndex, onOpenArchiveDate, allTechcards, activeTechcard, onApplyTechcard, onDeactivate, onRefreshTechcards, shopGroups}) {
+function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesChange, archiveIndex, onOpenArchiveDate, allTechcards, activeTcEE, activeTcUD, onApplyTechcard, onDeactivate, onRefreshTechcards, shopGroups}) {
+  const activeTechcard = activeTcEE || activeTcUD; // для обратной совместимости
   const [tab,setTab]=useState('dashboard');
   const [selectedShop,setSelectedShop]=useState(null);
 
@@ -8373,7 +8469,7 @@ function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesCh
       e('button',{className:'mgr-tab'+(tab==='upload'?' active':''),onClick:()=>switchTab('upload')},
         e(SvgUpload,{size:16}),' Техкарты'),
     ),
-    tab==='dashboard' && e(DashboardTab,{dateKey,shift,allEmployees,archiveIndex,activeTechcard}),
+    tab==='dashboard' && e(DashboardTab,{dateKey,shift,allEmployees,archiveIndex,activeTcEE,activeTcUD}),
     tab==='kitchen' && (
       selectedShop
         ? e(KitchenShopPage,{
@@ -8388,7 +8484,7 @@ function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesCh
     ),
     tab==='employees' && e(EmployeesTab,{employees:allEmployees,onSave:onEmployeesChange}),
     tab==='shifts' && e(ShiftsTab,{archiveIndex}),
-    tab==='upload' && e(TechcardsTab,{shift,allTechcards,activeTechcard,onApplyTechcard,onDeactivate,onRefreshTechcards})
+    tab==='upload' && e(TechcardsTab,{shift,allTechcards,activeTcEE,activeTcUD,onApplyTechcard,onDeactivate,onRefreshTechcards})
   );
 }
 
@@ -8411,8 +8507,8 @@ function App() {
   const [archiveIndex,setArchiveIndex]=useState([]);
   const [toast,setToast]=useState('');
   const [allTechcards,setAllTechcards]=useState([]);
-  const [activeTechcard,setActiveTechcard]=useState(null);
-
+  const [activeTcEE,setActiveTcEE]=useState(null);
+  const [activeTcUD,setActiveTcUD]=useState(null);
   // Load initial data
   useEffect(()=>{
     (async()=>{
@@ -8425,10 +8521,13 @@ function App() {
       const existing=await loadShift(today);
       let loadedShift=existing||emptyShiftData(today);
       setShift(loadedShift);
-      // Если у смены есть привязанная техкарта — загружаем её
       if(loadedShift.techcardId){
         const tc=await loadTechCard(loadedShift.techcardId);
-        if(tc) setActiveTechcard(tc);
+        if(tc) setActiveTcEE(tc);
+      }
+      if(loadedShift.udTechcardId){
+        const tc=await loadTechCard(loadedShift.udTechcardId);
+        if(tc) setActiveTcUD(tc);
       }
       setLoading(false);
     })();
@@ -8481,27 +8580,27 @@ function App() {
       setViewDate(dk);
       setShift(data);
       setMode('manager');
-      if(data.techcardId){
-        const tc=await loadTechCard(data.techcardId);
-        if(tc) setActiveTechcard(tc);
-      }
+      if(data.techcardId){ const tc=await loadTechCard(data.techcardId); if(tc) setActiveTcEE(tc); }
+      if(data.udTechcardId){ const tc=await loadTechCard(data.udTechcardId); if(tc) setActiveTcUD(tc); }
     }
   };
 
-  // Применить техкарту к текущей смене
-  const deactivateTechcard=async()=>{
-    setActiveTechcard(null);
-    const updated={...shift, techcardId:null, itemPackLines:{}};
-    setShift(updated);
-    await saveShift(updated.date,updated);
+  const deactivateTechcard=async(company)=>{
+    const u=company==='УД'?{...shift,udTechcardId:null}:{...shift,techcardId:null};
+    if(company==='УД') setActiveTcUD(null); else setActiveTcEE(null);
+    await saveShift(u.date,u);
+    const fresh=await loadShift(u.date);
+    setShift(fresh||u);
   };
 
   const applyTechcard=async(tc)=>{
-    setActiveTechcard(tc);
-    // itemPackLines не копируем — сервер сам строит их из techcard_pack_lines при загрузке смены
-    const updated={...shift, techcardId:tc.id};
-    setShift(updated);
-    await saveShift(updated.date,updated);
+    const isUD=tc.company==='УД';
+    const u=isUD?{...shift,udTechcardId:tc.id}:{...shift,techcardId:tc.id};
+    if(isUD) setActiveTcUD(tc); else setActiveTcEE(tc);
+    await saveShift(u.date,u);
+    // Перезагружаем смену с сервера чтобы получить актуальные itemPackLines из обеих техкарт
+    const fresh=await loadShift(u.date);
+    setShift(fresh||u);
     setToast(`Техкарта "${tc.name}" применена ✓`);
     setTimeout(()=>setToast(''),2500);
   };
@@ -8511,7 +8610,7 @@ function App() {
     setAllTechcards(tcs);
   };
 
-  const catalog=useMemo(()=>getCatalogForDate(viewDate,activeTechcard),[viewDate,activeTechcard]);
+  const catalog=useMemo(()=>getCatalogForDate(viewDate,activeTcEE,activeTcUD),[viewDate,activeTcEE,activeTcUD]);
   const shopGroups=useMemo(()=>getStationGroups(catalog),[catalog]);
 
   // Tablet mode: auto-select locked shop when catalog is ready
@@ -8593,7 +8692,8 @@ function App() {
       archiveIndex,
       onOpenArchiveDate:openArchiveDate,
       allTechcards,
-      activeTechcard,
+      activeTcEE,
+      activeTcUD,
       onApplyTechcard:applyTechcard,
       onDeactivate:deactivateTechcard,
       onRefreshTechcards:refreshTechcards,

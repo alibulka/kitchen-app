@@ -6,7 +6,7 @@ const { pool } = require('../db');
 
 async function buildShift(date) {
   const { rows: [shiftRow] } = await pool.query(
-    'SELECT date, techcard_id FROM shifts WHERE date = $1', [date]
+    'SELECT date, techcard_id, ud_techcard_id FROM shifts WHERE date = $1', [date]
   );
   if (!shiftRow) return null;
 
@@ -33,27 +33,38 @@ async function buildShift(date) {
     facts[`${r.station_key}-${r.item_id}-pl-${r.line_idx}`] = r.value;
   }
 
-  const itemPackLines = await buildItemPackLines(shiftRow.techcard_id, date);
+  const itemPackLines = await buildItemPackLines(shiftRow.techcard_id, shiftRow.ud_techcard_id, date);
 
-  return { date, techcardId: shiftRow.techcard_id || null, doneFlags, doneBy, facts, itemPackLines, assignments: {} };
+  return {
+    date,
+    techcardId: shiftRow.techcard_id || null,
+    udTechcardId: shiftRow.ud_techcard_id || null,
+    doneFlags, doneBy, facts, itemPackLines, assignments: {}
+  };
 }
 
-async function buildItemPackLines(techcardId, date) {
+async function buildItemPackLines(techcardId, udTechcardId, date) {
   const itemPackLines = {};
 
-  if (techcardId) {
+  async function loadLines(tcId) {
+    if (!tcId) return;
     const { rows } = await pool.query(`
-      SELECT item_id, volume, pack_name, destination, from_warehouse, qty
+      SELECT item_id, volume, pack_name, destination, from_warehouse, qty, source
       FROM techcard_pack_lines WHERE techcard_id = $1 ORDER BY item_id, line_idx
-    `, [techcardId]);
+    `, [tcId]);
     for (const r of rows) {
       if (!itemPackLines[r.item_id]) itemPackLines[r.item_id] = [];
       itemPackLines[r.item_id].push({
         volume: r.volume, packName: r.pack_name,
         destination: r.destination, fromWarehouse: r.from_warehouse, qty: r.qty,
+        source: r.source || 'EE',
       });
     }
   }
+
+  // EE первые, потом УД — чтобы в таблице шли в правильном порядке
+  await loadLines(techcardId);
+  await loadLines(udTechcardId);
 
   // Переопределения упаковки из самой смены (приоритет над техкартой)
   const { rows: plRows } = await pool.query(
@@ -70,28 +81,13 @@ const RE_FACT_KEY = /^(.+)-(\d+)-pl-(\d+)$/;
 
 async function saveShift(date, shift) {
   const techcardId = shift.techcardId || null;
-
-  // Загружаем pack lines техкарты для сравнения (не сохраняем дубли)
-  const tcLinesMap = {};
-  if (techcardId) {
-    const { rows } = await pool.query(`
-      SELECT item_id, line_idx, volume, pack_name, destination, from_warehouse, qty
-      FROM techcard_pack_lines WHERE techcard_id = $1 ORDER BY item_id, line_idx
-    `, [techcardId]);
-    for (const r of rows) {
-      if (!tcLinesMap[r.item_id]) tcLinesMap[r.item_id] = [];
-      tcLinesMap[r.item_id].push({
-        volume: r.volume, packName: r.pack_name,
-        destination: r.destination, fromWarehouse: r.from_warehouse, qty: r.qty,
-      });
-    }
-  }
+  const udTechcardId = shift.udTechcardId || null;
 
   await pool.withTransaction(async (client) => {
     await client.query(`
-      INSERT INTO shifts(date, techcard_id) VALUES($1, $2)
-      ON CONFLICT(date) DO UPDATE SET techcard_id = $2, updated_at = NOW()::text
-    `, [date, techcardId]);
+      INSERT INTO shifts(date, techcard_id, ud_techcard_id) VALUES($1, $2, $3)
+      ON CONFLICT(date) DO UPDATE SET techcard_id = $2, ud_techcard_id = $3, updated_at = NOW()::text
+    `, [date, techcardId, udTechcardId]);
 
     // Статусы выполнения
     await client.query('DELETE FROM shift_item_status WHERE shift_date = $1', [date]);
@@ -133,15 +129,7 @@ async function saveShift(date, shift) {
       );
     }
 
-    // Pack lines — сохраняем только если отличаются от техкарты
-    await client.query('DELETE FROM shift_pack_lines WHERE shift_date = $1', [date]);
-    for (const [itemId, lines] of Object.entries(shift.itemPackLines || {})) {
-      if (linesEqual(tcLinesMap[itemId], lines)) continue;
-      await client.query(
-        'INSERT INTO shift_pack_lines(shift_date, item_id, lines_json) VALUES($1,$2,$3)',
-        [date, itemId, JSON.stringify(lines)]
-      );
-    }
+    // shift_pack_lines — manual overrides; no UI for this yet, skip saving
   });
 }
 
@@ -150,14 +138,6 @@ function splitCompKey(compKey) {
   return { stationKey: compKey.slice(0, sep), itemId: compKey.slice(sep + 1) };
 }
 
-function linesEqual(a, b) {
-  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
-  return a.every((la, i) => {
-    const lb = b[i];
-    return la.volume === lb.volume && la.packName === lb.packName &&
-           la.destination === lb.destination && Number(la.qty) === Number(lb.qty);
-  });
-}
 
 // ─── Маршруты ─────────────────────────────────────────────────────────────────
 

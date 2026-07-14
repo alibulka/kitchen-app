@@ -21,18 +21,22 @@ async function initDb(pool) {
       id         SERIAL PRIMARY KEY,
       name       TEXT NOT NULL,
       filename   TEXT,
+      company    TEXT NOT NULL DEFAULT 'EE',
       items_json TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL DEFAULT (NOW()::text)
     )
   `);
+  await q(`ALTER TABLE techcards ADD COLUMN IF NOT EXISTS company TEXT NOT NULL DEFAULT 'EE'`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS shifts (
-      date        TEXT PRIMARY KEY,
-      techcard_id INTEGER REFERENCES techcards(id),
-      created_at  TEXT NOT NULL DEFAULT (NOW()::text),
-      updated_at  TEXT NOT NULL DEFAULT (NOW()::text)
+      date            TEXT PRIMARY KEY,
+      techcard_id     INTEGER REFERENCES techcards(id),
+      ud_techcard_id  INTEGER REFERENCES techcards(id),
+      created_at      TEXT NOT NULL DEFAULT (NOW()::text),
+      updated_at      TEXT NOT NULL DEFAULT (NOW()::text)
     )
   `);
+  await q(`ALTER TABLE shifts ADD COLUMN IF NOT EXISTS ud_techcard_id INTEGER REFERENCES techcards(id)`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS shift_item_status (
       shift_date  TEXT NOT NULL REFERENCES shifts(date) ON DELETE CASCADE,
@@ -146,9 +150,11 @@ async function initDb(pool) {
       destination    TEXT    NOT NULL DEFAULT '',
       from_warehouse INTEGER NOT NULL DEFAULT 0,
       qty            REAL    NOT NULL DEFAULT 0,
+      source         TEXT    NOT NULL DEFAULT 'EE',
       PRIMARY KEY (techcard_id, item_id, line_idx)
     )
   `);
+  await q(`ALTER TABLE techcard_pack_lines ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'EE'`);
 
   for (const sql of [
     'CREATE INDEX IF NOT EXISTS idx_shifts_date   ON shifts(date)',
