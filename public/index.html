@@ -8115,6 +8115,9 @@ function TechcardsTab({shift, allTechcards, activeTcEE, activeTcUD, onApplyTechc
   const fileRef=useRef(null);
   const fileRefUD=useRef(null);
 
+  useEffect(()=>{ if(parsed?.baseName && !tcName) setTcName(parsed.baseName); },[parsed]);
+  useEffect(()=>{ if(parsedUD?.baseName && !tcNameUD) setTcNameUD(parsedUD.baseName); },[parsedUD]);
+
   const parseExcel=(file,setParsedFn,setMessageFn)=>{
     if(!file) return;
     setMessageFn('');
