@@ -22,6 +22,7 @@ app.get('/api/ping', (_req, res) => res.json({ pong: Date.now() }));
 app.use('/api/shifts',    require('./routes/shifts'));
 app.use('/api/employees', require('./routes/employees'));
 app.use('/api/techcards', require('./routes/techcards'));
+app.use('/api/config',    require('./routes/config'));
 
 app.get('/api/shops', async (_req, res) => {
   try {

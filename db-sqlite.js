@@ -24,6 +24,25 @@ for (const sql of migrations) {
   try { sqlite.exec(sql); } catch {}
 }
 
+// Добавляем done_at к shift_item_status если нет
+{
+  const cols = sqlite.prepare('PRAGMA table_info(shift_item_status)').all();
+  if (cols.length > 0 && !cols.some(c => c.name === 'done_at')) {
+    sqlite.exec(`ALTER TABLE shift_item_status ADD COLUMN done_at TEXT`);
+    console.log('Migration: added done_at to shift_item_status');
+  }
+}
+sqlite.exec(`CREATE TABLE IF NOT EXISTS station_config (
+  station_key TEXT PRIMARY KEY,
+  start_time  TEXT NOT NULL DEFAULT '09:00'
+)`);
+sqlite.exec(`CREATE TABLE IF NOT EXISTS shift_station_start (
+  shift_date  TEXT NOT NULL,
+  station_key TEXT NOT NULL,
+  start_time  TEXT NOT NULL,
+  PRIMARY KEY (shift_date, station_key)
+)`);
+
 // Добавляем company к techcards если нет
 {
   const cols = sqlite.prepare('PRAGMA table_info(techcards)').all();

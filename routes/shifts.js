@@ -10,15 +10,28 @@ async function buildShift(date) {
   );
   if (!shiftRow) return null;
 
-  const [{ rows: statusRows }, { rows: empRows }, { rows: factRows }] = await Promise.all([
-    pool.query('SELECT station_key, item_id, done FROM shift_item_status WHERE shift_date = $1', [date]),
+  const [{ rows: statusRows }, { rows: empRows }, { rows: factRows }, { rows: stationStartRows }] = await Promise.all([
+    pool.query('SELECT station_key, item_id, done, done_at FROM shift_item_status WHERE shift_date = $1', [date]),
     pool.query('SELECT station_key, item_id, employee_id FROM shift_item_employees WHERE shift_date = $1', [date]),
     pool.query('SELECT station_key, item_id, line_idx, value FROM shift_facts_n WHERE shift_date = $1', [date]),
+    pool.query('SELECT station_key, start_time FROM shift_station_start WHERE shift_date = $1', [date]),
   ]);
 
   const doneFlags = {};
+  const doneTimes = {};
   for (const r of statusRows) {
-    doneFlags[`${r.station_key}-${r.item_id}`] = r.done === 1;
+    const key = `${r.station_key}-${r.item_id}`;
+    doneFlags[key] = r.done === 1;
+    if (r.done_at) doneTimes[key] = r.done_at;
+  }
+
+  // Если для смены нет времён начала станций — берём глобальные настройки
+  let stationStartTimes = {};
+  if (stationStartRows.length > 0) {
+    for (const r of stationStartRows) stationStartTimes[r.station_key] = r.start_time;
+  } else {
+    const { rows: globalRows } = await pool.query('SELECT station_key, start_time FROM station_config');
+    for (const r of globalRows) stationStartTimes[r.station_key] = r.start_time;
   }
 
   const doneBy = {};
@@ -39,7 +52,7 @@ async function buildShift(date) {
     date,
     techcardId: shiftRow.techcard_id || null,
     udTechcardId: shiftRow.ud_techcard_id || null,
-    doneFlags, doneBy, facts, itemPackLines, assignments: {}
+    doneFlags, doneTimes, doneBy, facts, itemPackLines, stationStartTimes, assignments: {}
   };
 }
 
@@ -93,9 +106,19 @@ async function saveShift(date, shift) {
     await client.query('DELETE FROM shift_item_status WHERE shift_date = $1', [date]);
     for (const [compKey, done] of Object.entries(shift.doneFlags || {})) {
       const { stationKey, itemId } = splitCompKey(compKey);
+      const doneAt = (shift.doneTimes || {})[compKey] || null;
       await client.query(
-        'INSERT INTO shift_item_status(shift_date, station_key, item_id, done) VALUES($1,$2,$3,$4)',
-        [date, stationKey, itemId, done ? 1 : 0]
+        'INSERT INTO shift_item_status(shift_date, station_key, item_id, done, done_at) VALUES($1,$2,$3,$4,$5)',
+        [date, stationKey, itemId, done ? 1 : 0, doneAt]
+      );
+    }
+
+    // Времена начала станций для этой смены
+    await client.query('DELETE FROM shift_station_start WHERE shift_date = $1', [date]);
+    for (const [stationKey, startTime] of Object.entries(shift.stationStartTimes || {})) {
+      await client.query(
+        'INSERT INTO shift_station_start(shift_date, station_key, start_time) VALUES($1,$2,$3)',
+        [date, stationKey, startTime]
       );
     }
 

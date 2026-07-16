@@ -43,7 +43,23 @@ async function initDb(pool) {
       station_key TEXT NOT NULL,
       item_id     TEXT NOT NULL,
       done        INTEGER NOT NULL DEFAULT 0,
+      done_at     TEXT,
       PRIMARY KEY (shift_date, station_key, item_id)
+    )
+  `);
+  await q(`ALTER TABLE shift_item_status ADD COLUMN IF NOT EXISTS done_at TEXT`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS station_config (
+      station_key TEXT PRIMARY KEY,
+      start_time  TEXT NOT NULL DEFAULT '09:00'
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS shift_station_start (
+      shift_date  TEXT NOT NULL,
+      station_key TEXT NOT NULL,
+      start_time  TEXT NOT NULL,
+      PRIMARY KEY (shift_date, station_key)
     )
   `);
   await pool.query(`
