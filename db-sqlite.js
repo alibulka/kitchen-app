@@ -98,6 +98,60 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS shift_station_start (
   }
 }
 
+// Таблицы контроля качества
+sqlite.exec(`CREATE TABLE IF NOT EXISTS quality_standards (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  item_id      INTEGER,
+  name         TEXT NOT NULL,
+  company      TEXT NOT NULL DEFAULT 'EE',
+  appearance   TEXT,
+  color        TEXT,
+  taste_smell  TEXT,
+  consistency  TEXT,
+  always_check INTEGER NOT NULL DEFAULT 0,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+sqlite.exec(`CREATE TABLE IF NOT EXISTS quality_check_fields (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  standard_id       INTEGER NOT NULL REFERENCES quality_standards(id) ON DELETE CASCADE,
+  field_name        TEXT NOT NULL,
+  field_description TEXT,
+  sort_order        INTEGER NOT NULL DEFAULT 0
+)`);
+{
+  const cols=sqlite.prepare('PRAGMA table_info(quality_check_fields)').all();
+  if(cols.length>0&&!cols.some(c=>c.name==='field_description')){
+    sqlite.exec('ALTER TABLE quality_check_fields ADD COLUMN field_description TEXT');
+  }
+}
+sqlite.exec(`CREATE TABLE IF NOT EXISTS quality_tasks (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  date        TEXT NOT NULL,
+  standard_id INTEGER NOT NULL REFERENCES quality_standards(id),
+  status      TEXT NOT NULL DEFAULT 'pending',
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+sqlite.exec(`CREATE TABLE IF NOT EXISTS quality_task_results (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id     INTEGER NOT NULL REFERENCES quality_tasks(id) ON DELETE CASCADE,
+  field_name  TEXT NOT NULL,
+  result      TEXT,
+  comment     TEXT,
+  action      TEXT
+)`);
+sqlite.exec(`CREATE TABLE IF NOT EXISTS quality_photos (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id     INTEGER NOT NULL REFERENCES quality_tasks(id) ON DELETE CASCADE,
+  filename    TEXT NOT NULL,
+  uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+sqlite.exec(`CREATE TABLE IF NOT EXISTS quality_standard_photos (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  standard_id INTEGER NOT NULL REFERENCES quality_standards(id) ON DELETE CASCADE,
+  filename    TEXT NOT NULL,
+  uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+
 // ─── SQL: pg → SQLite ────────────────────────────────────────────────────────
 
 // Конвертируем подмножество pg-синтаксиса в SQLite.

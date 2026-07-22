@@ -7124,6 +7124,10 @@ function SvgTrash({size=16,color='currentColor'}) {
     e('polyline',{points:'3 6 5 6 21 6'}),
     e('path',{d:'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2'}));
 }
+function SvgX({size=20,color='currentColor'}) {
+  return e('svg',{width:size,height:size,viewBox:'0 0 20 20',fill:'none',stroke:color,strokeWidth:2,strokeLinecap:'round'},
+    e('line',{x1:4,y1:4,x2:16,y2:16}),e('line',{x1:16,y1:4,x2:4,y2:16}));
+}
 function SvgSort({dir='none',size=12}) {
   if (dir==='asc')  return e('span',{style:{color:'var(--accent)',fontSize:10}},' ▲');
   if (dir==='desc') return e('span',{style:{color:'var(--accent)',fontSize:10}},' ▼');
@@ -8636,13 +8640,934 @@ function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesCh
 }
 
 // ============================================================
+// QUALITY CONTROL — TECHNOLOGIST & PRODUCT
+// ============================================================
+
+const BASE_FIELDS = ['Внешний вид','Цвет','Вкус и запах','Консистенция'];
+
+function statusLabel(s){ return s==='done'?'Выполнено':s==='overdue'?'Не выполнено':'К проверке'; }
+function statusColor(s){ return s==='done'?'var(--ok)':s==='overdue'?'var(--danger)':'var(--warn)'; }
+function statusBg(s){ return s==='done'?'var(--ok-bg)':s==='overdue'?'#FEE2E2':'#FEF3C7'; }
+
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+
+// Чек-лист одного задания
+// Лайтбокс для просмотра фото
+function Lightbox({photos, startIndex, onClose}) {
+  const [cur,setCur]=useState(startIndex||0);
+  useEffect(()=>{
+    const h=ev=>{
+      if(ev.key==='Escape') onClose();
+      if(ev.key==='ArrowRight') setCur(c=>(c+1)%photos.length);
+      if(ev.key==='ArrowLeft') setCur(c=>(c-1+photos.length)%photos.length);
+    };
+    window.addEventListener('keydown',h);
+    return ()=>window.removeEventListener('keydown',h);
+  },[photos.length]);
+  const src=photos[cur]?.filename?`/uploads/${photos[cur].filename}`:photos[cur]?.src||'';
+  return e('div',{onClick:onClose,style:{position:'fixed',inset:0,background:'rgba(0,0,0,0.88)',
+      display:'flex',alignItems:'center',justifyContent:'center',zIndex:9999,cursor:'zoom-out'}},
+    e('div',{onClick:ev=>ev.stopPropagation(),style:{position:'relative',maxWidth:'90vw',maxHeight:'90vh',display:'flex',flexDirection:'column',alignItems:'center',gap:12}},
+      e('img',{src,style:{maxWidth:'88vw',maxHeight:'82vh',objectFit:'contain',borderRadius:10,boxShadow:'0 8px 40px rgba(0,0,0,0.6)',display:'block'}}),
+      photos.length>1&&e('div',{style:{display:'flex',gap:8,alignItems:'center'}},
+        e('button',{onClick:()=>setCur(c=>(c-1+photos.length)%photos.length),
+          style:{width:36,height:36,borderRadius:'50%',background:'rgba(255,255,255,0.15)',border:'none',color:'white',fontSize:20,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}},'‹'),
+        e('span',{style:{color:'rgba(255,255,255,0.7)',fontSize:13,minWidth:50,textAlign:'center'}},`${cur+1} / ${photos.length}`),
+        e('button',{onClick:()=>setCur(c=>(c+1)%photos.length),
+          style:{width:36,height:36,borderRadius:'50%',background:'rgba(255,255,255,0.15)',border:'none',color:'white',fontSize:20,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}},'›')
+      ),
+      e('button',{onClick:onClose,style:{position:'absolute',top:-14,right:-14,width:30,height:30,borderRadius:'50%',
+        background:'rgba(255,255,255,0.2)',border:'none',color:'white',fontSize:16,cursor:'pointer',
+        display:'flex',alignItems:'center',justifyContent:'center'}},e(SvgX,{size:14}))
+    )
+  );
+}
+
+// Карусель фото (для библиотеки эталонов)
+function PhotoCarousel({photos, onOpen, size=200}) {
+  const [idx,setIdx]=useState(0);
+  if(!photos||!photos.length) return null;
+  const p=photos[idx];
+  return e('div',{style:{position:'relative',width:size,flexShrink:0}},
+    e('img',{src:`/uploads/${p.filename}`,onClick:()=>onOpen(idx),
+      style:{width:size,height:size,objectFit:'cover',borderRadius:10,cursor:'zoom-in',
+        display:'block',border:'2px solid var(--border)'}}),
+    photos.length>1&&e('div',null,
+      idx>0&&e('button',{onClick:ev=>{ev.stopPropagation();setIdx(i=>i-1);},
+        style:{position:'absolute',left:6,top:'50%',transform:'translateY(-50%)',
+          background:'rgba(0,0,0,0.45)',color:'white',border:'none',borderRadius:'50%',
+          width:28,height:28,fontSize:18,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}},'‹'),
+      idx<photos.length-1&&e('button',{onClick:ev=>{ev.stopPropagation();setIdx(i=>i+1);},
+        style:{position:'absolute',right:6,top:'50%',transform:'translateY(-50%)',
+          background:'rgba(0,0,0,0.45)',color:'white',border:'none',borderRadius:'50%',
+          width:28,height:28,fontSize:18,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}},'›'),
+      e('div',{style:{position:'absolute',bottom:8,left:0,right:0,display:'flex',justifyContent:'center',gap:5}},
+        photos.map((_,i)=>e('div',{key:i,onClick:ev=>{ev.stopPropagation();setIdx(i);},
+          style:{width:7,height:7,borderRadius:'50%',cursor:'pointer',
+            background:i===idx?'white':'rgba(255,255,255,0.45)'}}))
+      )
+    )
+  );
+}
+
+function QualityChecklist({task, onSave, onClose}) {
+  const rawExtra=task.extra_fields||[];
+  const fields=[...BASE_FIELDS,...rawExtra.map(f=>typeof f==='string'?f:f.name)];
+  const extraDescMap=Object.fromEntries(rawExtra.map(f=>typeof f==='string'?[f,'']:[f.name,f.description||'']));
+  const init={};
+  for(const r of (task.results||[])) init[r.field_name]={result:r.result,comment:r.comment||'',action:r.action||''};
+  const [vals,setVals]=useState(init);
+  const [saving,setSaving]=useState(false);
+  const [photos,setPhotos]=useState(task.photos||[]);
+  const [uploading,setUploading]=useState(false);
+  const [lightbox,setLightbox]=useState(null); // {photos, index}
+  const fileRef=useRef();
+
+  const set=(field,key,val)=>setVals(prev=>({...prev,[field]:{...(prev[field]||{}), [key]:val}}));
+  const allFilled=fields.every(f=>vals[f]?.result);
+  const hasFailWithoutComment=fields.some(f=>vals[f]?.result==='fail'&&!(vals[f]?.comment||'').trim());
+
+  const handleSave=async(done)=>{
+    if(done&&hasFailWithoutComment){alert('Заполните комментарий для всех несоответствий');return;}
+    setSaving(true);
+    const results=fields.map(f=>({field_name:f,result:vals[f]?.result||null,comment:vals[f]?.comment||'',action:vals[f]?.action||''}));
+    const status=done?'done':'pending';
+    await fetch(`/api/quality/tasks/${task.id}/results`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({results,status})});
+    setSaving(false);
+    onSave(task.id,status,results);
+    if(done) onClose();
+  };
+
+  const handlePhoto=async(files)=>{
+    if(!files||!files.length) return;
+    setUploading(true);
+    const fd=new FormData();
+    for(const f of files) fd.append('photos',f);
+    const r=await fetch(`/api/quality/tasks/${task.id}/photos`,{method:'POST',body:fd});
+    const d=await r.json();
+    if(d.files) setPhotos(prev=>[...prev,...d.files.map(fn=>({filename:fn}))]);
+    setUploading(false);
+  };
+
+  const deletePhoto=async(filename)=>{
+    await fetch(`/api/quality/photos/${encodeURIComponent(filename)}`,{method:'DELETE'});
+    setPhotos(prev=>prev.filter(p=>p.filename!==filename));
+  };
+
+  const stdVal=(field)=>{
+    if(field==='Внешний вид') return task.appearance;
+    if(field==='Цвет') return task.color;
+    if(field==='Вкус и запах') return task.taste_smell;
+    if(field==='Консистенция') return task.consistency;
+    return extraDescMap[field]||null;
+  };
+
+  const refPhotos=task.ref_photos||[];
+
+  return e('div',{style:{paddingTop:12}},
+    lightbox&&e(Lightbox,{photos:lightbox.photos,startIndex:lightbox.index,onClose:()=>setLightbox(null)}),
+
+    // Двухколоночный лейаут: чекпоинты слева, эталонное фото справа
+    e('div',{style:{display:'flex',gap:20,alignItems:'flex-start'}},
+
+      // Левая колонка — чекпоинты
+      e('div',{style:{flex:1,minWidth:0}},
+        fields.map(field=>{
+          const res=vals[field]?.result;
+          const std=stdVal(field);
+          return e('div',{key:field,style:{
+              marginBottom:10,padding:'14px 16px',background:'#fff',borderRadius:12,
+              border:'1.5px solid '+(res==='ok'?'#16a34a':res==='fail'?'#dc2626':'#e5e7eb'),
+              boxShadow:'0 1px 3px rgba(0,0,0,0.06)'}},
+            e('div',{style:{display:'flex',alignItems:'center',gap:12}},
+              e('div',{style:{flex:1}},
+                e('div',{style:{fontWeight:700,fontSize:16,color:'#111',marginBottom:std?4:0}},field),
+                std&&e('div',{style:{fontSize:14,color:'#374151'}},std)
+              ),
+              e('button',{onClick:()=>set(field,'result',res==='ok'?null:'ok'),title:'Соответствует',
+                style:{width:40,height:40,borderRadius:10,border:'2px solid '+(res==='ok'?'#16a34a':'#d1d5db'),
+                  background:res==='ok'?'#16a34a':'#f9fafb',color:res==='ok'?'#fff':'#6b7280',
+                  fontSize:20,fontWeight:700,cursor:'pointer',flexShrink:0,
+                  display:'flex',alignItems:'center',justifyContent:'center'}},'✓'),
+              e('button',{onClick:()=>set(field,'result',res==='fail'?null:'fail'),title:'Не соответствует',
+                style:{width:40,height:40,borderRadius:10,border:'2px solid '+(res==='fail'?'#dc2626':'#d1d5db'),
+                  background:res==='fail'?'#dc2626':'#f9fafb',color:res==='fail'?'#fff':'#6b7280',
+                  fontSize:18,fontWeight:700,cursor:'pointer',flexShrink:0,
+                  display:'flex',alignItems:'center',justifyContent:'center'}},'✕')
+            ),
+            res&&e('div',{style:{marginTop:10}},
+              e('input',{type:'text',
+                placeholder:res==='fail'?'Комментарий *':'Комментарий (необязательно)',
+                style:{width:'100%',padding:'7px 11px',borderRadius:8,fontSize:14,
+                  background:'#f9fafb',color:'#111',boxSizing:'border-box',
+                  border:'1.5px solid '+(res==='fail'&&!(vals[field]?.comment||'').trim()?'#dc2626':'#d1d5db')},
+                value:vals[field]?.comment||'',onChange:ev=>set(field,'comment',ev.target.value)})
+            )
+          );
+        })
+      ),
+
+      // Правая колонка — эталонное фото
+      refPhotos.length>0&&e('div',{style:{flexShrink:0,width:200}},
+        e('div',{style:{fontWeight:600,fontSize:13,color:'var(--muted)',marginBottom:8}},'Эталон'),
+        e(PhotoCarousel,{photos:refPhotos,size:200,onOpen:i=>setLightbox({photos:refPhotos,index:i})})
+      )
+    ),
+
+    // Фото проверки — крупно, под чекпоинтами
+    e('div',{style:{marginTop:16,marginBottom:16}},
+      e('div',{style:{fontWeight:600,fontSize:14,color:'var(--muted)',marginBottom:10}},'Фото проверки'),
+      photos.length>0&&e('div',{style:{display:'flex',flexWrap:'wrap',gap:10,marginBottom:12}},
+        photos.map((p,i)=>e('div',{key:p.filename,style:{position:'relative'}},
+          e('img',{src:`/uploads/${p.filename}`,onClick:()=>setLightbox({photos,index:i}),
+            style:{width:140,height:140,objectFit:'cover',borderRadius:10,cursor:'zoom-in',
+              border:'1.5px solid var(--border)',display:'block'}}),
+          e('button',{onClick:()=>deletePhoto(p.filename),
+            style:{position:'absolute',top:-6,right:-6,width:22,height:22,borderRadius:'50%',border:'none',
+              background:'var(--danger)',color:'white',fontSize:11,cursor:'pointer',
+              display:'flex',alignItems:'center',justifyContent:'center'}},'✕')
+        ))
+      ),
+      e('button',{onClick:()=>fileRef.current&&fileRef.current.click(),
+        style:{padding:'8px 16px',borderRadius:8,border:'1.5px dashed var(--border)',background:'transparent',
+          color:'var(--muted)',fontSize:13,cursor:'pointer'}},
+        uploading?'Загрузка…':'+ Добавить фото'),
+      e('input',{type:'file',ref:fileRef,accept:'image/*',multiple:true,style:{display:'none'},
+        onChange:ev=>handlePhoto(ev.target.files)})
+    ),
+
+    // Кнопки сохранения
+    e('div',{style:{display:'flex',gap:10}},
+      e('button',{onClick:()=>handleSave(false),disabled:saving,
+        style:{flex:1,padding:'10px 0',borderRadius:10,border:'1.5px solid var(--border)',
+          background:'transparent',color:'var(--text)',fontWeight:600,fontSize:14,cursor:'pointer'}},
+        'Сохранить черновик'),
+      e('button',{onClick:()=>handleSave(true),disabled:saving||!allFilled,
+        style:{flex:1,padding:'10px 0',borderRadius:10,border:'none',
+          background:allFilled?'var(--ok)':'var(--border)',color:'white',fontWeight:700,fontSize:14,
+          cursor:allFilled?'pointer':'default'}},
+        saving?'…':'✓ Завершить проверку')
+    )
+  );
+}
+
+// Карточка задания
+function QualityTaskCard({task, isOpen, onToggle, onDelete, onSave}) {
+  const [lightbox,setLightbox]=useState(null);
+  const doneCount=(task.results||[]).filter(r=>r.result).length;
+  const totalFields=BASE_FIELDS.length+(task.extra_fields||[]).length;
+  const refPhotos=task.ref_photos||[];
+
+  return e('div',{style:{background:'var(--surface)',borderRadius:14,border:'1.5px solid var(--border)',overflow:'hidden'}},
+    lightbox&&e(Lightbox,{photos:lightbox.photos,startIndex:lightbox.index,onClose:()=>setLightbox(null)}),
+
+    // Заголовок карточки — кликается для разворачивания
+    e('div',{style:{padding:'14px 16px',display:'flex',alignItems:'center',gap:14,cursor:'pointer'},onClick:onToggle},
+      // Эталонное фото слева от текста
+      refPhotos.length>0&&e('img',{
+        src:`/uploads/${refPhotos[0].filename}`,
+        onClick:ev=>{ev.stopPropagation();setLightbox({photos:refPhotos,index:0});},
+        style:{width:72,height:72,objectFit:'cover',borderRadius:8,flexShrink:0,cursor:'zoom-in',
+          border:'2px solid var(--border)'}}),
+
+      e('div',{style:{flex:1,minWidth:0}},
+        e('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:4,flexWrap:'wrap'}},
+          e('span',{style:{fontWeight:700,fontSize:15}},task.name),
+          e('span',{style:{fontSize:11,padding:'2px 7px',borderRadius:8,
+            background:task.company==='УД'?'#EEF2FF':'#FFF7ED',
+            color:task.company==='УД'?'#4F46E5':'#C2410C',fontWeight:700}},task.company)
+        ),
+        e('div',{style:{display:'flex',alignItems:'center',gap:10}},
+          e('span',{className:'badge',style:{background:statusBg(task.status),color:statusColor(task.status)}},
+            statusLabel(task.status)),
+          task.status!=='done'&&e('span',{style:{fontSize:12,color:'var(--muted)'}},
+            `${doneCount}/${totalFields} полей`)
+        )
+      ),
+
+      e('div',{style:{display:'flex',gap:8,alignItems:'center',flexShrink:0}},
+        e('span',{style:{fontSize:13,color:'var(--accent)',fontWeight:600}},
+          isOpen?'Свернуть':task.status==='done'?'Смотреть':'Заполнить'),
+        e('button',{onClick:ev=>{ev.stopPropagation();onDelete(task.id);},
+          style:{padding:'6px 10px',borderRadius:8,border:'1.5px solid var(--border)',
+            background:'transparent',color:'var(--muted)',fontSize:13,cursor:'pointer'}},'✕')
+      )
+    ),
+
+    // Чек-лист inline
+    isOpen&&e('div',{style:{borderTop:'1px solid var(--border)',padding:'0 16px 16px'}},
+      e(QualityChecklist,{key:task.id+'-'+task.status, task, onSave, onClose:onToggle})
+    )
+  );
+}
+
+// Диалог добавления заданий
+function AddTasksDialog({standards, todayTasks, date, onAdd, onClose}) {
+  const [mode,setMode]=useState('shift'); // 'shift' | 'all'
+  const [shiftItemIds,setShiftItemIds]=useState(null); // null = загрузка, Set = готово
+  const [search,setSearch]=useState('');
+
+  // Загружаем item_id из текущей смены
+  useEffect(()=>{
+    (async()=>{
+      try{
+        const sr=await fetch(`/api/shifts/${date}`).then(r=>r.json());
+        const ids=new Set();
+        for(const tcId of [sr.shift?.techcardId,sr.shift?.udTechcardId].filter(Boolean)){
+          const tr=await fetch(`/api/techcards/${tcId}`).then(r=>r.json());
+          const items=tr.techcard?.items||{};
+          Object.keys(items).forEach(id=>ids.add(Number(id)));
+        }
+        setShiftItemIds(ids);
+      }catch(e){ setShiftItemIds(new Set()); }
+    })();
+  },[date]);
+
+  const alreadyIds=new Set(todayTasks.map(t=>t.standard_id));
+
+  const filtered=standards.filter(s=>{
+    if(alreadyIds.has(s.id)) return false;
+    if(mode==='shift'){
+      if(!shiftItemIds) return false; // ещё загружается
+      if(!s.item_id||!shiftItemIds.has(s.item_id)) return false;
+    }
+    const q=search.toLowerCase();
+    return !q||s.name.toLowerCase().includes(q)||(s.item_id&&String(s.item_id).includes(q));
+  });
+
+  const loading=mode==='shift'&&!shiftItemIds;
+
+  return e('div',{style:{background:'var(--surface)',borderRadius:16,padding:20,maxWidth:560,width:'100%',height:'80vh',display:'flex',flexDirection:'column',overflow:'hidden'}},
+    e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}},
+      e('div',{style:{fontWeight:700,fontSize:16}},'Добавить задания'),
+      e('button',{onClick:onClose,style:{background:'none',border:'none',fontSize:20,cursor:'pointer',color:'var(--muted)'}},e(SvgX,{size:20}))
+    ),
+
+    // Переключатель режима
+    e('div',{style:{display:'flex',gap:0,marginBottom:14,borderRadius:10,overflow:'hidden',border:'1.5px solid var(--border)'}},
+      e('button',{onClick:()=>setMode('shift'),
+        style:{flex:1,padding:'8px 0',border:'none',fontSize:13,fontWeight:600,cursor:'pointer',
+          background:mode==='shift'?'var(--accent)':'transparent',
+          color:mode==='shift'?'white':'var(--muted)'}},
+        '📅 Из текущей смены'),
+      e('button',{onClick:()=>setMode('all'),
+        style:{flex:1,padding:'8px 0',border:'none',fontSize:13,fontWeight:600,cursor:'pointer',
+          background:mode==='all'?'var(--accent)':'transparent',
+          color:mode==='all'?'white':'var(--muted)'}},
+        '📚 Все эталоны')
+    ),
+
+    e('input',{type:'text',className:'filter-input',placeholder:'Поиск по ID или названию…',
+      value:search,onChange:ev=>setSearch(ev.target.value),style:{marginBottom:12}}),
+
+    e('div',{style:{overflowY:'auto',flex:1,minHeight:0}},
+      loading
+        ?e('div',{style:{padding:20,textAlign:'center',color:'var(--muted)',fontSize:14}},'Загрузка позиций смены…')
+        :filtered.length===0
+          ?e('div',{style:{padding:20,textAlign:'center',color:'var(--muted)',fontSize:14}},
+              mode==='shift'?'Нет эталонов для позиций текущей смены':'Ничего не найдено')
+          :filtered.map(s=>e('div',{key:s.id,
+              style:{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderBottom:'1px solid var(--border)'}},
+            e('div',{style:{flex:1}},
+              e('div',{style:{fontWeight:600,fontSize:14}},s.name),
+              e('div',{style:{fontSize:12,color:'var(--muted)'}},
+                [s.item_id&&`ID ${s.item_id}`,s.company].filter(Boolean).join(' · '))
+            ),
+            e('button',{onClick:()=>onAdd(s),
+              style:{padding:'5px 12px',borderRadius:8,border:'1.5px solid var(--ok)',
+                background:'transparent',color:'var(--ok)',fontSize:13,fontWeight:600,cursor:'pointer'}},'+ Добавить')
+          ))
+    )
+  );
+}
+
+// Вкладка «Библиотека эталонов»
+function LibraryTab({standards, onReload}) {
+  const [search,setSearch]=useState('');
+  const [company,setCompany]=useState('');
+  const [importing,setImporting]=useState(false);
+  const [importMsg,setImportMsg]=useState('');
+  const [alwaysMap,setAlwaysMap]=useState({});
+  const fileRef=useRef();
+
+  // Импорт Excel с эталонами — отправляем файл на сервер, там парсинг и фото
+  const parseAndImport=async(file,comp)=>{
+    if(!file) return;
+    setImporting(true); setImportMsg('');
+    try {
+      const fd=new FormData();
+      fd.append('file',file);
+      fd.append('company',comp);
+      const r=await fetch('/api/quality/standards/import-file',{method:'POST',body:fd});
+      const d=await r.json();
+      if(d.error) throw new Error(d.error);
+      setImportMsg(`✓ Эталонов: ${d.imported} новых. Фото: ${d.images} загружено`+(d.msg?' ('+d.msg+')':''));
+      onReload();
+    } catch(e){ setImportMsg('Ошибка: '+e.message); }
+    setImporting(false);
+  };
+
+  const toggleAlways=async(s)=>{
+    const newVal=s.always_check?0:1;
+    await fetch(`/api/quality/standards/${s.id}`,{method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({...s,always_check:newVal,extra_fields:s.extra_fields||[]})});
+    // При снятии флага — удаляем незавершённые задания на сегодня
+    if(s.always_check){
+      const today=new Date().toISOString().slice(0,10);
+      const r=await fetch(`/api/quality/tasks?date=${today}`);
+      const d=await r.json();
+      const toDelete=(d.tasks||[]).filter(t=>t.standard_id===s.id&&t.status==='pending');
+      for(const t of toDelete) await fetch(`/api/quality/tasks/${t.id}`,{method:'DELETE'});
+    }
+    onReload();
+  };
+
+  const filtered=standards.filter(s=>{
+    if(company&&s.company!==company) return false;
+    const q=search.toLowerCase();
+    return !q||s.name.toLowerCase().includes(q)||(s.item_id&&String(s.item_id).includes(q));
+  });
+
+  return e('div',null,
+    // Импорт
+    e('div',{className:'card',style:{marginBottom:20}},
+      e('div',{style:{fontWeight:700,fontSize:15,marginBottom:12}},'Импорт из Excel'),
+      e('div',{style:{display:'flex',gap:10,flexWrap:'wrap',alignItems:'center'}},
+        e('button',{onClick:()=>{window._importComp='EE';fileRef.current&&fileRef.current.click();},
+          disabled:importing,
+          style:{padding:'8px 18px',borderRadius:10,border:'1.5px solid #C2410C',background:'#FFF7ED',
+            color:'#C2410C',fontWeight:700,fontSize:13,cursor:'pointer'}},
+          importing?'Загрузка…':'📥 Импорт EE'),
+        e('button',{onClick:()=>{window._importComp='УД';fileRef.current&&fileRef.current.click();},
+          disabled:importing,
+          style:{padding:'8px 18px',borderRadius:10,border:'1.5px solid #4F46E5',background:'#EEF2FF',
+            color:'#4F46E5',fontWeight:700,fontSize:13,cursor:'pointer'}},
+          importing?'Загрузка…':'📥 Импорт УД'),
+        e('input',{type:'file',ref:fileRef,accept:'.xlsx,.xls',style:{display:'none'},
+          onChange:ev=>{parseAndImport(ev.target.files[0],window._importComp);ev.target.value='';}}),
+        importMsg&&e('span',{style:{fontSize:13,color:importMsg.startsWith('✓')?'var(--ok)':'var(--danger)'}},importMsg)
+      )
+    ),
+
+    // Поиск и фильтры
+    e('div',{style:{display:'flex',gap:10,marginBottom:14,flexWrap:'wrap'}},
+      e('input',{type:'text',className:'filter-input',placeholder:'Поиск по ID или названию…',
+        style:{flex:1,minWidth:180},value:search,onChange:ev=>setSearch(ev.target.value)}),
+      e('select',{className:'filter-input',value:company,onChange:ev=>setCompany(ev.target.value)},
+        e('option',{value:''},'Все'),e('option',{value:'EE'},'EE'),e('option',{value:'УД'},'УД'))
+    ),
+
+    e('div',{style:{fontSize:13,color:'var(--muted)',marginBottom:10}},`${filtered.length} эталонов`),
+
+    // Список
+    e('div',{style:{display:'flex',flexDirection:'column',gap:8}},
+      filtered.map(s=>e(StandardCard,{key:s.id,s,onToggleAlways:toggleAlways,onReload}))
+    )
+  );
+}
+
+function StandardCard({s, onToggleAlways, onReload}) {
+  const [refPhotos,setRefPhotos]=useState(s.ref_photos||[]);
+  const [uploading,setUploading]=useState(false);
+  const [lightbox,setLightbox]=useState(null);
+  const [editing,setEditing]=useState(false);
+  const [saving,setSaving]=useState(false);
+  // Поля редактирования
+  const [editAppearance,setEditAppearance]=useState(s.appearance||'');
+  const [editColor,setEditColor]=useState(s.color||'');
+  const [editTaste,setEditTaste]=useState(s.taste_smell||'');
+  const [editConsistency,setEditConsistency]=useState(s.consistency||'');
+  const [editExtra,setEditExtra]=useState((s.extra_fields||[]).map(f=>typeof f==='string'?{name:f,description:''}:f));
+  const [newField,setNewField]=useState('');
+  const [newFieldDesc,setNewFieldDesc]=useState('');
+  const fileRef=useRef();
+
+  const uploadPhotos=async(files)=>{
+    if(!files||!files.length) return;
+    setUploading(true);
+    const fd=new FormData();
+    for(const f of files) fd.append('photos',f);
+    const r=await fetch(`/api/quality/standards/${s.id}/photos`,{method:'POST',body:fd});
+    const d=await r.json();
+    if(d.files) setRefPhotos(prev=>[...prev,...d.files.map(fn=>({filename:fn,standard_id:s.id}))]);
+    setUploading(false);
+  };
+
+  const deletePhoto=async(filename)=>{
+    await fetch(`/api/quality/standard-photos/${encodeURIComponent(filename)}`,{method:'DELETE'});
+    setRefPhotos(prev=>prev.filter(p=>p.filename!==filename));
+  };
+
+  const saveEdit=async()=>{
+    setSaving(true);
+    await fetch(`/api/quality/standards/${s.id}`,{method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        name:s.name, always_check:s.always_check,
+        appearance:editAppearance||null, color:editColor||null,
+        taste_smell:editTaste||null, consistency:editConsistency||null,
+        extra_fields:editExtra,
+      })});
+    setSaving(false);
+    setEditing(false);
+    onReload();
+  };
+
+  const cancelEdit=()=>{
+    setEditAppearance(s.appearance||'');
+    setEditColor(s.color||'');
+    setEditTaste(s.taste_smell||'');
+    setEditConsistency(s.consistency||'');
+    setEditExtra((s.extra_fields||[]).map(f=>typeof f==='string'?{name:f,description:''}:f));
+    setNewField('');
+    setNewFieldDesc('');
+    setEditing(false);
+  };
+
+  const addCustomField=()=>{
+    const v=newField.trim();
+    if(!v||editExtra.some(f=>f.name===v)) return;
+    setEditExtra(prev=>[...prev,{name:v,description:newFieldDesc.trim()}]);
+    setNewField('');
+    setNewFieldDesc('');
+  };
+
+  // Базовые критерии для отображения
+  const BASE_CRITERIA=[
+    {key:'appearance',label:'Внешний вид',val:s.appearance},
+    {key:'color',label:'Цвет',val:s.color},
+    {key:'taste_smell',label:'Вкус и запах',val:s.taste_smell},
+    {key:'consistency',label:'Консистенция',val:s.consistency},
+  ];
+
+  const inputStyle={width:'100%',padding:'6px 10px',border:'1px solid var(--border)',borderRadius:8,
+    fontSize:13,background:'var(--bg-subtle)',color:'var(--text)',boxSizing:'border-box',resize:'vertical'};
+
+  return e('div',{style:{background:'var(--surface)',borderRadius:12,padding:'14px 16px',
+      border:'1.5px solid '+(editing?'var(--accent)':'var(--border)')}},
+    lightbox&&e(Lightbox,{photos:lightbox.photos,startIndex:lightbox.index,onClose:()=>setLightbox(null)}),
+
+    // Шапка карточки
+    e('div',{style:{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:8,marginBottom:10}},
+      e('div',{style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}},
+        e('span',{style:{fontWeight:700,fontSize:15}},s.name),
+        e('span',{style:{fontSize:11,padding:'2px 7px',borderRadius:8,
+          background:s.company==='УД'?'#EEF2FF':'#FFF7ED',
+          color:s.company==='УД'?'#4F46E5':'#C2410C',fontWeight:700}},s.company),
+        s.item_id&&e('span',{style:{fontSize:12,color:'var(--muted)'}},`ID ${s.item_id}`)
+      ),
+      e('div',{style:{display:'flex',gap:6,alignItems:'center',flexShrink:0}},
+        e('button',{onClick:()=>onToggleAlways(s),
+          style:{padding:'4px 10px',borderRadius:8,fontSize:12,fontWeight:700,cursor:'pointer',
+            border:'1.5px solid '+(s.always_check?'var(--ok)':'var(--border)'),
+            background:s.always_check?'var(--ok-bg)':'transparent',
+            color:s.always_check?'var(--ok)':'var(--muted)',whiteSpace:'nowrap'}},
+          s.always_check?'✓ Проверять всегда':'Проверять всегда'),
+        !editing&&e('button',{onClick:()=>setEditing(true),
+          style:{padding:'4px 10px',borderRadius:8,fontSize:12,fontWeight:600,cursor:'pointer',
+            border:'1.5px solid var(--border)',background:'transparent',color:'var(--muted)',whiteSpace:'nowrap'}},
+          '✏️ Изменить')
+      )
+    ),
+
+    // Горизонтальный лейаут
+    e('div',{style:{display:'flex',gap:16,alignItems:'flex-start'}},
+
+      // Левая часть — критерии
+      e('div',{style:{flex:1,minWidth:0}},
+
+        editing
+          // ── Режим редактирования ──
+          ? e('div',null,
+              e('div',{style:{fontSize:12,fontWeight:700,color:'var(--muted)',textTransform:'uppercase',
+                  letterSpacing:'0.04em',marginBottom:8}},'Базовые критерии'),
+              [
+                {label:'Внешний вид',val:editAppearance,set:setEditAppearance},
+                {label:'Цвет',val:editColor,set:setEditColor},
+                {label:'Вкус и запах',val:editTaste,set:setEditTaste},
+                {label:'Консистенция',val:editConsistency,set:setEditConsistency},
+              ].map(f=>e('div',{key:f.label,style:{marginBottom:8}},
+                e('div',{style:{fontSize:12,fontWeight:600,color:'var(--muted)',marginBottom:3}},f.label),
+                e('textarea',{rows:2,placeholder:'Описание…',style:inputStyle,
+                  value:f.val,onChange:ev=>f.set(ev.target.value)})
+              )),
+
+              // Кастомные критерии
+              e('div',{style:{fontSize:12,fontWeight:700,color:'var(--muted)',textTransform:'uppercase',
+                  letterSpacing:'0.04em',marginTop:12,marginBottom:8}},'Дополнительные критерии'),
+              editExtra.map((f,i)=>e('div',{key:i,style:{marginBottom:8,padding:'8px 10px',background:'var(--bg-subtle)',
+                  borderRadius:8,border:'1px solid var(--border)'}},
+                e('div',{style:{display:'flex',alignItems:'center',gap:6,marginBottom:6}},
+                  e('span',{style:{flex:1,fontSize:13,fontWeight:600,color:'var(--text)'}},f.name),
+                  e('button',{onClick:()=>setEditExtra(prev=>prev.filter((_,j)=>j!==i)),
+                    style:{padding:'2px 7px',borderRadius:7,border:'1px solid var(--border)',
+                      background:'transparent',color:'var(--danger)',fontSize:12,cursor:'pointer'}},'✕')
+                ),
+                e('textarea',{rows:2,placeholder:'Описание / эталонное значение…',style:{...inputStyle,width:'100%',boxSizing:'border-box'},
+                  value:f.description||'',onChange:ev=>setEditExtra(prev=>prev.map((x,j)=>j===i?{...x,description:ev.target.value}:x))})
+              )),
+              e('div',{style:{marginTop:4,padding:'8px 10px',background:'var(--bg-subtle)',
+                  borderRadius:8,border:'1.5px dashed var(--border)'}},
+                e('div',{style:{fontSize:12,fontWeight:600,color:'var(--muted)',marginBottom:4}},'Новый критерий'),
+                e('input',{type:'text',placeholder:'Название…',
+                  style:{...inputStyle,marginBottom:6},
+                  value:newField,onChange:ev=>setNewField(ev.target.value),
+                  onKeyDown:ev=>ev.key==='Enter'&&document.getElementById('_qcf_desc_input')?.focus()}),
+                e('textarea',{id:'_qcf_desc_input',rows:2,placeholder:'Описание / эталонное значение…',
+                  style:{...inputStyle,width:'100%',boxSizing:'border-box',marginBottom:6},
+                  value:newFieldDesc,onChange:ev=>setNewFieldDesc(ev.target.value)}),
+                e('button',{onClick:addCustomField,
+                  style:{padding:'5px 12px',borderRadius:8,border:'1.5px solid var(--ok)',
+                    background:'transparent',color:'var(--ok)',fontSize:13,fontWeight:600,cursor:'pointer'}},
+                  '+ Добавить критерий')
+              ),
+
+              // Кнопки сохранить/отмена
+              e('div',{style:{display:'flex',gap:8,marginTop:14}},
+                e('button',{onClick:saveEdit,disabled:saving,
+                  style:{padding:'7px 18px',borderRadius:9,border:'none',background:'var(--accent)',
+                    color:'white',fontWeight:700,fontSize:13,cursor:'pointer'}},
+                  saving?'Сохранение…':'Сохранить'),
+                e('button',{onClick:cancelEdit,
+                  style:{padding:'7px 14px',borderRadius:9,border:'1.5px solid var(--border)',
+                    background:'transparent',color:'var(--muted)',fontSize:13,cursor:'pointer'}},
+                  'Отмена')
+              )
+            )
+
+          // ── Режим просмотра ──
+          : e('div',{style:{display:'flex',flexDirection:'column',gap:4}},
+              BASE_CRITERIA.map(c=>e('div',{key:c.key,style:{fontSize:13,color:'var(--text)',lineHeight:'1.5'}},
+                e('span',{style:{fontWeight:600,color:'var(--muted)',marginRight:4}},c.label+':'),
+                c.val||e('span',{style:{color:'var(--muted)',fontStyle:'italic'}},'—')
+              )),
+              (s.extra_fields||[]).map((f,i)=>{
+                const fname=typeof f==='string'?f:f.name;
+                const fdesc=typeof f==='string'?'':f.description||'';
+                return e('div',{key:i,style:{fontSize:13,color:'var(--text)',lineHeight:'1.5'}},
+                  e('span',{style:{fontWeight:600,color:'var(--muted)',marginRight:4}},fname+':'),
+                  fdesc?fdesc:e('span',{style:{color:'var(--muted)',fontStyle:'italic'}},'—')
+                );
+              })
+            ),
+
+        // Кнопка добавить фото (всегда видна)
+        !editing&&e('div',{style:{marginTop:10}},
+          e('button',{onClick:()=>fileRef.current&&fileRef.current.click(),
+            style:{padding:'4px 10px',borderRadius:7,border:'1.5px dashed var(--border)',background:'transparent',
+              color:'var(--muted)',fontSize:12,cursor:'pointer'}},
+            uploading?'Загрузка…':'+ Добавить фото'),
+          e('input',{type:'file',ref:fileRef,accept:'image/*',multiple:true,style:{display:'none'},
+            onChange:ev=>uploadPhotos(ev.target.files)})
+        )
+      ),
+
+      // Правая часть — карусель фото
+      refPhotos.length>0&&e('div',{style:{flexShrink:0}},
+        e(PhotoCarousel,{photos:refPhotos,size:180,onOpen:i=>setLightbox({photos:refPhotos,index:i})}),
+        e('div',{style:{display:'flex',flexWrap:'wrap',gap:4,marginTop:6,maxWidth:180}},
+          refPhotos.map((p,i)=>e('button',{key:p.filename,onClick:()=>deletePhoto(p.filename),
+            style:{padding:'2px 6px',fontSize:10,borderRadius:5,border:'1px solid var(--border)',
+              background:'transparent',color:'var(--muted)',cursor:'pointer'}},
+            `✕ фото ${i+1}`))
+        )
+      )
+    )
+  );
+}
+
+// Страница технолога
+function TechnologistPage() {
+  const [tab,setTab]=useState('tasks');
+  const [date,setDate]=useState(todayISO);
+  const [tasks,setTasks]=useState([]);
+  const [standards,setStandards]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [openTaskId,setOpenTaskId]=useState(null);
+  const [showAdd,setShowAdd]=useState(false);
+
+  const loadData=async(d)=>{
+    setLoading(true);
+    const [tr,sr]=await Promise.all([
+      fetch(`/api/quality/tasks?date=${d}`).then(r=>r.json()),
+      fetch('/api/quality/standards').then(r=>r.json()),
+    ]);
+    setTasks(tr.tasks||[]);
+    setStandards(sr.standards||[]);
+    setLoading(false);
+  };
+
+  useEffect(()=>{loadData(date);},[date]);
+
+  // Авто-создание заданий для "проверять всегда"
+  useEffect(()=>{
+    if(!standards.length) return;
+    const alwaysCheck=standards.filter(s=>s.always_check&&!(tasks.some(t=>t.standard_id===s.id)));
+    if(!alwaysCheck.length) return;
+    (async()=>{
+      for(const s of alwaysCheck){
+        await fetch('/api/quality/tasks',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({date,standard_id:s.id})});
+      }
+      await loadData(date);
+    })();
+  },[standards,date]);
+
+  const addTask=async(standard)=>{
+    await fetch('/api/quality/tasks',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({date,standard_id:standard.id})});
+    await loadData(date);
+  };
+
+  const deleteTask=async(id)=>{
+    if(!confirm('Удалить задание?')) return;
+    await fetch(`/api/quality/tasks/${id}`,{method:'DELETE'});
+    setTasks(prev=>prev.filter(t=>t.id!==id));
+  };
+
+  const onSave=(taskId,status,results)=>{
+    setTasks(prev=>prev.map(t=>t.id===taskId?{...t,status,results}:t));
+  };
+
+  const pending=tasks.filter(t=>t.status==='pending'||t.status==='overdue');
+  const done=tasks.filter(t=>t.status==='done');
+
+  const reloadStandards=async()=>{
+    const sr=await fetch('/api/quality/standards').then(r=>r.json());
+    setStandards(sr.standards||[]);
+  };
+
+  return e('div',{style:{padding:'16px',maxWidth:960,margin:'0 auto'}},
+    // Табы
+    e('div',{className:'mgr-tabs',style:{marginBottom:20}},
+      e('button',{className:'mgr-tab'+(tab==='tasks'?' active':''),onClick:()=>setTab('tasks')},'📋 Задания'),
+      e('button',{className:'mgr-tab'+(tab==='library'?' active':''),onClick:()=>setTab('library')},'📚 Библиотека эталонов')
+    ),
+
+    // Вкладка Задания
+    tab==='tasks'&&e(React.Fragment,null,
+      e('div',{style:{display:'flex',alignItems:'center',gap:12,marginBottom:20}},
+        e('input',{type:'date',className:'filter-input',value:date,
+          onChange:ev=>setDate(ev.target.value),style:{fontSize:15}}),
+        e('button',{onClick:()=>setDate(todayISO()),
+          style:{padding:'7px 14px',borderRadius:8,border:'1.5px solid var(--border)',
+            background:'transparent',color:'var(--text)',fontSize:13,cursor:'pointer'}},'Сегодня')
+      ),
+
+      loading?e('div',{className:'empty-state'},'Загрузка…'):e(React.Fragment,null,
+        e('div',{style:{marginBottom:24}},
+          e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}},
+            e('div',{style:{fontWeight:700,fontSize:16}},`К проверке (${pending.length})`),
+            e('button',{onClick:()=>setShowAdd(true),
+              style:{padding:'7px 16px',borderRadius:10,border:'none',background:'var(--accent)',
+                color:'white',fontWeight:700,fontSize:13,cursor:'pointer'}},'+ Добавить')
+          ),
+          pending.length===0
+            ?e('div',{style:{padding:'20px',textAlign:'center',color:'var(--muted)',fontSize:14,
+                border:'1.5px dashed var(--border)',borderRadius:12}},'Нет заданий на этот день')
+            :e('div',{style:{display:'flex',flexDirection:'column',gap:10}},
+                pending.map(t=>e(QualityTaskCard,{key:t.id,task:t,
+                  isOpen:openTaskId===t.id,
+                  onToggle:()=>setOpenTaskId(v=>v===t.id?null:t.id),
+                  onDelete:deleteTask,onSave})))
+        ),
+        done.length>0&&e('div',null,
+          e('div',{style:{fontWeight:700,fontSize:16,marginBottom:10}},`Выполнено (${done.length})`),
+          e('div',{style:{display:'flex',flexDirection:'column',gap:10}},
+            done.map(t=>e(QualityTaskCard,{key:t.id,task:t,
+              isOpen:openTaskId===t.id,
+              onToggle:()=>setOpenTaskId(v=>v===t.id?null:t.id),
+              onDelete:deleteTask,onSave})))
+        )
+      )
+    ),
+
+    // Вкладка Библиотека
+    tab==='library'&&e(LibraryTab,{standards,onReload:async()=>{await reloadStandards();}}),
+
+    // Модалка добавления
+    showAdd&&e('div',{style:{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',
+        alignItems:'center',justifyContent:'center',padding:'5vh 16px',zIndex:1000,overflowY:'auto'}},
+      e(AddTasksDialog,{standards,todayTasks:tasks,date,onAdd:async(s)=>{await addTask(s);},onClose:()=>setShowAdd(false)})
+    )
+  );
+}
+
+// Журнал для продуктовой команды
+function ProductJournalPage() {
+  const [from,setFrom]=useState(()=>{ const d=new Date(); d.setDate(d.getDate()-7); return d.toISOString().slice(0,10); });
+  const [to,setTo]=useState(todayISO);
+  const [company,setCompany]=useState('');
+  const [tasks,setTasks]=useState([]);
+  const [loading,setLoading]=useState(false);
+  const [expanded,setExpanded]=useState(null);
+  const [lightbox,setLightbox]=useState(null);
+
+  const load=async()=>{
+    setLoading(true);
+    const params=new URLSearchParams({from,to});
+    if(company) params.set('company',company);
+    const r=await fetch(`/api/quality/journal?${params}`);
+    const d=await r.json();
+    setTasks(d.tasks||[]);
+    setLoading(false);
+  };
+
+  useEffect(()=>{load();},[]);
+
+  const stdVal=(task,field)=>{
+    if(field==='Внешний вид') return task.appearance;
+    if(field==='Цвет') return task.color;
+    if(field==='Вкус и запах') return task.taste_smell;
+    if(field==='Консистенция') return task.consistency;
+    const ef=(task.extra_fields||[]).find(f=>(typeof f==='string'?f:f.name)===field);
+    return ef&&typeof ef==='object'?ef.description||null:null;
+  };
+
+  return e('div',{style:{padding:'16px',maxWidth:1100,margin:'0 auto'}},
+    lightbox&&e(Lightbox,{photos:lightbox.photos,startIndex:lightbox.index,onClose:()=>setLightbox(null)}),
+
+    e('h2',{className:'page-title'},'Журнал проверок'),
+
+    // Фильтры
+    e('div',{style:{display:'flex',gap:10,flexWrap:'wrap',marginBottom:20,alignItems:'center'}},
+      e('input',{type:'date',className:'filter-input',value:from,onChange:ev=>setFrom(ev.target.value)}),
+      e('span',{style:{color:'var(--muted)'}},'—'),
+      e('input',{type:'date',className:'filter-input',value:to,onChange:ev=>setTo(ev.target.value)}),
+      e('select',{className:'filter-input',value:company,onChange:ev=>setCompany(ev.target.value)},
+        e('option',{value:''},'Все'),e('option',{value:'EE'},'EE'),e('option',{value:'УД'},'УД')
+      ),
+      e('button',{onClick:load,
+        style:{padding:'8px 18px',borderRadius:10,border:'none',background:'var(--accent)',
+          color:'white',fontWeight:700,fontSize:13,cursor:'pointer'}},'Показать')
+    ),
+
+    loading?e('div',{className:'empty-state'},'Загрузка…'):
+    tasks.length===0?e('div',{className:'empty-state'},'Нет данных'):
+
+    // Таблица
+    e('div',{style:{background:'var(--surface)',borderRadius:14,border:'1.5px solid var(--border)',overflow:'hidden'}},
+      // Шапка таблицы
+      e('div',{style:{display:'grid',gridTemplateColumns:'140px 1fr 60px 60px 32px',gap:0,
+          padding:'10px 16px',background:'var(--bg-subtle)',borderBottom:'1.5px solid var(--border)',
+          fontSize:12,fontWeight:700,color:'var(--muted)',textTransform:'uppercase',letterSpacing:'0.04em'}},
+        e('div',null,'Дата'),
+        e('div',null,'Позиция'),
+        e('div',{style:{textAlign:'center'}},'Итог'),
+        e('div',{style:{textAlign:'center'}},'Фото'),
+        e('div',null,'')
+      ),
+
+      tasks.map((task,ti)=>{
+        const failCount=task.results.filter(r=>r.result==='fail').length;
+        const allOk=task.results.length>0&&failCount===0;
+        const isExp=expanded===task.id;
+        const refPhotos=task.ref_photos||[];
+        const factPhotos=task.photos||[];
+
+        return e('div',{key:task.id,style:{borderBottom:ti<tasks.length-1?'1px solid var(--border)':'none'}},
+          // Строка таблицы
+          e('div',{style:{display:'grid',gridTemplateColumns:'140px 1fr 60px 60px 32px',gap:0,
+              padding:'12px 16px',cursor:'pointer',alignItems:'center',
+              background:isExp?'var(--bg-subtle)':'transparent'},
+              onClick:()=>setExpanded(isExp?null:task.id)},
+            e('div',{style:{fontSize:13,color:'var(--muted)'}},formatDateRu(task.date)),
+            e('div',null,
+              e('div',{style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}},
+                e('span',{style:{fontWeight:600,fontSize:14}},task.name),
+                e('span',{style:{fontSize:11,padding:'2px 7px',borderRadius:8,
+                  background:task.company==='УД'?'#EEF2FF':'#FFF7ED',
+                  color:task.company==='УД'?'#4F46E5':'#C2410C',fontWeight:700}},task.company)
+              )
+            ),
+            e('div',{style:{textAlign:'center'}},
+              task.results.length===0
+                ?e('span',{style:{color:'var(--muted)',fontSize:12}},'—')
+                :failCount>0
+                  ?e('span',{className:'badge',style:{background:'#FEE2E2',color:'var(--danger)',fontSize:11}},`${failCount} ✗`)
+                  :e('span',{className:'badge',style:{background:'var(--ok-bg)',color:'var(--ok)',fontSize:11}},'✓')
+            ),
+            e('div',{style:{textAlign:'center',fontSize:12,color:'var(--muted)'}},
+              (refPhotos.length+factPhotos.length)>0?`${refPhotos.length+factPhotos.length}`:'—'
+            ),
+            e('div',{style:{textAlign:'center',color:'var(--muted)',fontSize:14}},isExp?'▲':'▼')
+          ),
+
+          // Развёрнутые детали
+          isExp&&e('div',{style:{padding:'16px',borderTop:'1px solid var(--border)',
+              display:'flex',gap:24,alignItems:'flex-start',background:'#fafafa'}},
+
+            // Таблица критериев
+            e('div',{style:{flex:1,minWidth:0}},
+              e('div',{style:{fontWeight:700,fontSize:13,marginBottom:10,color:'var(--muted)',
+                  textTransform:'uppercase',letterSpacing:'0.04em'}},'Критерии проверки'),
+              e('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:14}},
+                e('thead',null,
+                  e('tr',{style:{background:'var(--bg-subtle)'}},
+                    e('th',{style:{padding:'8px 12px',textAlign:'left',fontWeight:700,fontSize:12,
+                        color:'var(--muted)',borderBottom:'1px solid var(--border)'}},'Критерий'),
+                    e('th',{style:{padding:'8px 12px',textAlign:'left',fontWeight:700,fontSize:12,
+                        color:'var(--muted)',borderBottom:'1px solid var(--border)'}},'Эталон'),
+                    e('th',{style:{padding:'8px 12px',textAlign:'center',fontWeight:700,fontSize:12,
+                        color:'var(--muted)',borderBottom:'1px solid var(--border)'}},'Оценка'),
+                    e('th',{style:{padding:'8px 12px',textAlign:'left',fontWeight:700,fontSize:12,
+                        color:'var(--muted)',borderBottom:'1px solid var(--border)'}},'Комментарий')
+                  )
+                ),
+                e('tbody',null,
+                  task.results.map((r,ri)=>e('tr',{key:r.field_name,
+                    style:{background:r.result==='fail'?'#FEF2F2':r.result==='ok'?'#F0FDF4':'transparent',
+                      borderBottom:'1px solid var(--border)'}},
+                    e('td',{style:{padding:'9px 12px',fontWeight:600}},r.field_name),
+                    e('td',{style:{padding:'9px 12px',color:'var(--muted)',fontSize:13,maxWidth:200}},
+                      stdVal(task,r.field_name)||'—'),
+                    e('td',{style:{padding:'9px 12px',textAlign:'center',fontWeight:700,
+                        color:r.result==='ok'?'var(--ok)':r.result==='fail'?'var(--danger)':'var(--muted)'}},
+                      r.result==='ok'?'✓ Соотв.':r.result==='fail'?'✗ Не соотв.':'—'),
+                    e('td',{style:{padding:'9px 12px',color:'var(--muted)',fontSize:13}},
+                      r.comment||'—')
+                  ))
+                )
+              )
+            ),
+
+            // Фото — эталон + факт
+            (refPhotos.length>0||factPhotos.length>0)&&e('div',{style:{flexShrink:0,display:'flex',gap:20}},
+              refPhotos.length>0&&e('div',null,
+                e('div',{style:{fontWeight:700,fontSize:12,color:'var(--muted)',textTransform:'uppercase',
+                    letterSpacing:'0.04em',marginBottom:8}},'Эталон'),
+                e(PhotoCarousel,{photos:refPhotos,size:160,
+                  onOpen:i=>setLightbox({photos:refPhotos,index:i})})
+              ),
+              factPhotos.length>0&&e('div',null,
+                e('div',{style:{fontWeight:700,fontSize:12,color:'var(--muted)',textTransform:'uppercase',
+                    letterSpacing:'0.04em',marginBottom:8}},'Фактически'),
+                e('div',{style:{display:'flex',flexWrap:'wrap',gap:8,maxWidth:200}},
+                  factPhotos.map((p,i)=>e('img',{key:p.filename,src:`/uploads/${p.filename}`,
+                    onClick:()=>setLightbox({photos:factPhotos,index:i}),
+                    style:{width:90,height:90,objectFit:'cover',borderRadius:8,cursor:'zoom-in',
+                      border:'1.5px solid var(--border)'}}))
+                )
+              )
+            )
+          )
+        );
+      })
+    )
+  );
+}
+
+// ============================================================
 // APP ROOT
 // ============================================================
 function App() {
   // Tablet lock: ?shop=KEY pins this device to one workshop
   const shopParam=useMemo(()=>new URLSearchParams(location.search).get('shop'),[]);
-  // Manager role: ?role=manager unlocks manager panel
-  const isManager=useMemo(()=>new URLSearchParams(location.search).get('role')==='manager',[]);
+  const roleParam=useMemo(()=>new URLSearchParams(location.search).get('role'),[]);
+  const isManager=roleParam==='manager';
+  const isTechnologist=roleParam==='technologist';
+  const isProduct=roleParam==='product';
 
   const [loading,setLoading]=useState(true);
   const [today]=useState(todayKey);
@@ -8776,6 +9701,22 @@ function App() {
     );
     if(found) setSelectedShop(found);
   },[shopParam,shopGroups,selectedShop]);
+
+  // Роли технолога и продуктовой команды — рендерим сразу, без загрузки смены
+  if(isTechnologist) return e('div',null,
+    e('div',{className:'topnav'},
+      e('div',null,e('span',{className:'topnav-brand'},'🔬 Технолог')),
+      e('div',{className:'topnav-right'},e('div',{className:'date-pill'},formatDateRu(today)))
+    ),
+    e(TechnologistPage,null)
+  );
+  if(isProduct) return e('div',null,
+    e('div',{className:'topnav'},
+      e('div',null,e('span',{className:'topnav-brand'},'📋 Продуктовая команда')),
+      e('div',{className:'topnav-right'},e('div',{className:'date-pill'},formatDateRu(today)))
+    ),
+    e(ProductJournalPage,null)
+  );
 
   if(loading) return e('div',{className:'empty-state',style:{marginTop:60}},'Загрузка…');
 

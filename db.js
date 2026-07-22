@@ -189,6 +189,69 @@ async function initDb(pool) {
     await q('INSERT INTO shops(name, sort_order) VALUES($1, $2) ON CONFLICT(name) DO NOTHING', [shops[i], i]);
   }
 
+  // Модуль контроля качества
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS quality_standards (
+      id           SERIAL PRIMARY KEY,
+      item_id      INTEGER,
+      name         TEXT NOT NULL,
+      company      TEXT NOT NULL DEFAULT 'EE',
+      appearance   TEXT,
+      color        TEXT,
+      taste_smell  TEXT,
+      consistency  TEXT,
+      always_check INTEGER NOT NULL DEFAULT 0,
+      created_at   TEXT NOT NULL DEFAULT (NOW()::text)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS quality_check_fields (
+      id                SERIAL PRIMARY KEY,
+      standard_id       INTEGER NOT NULL REFERENCES quality_standards(id) ON DELETE CASCADE,
+      field_name        TEXT NOT NULL,
+      field_description TEXT,
+      sort_order        INTEGER NOT NULL DEFAULT 0
+    )
+  `);
+  await q('ALTER TABLE quality_check_fields ADD COLUMN IF NOT EXISTS field_description TEXT');
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS quality_tasks (
+      id          SERIAL PRIMARY KEY,
+      date        TEXT NOT NULL,
+      standard_id INTEGER NOT NULL REFERENCES quality_standards(id),
+      status      TEXT NOT NULL DEFAULT 'pending',
+      created_at  TEXT NOT NULL DEFAULT (NOW()::text)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS quality_task_results (
+      id          SERIAL PRIMARY KEY,
+      task_id     INTEGER NOT NULL REFERENCES quality_tasks(id) ON DELETE CASCADE,
+      field_name  TEXT NOT NULL,
+      result      TEXT,
+      comment     TEXT,
+      action      TEXT
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS quality_photos (
+      id          SERIAL PRIMARY KEY,
+      task_id     INTEGER NOT NULL REFERENCES quality_tasks(id) ON DELETE CASCADE,
+      filename    TEXT NOT NULL,
+      uploaded_at TEXT NOT NULL DEFAULT (NOW()::text)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS quality_standard_photos (
+      id          SERIAL PRIMARY KEY,
+      standard_id INTEGER NOT NULL REFERENCES quality_standards(id) ON DELETE CASCADE,
+      filename    TEXT NOT NULL,
+      uploaded_at TEXT NOT NULL DEFAULT (NOW()::text)
+    )
+  `);
+  await q('CREATE INDEX IF NOT EXISTS idx_qt_date ON quality_tasks(date)');
+  await q('CREATE INDEX IF NOT EXISTS idx_qt_standard ON quality_tasks(standard_id)');
+
   console.log(`DB ready (${process.env.DATABASE_URL ? 'PostgreSQL' : 'SQLite'})`);
 }
 
