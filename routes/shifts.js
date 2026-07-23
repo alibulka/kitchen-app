@@ -102,13 +102,14 @@ async function saveShift(date, shift) {
       ON CONFLICT(date) DO UPDATE SET techcard_id = $2, ud_techcard_id = $3, updated_at = NOW()::text
     `, [date, techcardId, udTechcardId]);
 
-    // Статусы выполнения
-    await client.query('DELETE FROM shift_item_status WHERE shift_date = $1', [date]);
+    // Статусы выполнения — UPSERT чтобы не затирать отметки других устройств
     for (const [compKey, done] of Object.entries(shift.doneFlags || {})) {
       const { stationKey, itemId } = splitCompKey(compKey);
       const doneAt = (shift.doneTimes || {})[compKey] || null;
       await client.query(
-        'INSERT INTO shift_item_status(shift_date, station_key, item_id, done, done_at) VALUES($1,$2,$3,$4,$5)',
+        `INSERT INTO shift_item_status(shift_date, station_key, item_id, done, done_at)
+         VALUES($1,$2,$3,$4,$5)
+         ON CONFLICT(shift_date, station_key, item_id) DO UPDATE SET done=$4, done_at=$5`,
         [date, stationKey, itemId, done ? 1 : 0, doneAt]
       );
     }
@@ -122,32 +123,40 @@ async function saveShift(date, shift) {
       );
     }
 
-    // Сотрудники
-    await client.query('DELETE FROM shift_item_employees WHERE shift_date = $1', [date]);
+    // Сотрудники — обновляем только по конкретным позициям (не удаляем всю смену)
     for (const [compKey, empIds] of Object.entries(shift.doneBy || {})) {
-      if (!Array.isArray(empIds) || empIds.length === 0) continue;
       const { stationKey, itemId } = splitCompKey(compKey);
       // Гарантируем наличие строки статуса
       await client.query(
-        'INSERT INTO shift_item_status(shift_date, station_key, item_id, done) VALUES($1,$2,$3,$4) ON CONFLICT(shift_date, station_key, item_id) DO NOTHING',
+        `INSERT INTO shift_item_status(shift_date, station_key, item_id, done)
+         VALUES($1,$2,$3,$4) ON CONFLICT(shift_date, station_key, item_id) DO NOTHING`,
         [date, stationKey, itemId, (shift.doneFlags || {})[compKey] ? 1 : 0]
       );
-      for (const empId of empIds) {
-        await client.query(
-          'INSERT INTO shift_item_employees(shift_date, station_key, item_id, employee_id) VALUES($1,$2,$3,$4) ON CONFLICT(shift_date, station_key, item_id, employee_id) DO NOTHING',
-          [date, stationKey, itemId, empId]
-        );
+      // Заменяем сотрудников только для этой позиции
+      await client.query(
+        'DELETE FROM shift_item_employees WHERE shift_date=$1 AND station_key=$2 AND item_id=$3',
+        [date, stationKey, itemId]
+      );
+      if (Array.isArray(empIds) && empIds.length > 0) {
+        for (const empId of empIds) {
+          await client.query(
+            `INSERT INTO shift_item_employees(shift_date, station_key, item_id, employee_id)
+             VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+            [date, stationKey, itemId, empId]
+          );
+        }
       }
     }
 
-    // Фактические количества
-    await client.query('DELETE FROM shift_facts_n WHERE shift_date = $1', [date]);
+    // Фактические количества — UPSERT по позиции
     for (const [key, value] of Object.entries(shift.facts || {})) {
       const m = key.match(RE_FACT_KEY);
       if (!m) continue;
       const [, stationKey, itemId, lineIdx] = m;
       await client.query(
-        'INSERT INTO shift_facts_n(shift_date, station_key, item_id, line_idx, value) VALUES($1,$2,$3,$4,$5)',
+        `INSERT INTO shift_facts_n(shift_date, station_key, item_id, line_idx, value)
+         VALUES($1,$2,$3,$4,$5)
+         ON CONFLICT(shift_date, station_key, item_id, line_idx) DO UPDATE SET value=$5`,
         [date, stationKey, itemId, Number(lineIdx), value == null ? null : Number(value)]
       );
     }
