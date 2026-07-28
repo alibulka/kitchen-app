@@ -129,8 +129,15 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS quality_tasks (
   date        TEXT NOT NULL,
   standard_id INTEGER NOT NULL REFERENCES quality_standards(id),
   status      TEXT NOT NULL DEFAULT 'pending',
+  assigned_to TEXT,
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 )`);
+{
+  const cols=sqlite.prepare('PRAGMA table_info(quality_tasks)').all();
+  if(cols.length>0&&!cols.some(c=>c.name==='assigned_to')){
+    sqlite.exec('ALTER TABLE quality_tasks ADD COLUMN assigned_to TEXT');
+  }
+}
 sqlite.exec(`CREATE TABLE IF NOT EXISTS quality_task_results (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id     INTEGER NOT NULL REFERENCES quality_tasks(id) ON DELETE CASCADE,
@@ -151,6 +158,15 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS quality_standard_photos (
   filename    TEXT NOT NULL,
   uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
 )`);
+
+// Добавляем "Главный технолог" в shops если нет
+{
+  const shops=sqlite.prepare("SELECT name FROM shops WHERE name='Главный технолог'").all();
+  if(!shops.length){
+    const maxOrder=sqlite.prepare('SELECT MAX(sort_order) as m FROM shops').get();
+    sqlite.prepare('INSERT INTO shops(name,sort_order) VALUES(?,?)').run('Главный технолог',(maxOrder?.m||0)+1);
+  }
+}
 
 // ─── SQL: pg → SQLite ────────────────────────────────────────────────────────
 

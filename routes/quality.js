@@ -23,6 +23,24 @@ const storage = multer.diskStorage({
 const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
 const uploadLarge = multer({ storage, limits: { fileSize: 500 * 1024 * 1024 } });
 
+// ─── Поиск заготовок из БД ────────────────────────────────────────────────────
+
+router.get('/items', async (req, res) => {
+  try {
+    const q = (req.query.q || '').trim();
+    const { rows } = await pool.query(
+      `SELECT item_id, name FROM items
+       WHERE LOWER(name) LIKE LOWER($1)
+         AND item_id NOT IN (SELECT item_id FROM quality_standards WHERE item_id IS NOT NULL)
+       ORDER BY name`,
+      [`%${q}%`]
+    );
+    res.json({ items: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Эталоны ──────────────────────────────────────────────────────────────────
 
 router.get('/standards', async (req, res) => {
@@ -103,6 +121,21 @@ router.put('/standards/:id', async (req, res) => {
         );
       }
     }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/standards/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rows: photos } = await pool.query('SELECT filename FROM quality_standard_photos WHERE standard_id=$1', [id]);
+    for (const p of photos) {
+      const fp = path.join(UPLOADS_DIR, p.filename);
+      if (fs.existsSync(fp)) fs.unlinkSync(fp);
+    }
+    await pool.query('DELETE FROM quality_standards WHERE id=$1', [id]);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -361,12 +394,22 @@ router.get('/tasks', async (req, res) => {
 
 router.post('/tasks', async (req, res) => {
   try {
-    const { date, standard_id } = req.body;
+    const { date, standard_id, assigned_to } = req.body;
     const { rows: [row] } = await pool.query(
-      `INSERT INTO quality_tasks(date,standard_id) VALUES($1,$2) RETURNING id`,
-      [date, standard_id]
+      `INSERT INTO quality_tasks(date,standard_id,assigned_to) VALUES($1,$2,$3) RETURNING id`,
+      [date, standard_id, assigned_to || null]
     );
     res.json({ id: row.id, ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/tasks/:id/assign', async (req, res) => {
+  try {
+    const { assigned_to } = req.body;
+    await pool.query('UPDATE quality_tasks SET assigned_to=$1 WHERE id=$2', [assigned_to || null, req.params.id]);
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -469,7 +512,7 @@ router.get('/journal', async (req, res) => {
   try {
     const { from, to, company } = req.query;
     let sql = `
-      SELECT qt.id, qt.date, qt.status, qt.created_at,
+      SELECT qt.id, qt.date, qt.status, qt.created_at, qt.assigned_to,
              qs.name, qs.company, qs.item_id, qt.standard_id,
              qs.appearance, qs.color, qs.taste_smell, qs.consistency
       FROM quality_tasks qt

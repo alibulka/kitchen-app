@@ -7000,7 +7000,7 @@ async function loadShopsFromServer() {
     const { shops } = await r.json();
     return shops;
   } catch(e) {
-    return ['Горячий цех','Сухой цех','Рыбный цех','Молочный цех','Мясной цех','Соусный цех','Овощной цех','Готовая еда'];
+    return ['Горячий цех','Сухой цех','Рыбный цех','Молочный цех','Мясной цех','Соусный цех','Овощной цех','Готовая еда','Технолог'];
   }
 }
 async function loadShift(dateKey) {
@@ -7985,7 +7985,7 @@ function EmployeesTab({employees, onSave}) {
   const [list, setList]=useState(()=>[...employees]);
   const [newName, setNewName]=useState('');
   const [newShop, setNewShop]=useState('Горячий цех');
-  const [shops, setShops]=useState(['Горячий цех','Сухой цех','Рыбный цех','Молочный цех','Мясной цех','Соусный цех','Овощной цех','Готовая еда']);
+  const [shops, setShops]=useState(['Горячий цех','Сухой цех','Рыбный цех','Молочный цех','Мясной цех','Соусный цех','Овощной цех','Готовая еда','Технолог','Главный технолог']);
 
   useEffect(()=>{
     loadShopsFromServer().then(s=>{setShops(s);if(s.length>0)setNewShop(s[0]);});
@@ -8619,6 +8619,10 @@ function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesCh
         e(SvgClock,{size:16}),' Смены'),
       e('button',{className:'mgr-tab'+(tab==='upload'?' active':''),onClick:()=>switchTab('upload')},
         e(SvgUpload,{size:16}),' Техкарты'),
+      e('button',{className:'mgr-tab'+(tab==='technologist'?' active':''),onClick:()=>switchTab('technologist')},
+        '🔬 Технолог'),
+      e('button',{className:'mgr-tab'+(tab==='product'?' active':''),onClick:()=>switchTab('product')},
+        '📋 Журнал проверок ПК'),
     ),
     tab==='dashboard' && e(DashboardTab,{dateKey,shift,allEmployees,archiveIndex,activeTcEE,activeTcUD,globalStationConfig,shopGroups}),
     tab==='kitchen' && (
@@ -8635,7 +8639,9 @@ function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesCh
     ),
     tab==='employees' && e(EmployeesTab,{employees:allEmployees,onSave:onEmployeesChange}),
     tab==='shifts' && e(ShiftsTab,{archiveIndex,globalStationConfig,onStationConfigChange,shopGroups}),
-    tab==='upload' && e(TechcardsTab,{shift,allTechcards,activeTcEE,activeTcUD,onApplyTechcard,onDeactivate,onRefreshTechcards})
+    tab==='upload' && e(TechcardsTab,{shift,allTechcards,activeTcEE,activeTcUD,onApplyTechcard,onDeactivate,onRefreshTechcards}),
+    tab==='technologist' && e(TechnologistPage,null),
+    tab==='product' && e(ProductJournalPage,null)
   );
 }
 
@@ -8852,7 +8858,7 @@ function QualityChecklist({task, onSave, onClose}) {
 }
 
 // Карточка задания
-function QualityTaskCard({task, isOpen, onToggle, onDelete, onSave}) {
+function QualityTaskCard({task, isOpen, onToggle, onDelete, onSave, technologists, onAssign}) {
   const [lightbox,setLightbox]=useState(null);
   const doneCount=(task.results||[]).filter(r=>r.result).length;
   const totalFields=BASE_FIELDS.length+(task.extra_fields||[]).length;
@@ -8877,11 +8883,23 @@ function QualityTaskCard({task, isOpen, onToggle, onDelete, onSave}) {
             background:task.company==='УД'?'#EEF2FF':'#FFF7ED',
             color:task.company==='УД'?'#4F46E5':'#C2410C',fontWeight:700}},task.company)
         ),
-        e('div',{style:{display:'flex',alignItems:'center',gap:10}},
+        e('div',{style:{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}},
           e('span',{className:'badge',style:{background:statusBg(task.status),color:statusColor(task.status)}},
             statusLabel(task.status)),
           task.status!=='done'&&e('span',{style:{fontSize:12,color:'var(--muted)'}},
-            `${doneCount}/${totalFields} полей`)
+            `${doneCount}/${totalFields} полей`),
+          technologists&&technologists.length>0&&e('select',{
+            value:task.assigned_to||'',
+            onClick:ev=>ev.stopPropagation(),
+            onChange:ev=>{ev.stopPropagation();onAssign&&onAssign(task.id,ev.target.value||null);},
+            style:{fontSize:12,padding:'2px 6px',borderRadius:6,border:'1px solid var(--border)',
+              background:'var(--bg-subtle)',color:'var(--text)',cursor:'pointer'}},
+            e('option',{value:''},'— не назначен'),
+            technologists.map(emp=>e('option',{key:emp.id,value:emp.id},
+              emp.shop==='Главный технолог'?`★ ${emp.name}`:emp.name))
+          ),
+          !technologists&&task.assigned_to&&e('span',{style:{fontSize:12,color:'var(--muted)'}},
+            `👤 ${task.assigned_to}`)
         )
       ),
 
@@ -8982,12 +9000,153 @@ function AddTasksDialog({standards, todayTasks, date, onAdd, onClose}) {
 }
 
 // Вкладка «Библиотека эталонов»
+function CreateStandardFromItemDialog({onClose, onCreated}) {
+  const [query,setQuery]=useState('');
+  const [allItems,setAllItems]=useState([]);
+  const [loadingItems,setLoadingItems]=useState(true);
+  const [selected,setSelected]=useState(null);
+  const [company,setCompany]=useState('EE');
+  const [appearance,setAppearance]=useState('');
+  const [color,setColor]=useState('');
+  const [tasteSmell,setTasteSmell]=useState('');
+  const [consistency,setConsistency]=useState('');
+  const [photos,setPhotos]=useState([]); // [{file, url}]
+  const [saving,setSaving]=useState(false);
+  const [error,setError]=useState('');
+  const photoRef=useRef();
+
+  const addPhotos=(files)=>{
+    const entries=Array.from(files).map(f=>({file:f,url:URL.createObjectURL(f)}));
+    setPhotos(ps=>[...ps,...entries]);
+  };
+  const removePhoto=(i)=>{
+    setPhotos(ps=>{URL.revokeObjectURL(ps[i].url);return ps.filter((_,j)=>j!==i);});
+  };
+
+  useEffect(()=>{
+    (async()=>{
+      const r=await fetch('/api/quality/items?q=');
+      const d=await r.json();
+      setAllItems(d.items||[]);
+      setLoadingItems(false);
+    })();
+  },[]);
+
+  const filtered=query.trim()
+    ? allItems.filter(it=>it.name.toLowerCase().includes(query.toLowerCase())||String(it.item_id).includes(query))
+    : allItems;
+
+  const save=async()=>{
+    if(!selected){setError('Выберите заготовку');return;}
+    setSaving(true); setError('');
+    try {
+      const r=await fetch('/api/quality/standards',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({item_id:selected.item_id,name:selected.name,company,
+          appearance:appearance||null,color:color||null,taste_smell:tasteSmell||null,consistency:consistency||null})});
+      const d=await r.json();
+      if(d.error) throw new Error(d.error);
+      if(photos.length>0){
+        const fd=new FormData();
+        for(const p of photos) fd.append('photos',p.file);
+        await fetch(`/api/quality/standards/${d.id}/photos`,{method:'POST',body:fd});
+      }
+      onCreated();
+      onClose();
+    } catch(e){setError(e.message);}
+    setSaving(false);
+  };
+
+  const inputStyle={width:'100%',padding:'8px 12px',borderRadius:8,border:'1.5px solid var(--border)',
+    background:'var(--surface)',color:'var(--text)',fontSize:14,boxSizing:'border-box'};
+
+  return e('div',{style:{background:'var(--surface)',borderRadius:16,padding:24,width:'100%',maxWidth:560,
+      maxHeight:'90vh',display:'flex',flexDirection:'column',boxSizing:'border-box'}},
+    e('div',{style:{fontWeight:700,fontSize:16,marginBottom:16}},'Создать эталон из заготовки'),
+
+    !selected
+    ? e('div',{style:{display:'flex',flexDirection:'column',flex:1,minHeight:0}},
+        e('input',{type:'text',placeholder:'Поиск по названию или ID…',value:query,
+          onChange:ev=>setQuery(ev.target.value),autoFocus:true,
+          style:{...inputStyle,marginBottom:10,flexShrink:0}}),
+        e('div',{style:{fontSize:12,color:'var(--muted)',marginBottom:8,flexShrink:0}},
+          loadingItems?'Загрузка…':`${filtered.length} заготовок`),
+        e('div',{style:{flex:1,overflowY:'auto',border:'1.5px solid var(--border)',borderRadius:10,minHeight:0}},
+          loadingItems
+          ? e('div',{style:{padding:16,color:'var(--muted)',fontSize:13}},'Загрузка…')
+          : filtered.length===0
+            ? e('div',{style:{padding:16,color:'var(--muted)',fontSize:13}},'Ничего не найдено')
+            : filtered.map((it,i)=>e('div',{key:it.item_id,
+                onClick:()=>setSelected(it),
+                style:{padding:'9px 14px',cursor:'pointer',
+                  borderBottom:i<filtered.length-1?'1px solid var(--border)':'none',
+                  fontSize:14,display:'flex',gap:10,alignItems:'center'}},
+                e('span',{style:{color:'var(--muted)',fontSize:12,minWidth:40,flexShrink:0}},it.item_id),
+                e('span',null,it.name)
+              ))
+        ),
+        e('button',{onClick:onClose,
+          style:{marginTop:12,padding:'8px 0',borderRadius:10,border:'1.5px solid var(--border)',
+            background:'none',color:'var(--text)',fontSize:14,cursor:'pointer',flexShrink:0}},'Отмена')
+      )
+    : e('div',{style:{display:'flex',flexDirection:'column',gap:10}},
+        e('div',{style:{background:'var(--bg-subtle)',borderRadius:10,padding:'10px 14px',
+            display:'flex',gap:10,alignItems:'center',justifyContent:'space-between'}},
+          e('div',null,
+            e('span',{style:{color:'var(--muted)',fontSize:12,marginRight:8}},selected.item_id),
+            e('span',{style:{fontWeight:600}},selected.name)
+          ),
+          e('button',{onClick:()=>setSelected(null),
+            style:{background:'none',border:'none',color:'var(--muted)',cursor:'pointer',fontSize:13}},'✕ изменить')
+        ),
+        e('select',{value:company,onChange:ev=>setCompany(ev.target.value),style:inputStyle},
+          e('option',{value:'EE'},'EE'),e('option',{value:'УД'},'УД')),
+        e('textarea',{placeholder:'Внешний вид',value:appearance,onChange:ev=>setAppearance(ev.target.value),
+          rows:2,style:{...inputStyle,resize:'vertical'}}),
+        e('textarea',{placeholder:'Цвет',value:color,onChange:ev=>setColor(ev.target.value),
+          rows:2,style:{...inputStyle,resize:'vertical'}}),
+        e('textarea',{placeholder:'Вкус и запах',value:tasteSmell,onChange:ev=>setTasteSmell(ev.target.value),
+          rows:2,style:{...inputStyle,resize:'vertical'}}),
+        e('textarea',{placeholder:'Консистенция',value:consistency,onChange:ev=>setConsistency(ev.target.value),
+          rows:2,style:{...inputStyle,resize:'vertical'}}),
+        e('div',null,
+          e('div',{style:{fontSize:13,color:'var(--muted)',marginBottom:6}},'Эталонные фото'),
+          photos.length>0&&e('div',{style:{display:'flex',gap:6,flexWrap:'wrap',marginBottom:6}},
+            photos.map((p,i)=>e('div',{key:i,style:{position:'relative'}},
+              e('img',{src:p.url,style:{width:64,height:64,objectFit:'cover',borderRadius:8,border:'1.5px solid var(--border)'}}),
+              e('button',{onClick:()=>removePhoto(i),
+                style:{position:'absolute',top:-6,right:-6,width:18,height:18,borderRadius:'50%',
+                  background:'var(--danger)',border:'none',color:'white',fontSize:11,cursor:'pointer',
+                  display:'flex',alignItems:'center',justifyContent:'center',lineHeight:1}},'×')
+            ))
+          ),
+          e('button',{onClick:()=>photoRef.current&&photoRef.current.click(),
+            style:{padding:'6px 14px',borderRadius:8,border:'1.5px dashed var(--border)',
+              background:'transparent',color:'var(--muted)',fontSize:13,cursor:'pointer'}},
+            '+ Добавить фото'),
+          e('input',{type:'file',ref:photoRef,accept:'image/*',multiple:true,style:{display:'none'},
+            onChange:ev=>{addPhotos(ev.target.files);ev.target.value='';}})
+        ),
+        error&&e('div',{style:{color:'var(--danger)',fontSize:13}},error),
+        e('div',{style:{display:'flex',gap:10,marginTop:4}},
+          e('button',{onClick:save,disabled:saving,
+            style:{flex:1,padding:'10px 0',borderRadius:10,border:'none',background:'var(--accent)',
+              color:'white',fontWeight:700,fontSize:14,cursor:'pointer'}},
+            saving?'Сохранение…':'Создать эталон'),
+          e('button',{onClick:onClose,
+            style:{padding:'10px 18px',borderRadius:10,border:'1.5px solid var(--border)',
+              background:'none',color:'var(--text)',fontSize:14,cursor:'pointer'}},'Отмена')
+        )
+      )
+  );
+}
+
 function LibraryTab({standards, onReload}) {
   const [search,setSearch]=useState('');
   const [company,setCompany]=useState('');
   const [importing,setImporting]=useState(false);
   const [importMsg,setImportMsg]=useState('');
   const [alwaysMap,setAlwaysMap]=useState({});
+  const [showCreateFromItem,setShowCreateFromItem]=useState(false);
   const fileRef=useRef();
 
   // Импорт Excel с эталонами — отправляем файл на сервер, там парсинг и фото
@@ -9050,29 +9209,49 @@ function LibraryTab({standards, onReload}) {
       )
     ),
 
-    // Поиск и фильтры
-    e('div',{style:{display:'flex',gap:10,marginBottom:14,flexWrap:'wrap'}},
-      e('input',{type:'text',className:'filter-input',placeholder:'Поиск по ID или названию…',
-        style:{flex:1,minWidth:180},value:search,onChange:ev=>setSearch(ev.target.value)}),
-      e('select',{className:'filter-input',value:company,onChange:ev=>setCompany(ev.target.value)},
-        e('option',{value:''},'Все'),e('option',{value:'EE'},'EE'),e('option',{value:'УД'},'УД'))
+    // Кнопка создания — обычный поток, не sticky
+    e('div',{style:{marginBottom:12}},
+      e('button',{onClick:()=>setShowCreateFromItem(true),
+        style:{padding:'8px 18px',borderRadius:10,border:'1.5px solid var(--accent)',background:'var(--accent)',
+          color:'white',fontWeight:700,fontSize:13,cursor:'pointer'}},
+        '+ Создать эталон из заготовки')
     ),
 
-    e('div',{style:{fontSize:13,color:'var(--muted)',marginBottom:10}},`${filtered.length} эталонов`),
+    // Поиск — sticky, прилипает под навбаром при прокрутке
+    e('div',{style:{position:'sticky',top:60,zIndex:10,
+        background:'var(--bg)',padding:'10px 0',marginBottom:4}},
+      e('div',{style:{display:'flex',gap:10,flexWrap:'wrap'}},
+        e('input',{type:'text',className:'filter-input',placeholder:'Поиск по ID или названию…',
+          style:{flex:1,minWidth:180},value:search,onChange:ev=>setSearch(ev.target.value)}),
+        e('select',{className:'filter-input',value:company,onChange:ev=>setCompany(ev.target.value)},
+          e('option',{value:''},'Все'),e('option',{value:'EE'},'EE'),e('option',{value:'УД'},'УД'))
+      ),
+      e('div',{style:{fontSize:13,color:'var(--muted)',marginTop:6}},`${filtered.length} эталонов`)
+    ),
 
     // Список
     e('div',{style:{display:'flex',flexDirection:'column',gap:8}},
       filtered.map(s=>e(StandardCard,{key:s.id,s,onToggleAlways:toggleAlways,onReload}))
+    ),
+
+    // Модалка создания эталона
+    showCreateFromItem&&e('div',{style:{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',
+        display:'flex',alignItems:'center',justifyContent:'center',padding:'5vh 16px',zIndex:1000}},
+      e(CreateStandardFromItemDialog,{
+        onClose:()=>setShowCreateFromItem(false),
+        onCreated:()=>{setShowCreateFromItem(false);onReload();}
+      })
     )
   );
 }
 
-function StandardCard({s, onToggleAlways, onReload}) {
+function StandardCard({s, onToggleAlways, onReload, onDelete}) {
   const [refPhotos,setRefPhotos]=useState(s.ref_photos||[]);
   const [uploading,setUploading]=useState(false);
   const [lightbox,setLightbox]=useState(null);
   const [editing,setEditing]=useState(false);
   const [saving,setSaving]=useState(false);
+  const [confirmDelete,setConfirmDelete]=useState(false);
   // Поля редактирования
   const [editAppearance,setEditAppearance]=useState(s.appearance||'');
   const [editColor,setEditColor]=useState(s.color||'');
@@ -9167,7 +9346,11 @@ function StandardCard({s, onToggleAlways, onReload}) {
         !editing&&e('button',{onClick:()=>setEditing(true),
           style:{padding:'4px 10px',borderRadius:8,fontSize:12,fontWeight:600,cursor:'pointer',
             border:'1.5px solid var(--border)',background:'transparent',color:'var(--muted)',whiteSpace:'nowrap'}},
-          '✏️ Изменить')
+          '✏️ Изменить'),
+        !editing&&e('button',{onClick:()=>setConfirmDelete(true),
+          style:{padding:'4px 10px',borderRadius:8,fontSize:12,fontWeight:600,cursor:'pointer',
+            border:'1.5px solid var(--danger)',background:'transparent',color:'var(--danger)',whiteSpace:'nowrap'}},
+          '✕')
       )
     ),
 
@@ -9252,8 +9435,8 @@ function StandardCard({s, onToggleAlways, onReload}) {
               })
             ),
 
-        // Кнопка добавить фото (всегда видна)
-        !editing&&e('div',{style:{marginTop:10}},
+        // Кнопка добавить фото — только в режиме редактирования
+        editing&&e('div',{style:{marginTop:10}},
           e('button',{onClick:()=>fileRef.current&&fileRef.current.click(),
             style:{padding:'4px 10px',borderRadius:7,border:'1.5px dashed var(--border)',background:'transparent',
               color:'var(--muted)',fontSize:12,cursor:'pointer'}},
@@ -9266,11 +9449,34 @@ function StandardCard({s, onToggleAlways, onReload}) {
       // Правая часть — карусель фото
       refPhotos.length>0&&e('div',{style:{flexShrink:0}},
         e(PhotoCarousel,{photos:refPhotos,size:180,onOpen:i=>setLightbox({photos:refPhotos,index:i})}),
-        e('div',{style:{display:'flex',flexWrap:'wrap',gap:4,marginTop:6,maxWidth:180}},
+        editing&&e('div',{style:{display:'flex',flexWrap:'wrap',gap:4,marginTop:6,maxWidth:180}},
           refPhotos.map((p,i)=>e('button',{key:p.filename,onClick:()=>deletePhoto(p.filename),
-            style:{padding:'2px 6px',fontSize:10,borderRadius:5,border:'1px solid var(--border)',
-              background:'transparent',color:'var(--muted)',cursor:'pointer'}},
+            style:{padding:'2px 6px',fontSize:10,borderRadius:5,border:'1px solid var(--danger)',
+              background:'transparent',color:'var(--danger)',cursor:'pointer'}},
             `✕ фото ${i+1}`))
+        )
+      )
+    ),
+
+    confirmDelete&&e('div',{style:{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',
+        display:'flex',alignItems:'center',justifyContent:'center',zIndex:1000,padding:'0 16px'}},
+      e('div',{style:{background:'var(--surface)',borderRadius:16,padding:28,maxWidth:400,width:'100%',boxShadow:'0 8px 32px rgba(0,0,0,0.18)'}},
+        e('div',{style:{fontWeight:700,fontSize:16,marginBottom:8}},'Удалить эталон?'),
+        e('div',{style:{fontSize:14,color:'var(--muted)',marginBottom:20}},
+          `«${s.name}» будет удалён без возможности восстановления.`),
+        e('div',{style:{display:'flex',gap:10}},
+          e('button',{onClick:async()=>{
+              await fetch(`/api/quality/standards/${s.id}`,{method:'DELETE'});
+              setConfirmDelete(false);
+              onReload();
+            },
+            style:{flex:1,padding:'10px 0',borderRadius:10,border:'none',background:'var(--danger)',
+              color:'white',fontWeight:700,fontSize:14,cursor:'pointer'}},
+            'Удалить'),
+          e('button',{onClick:()=>setConfirmDelete(false),
+            style:{flex:1,padding:'10px 0',borderRadius:10,border:'1.5px solid var(--border)',
+              background:'none',color:'var(--text)',fontSize:14,cursor:'pointer'}},
+            'Отмена')
         )
       )
     )
@@ -9283,40 +9489,74 @@ function TechnologistPage() {
   const [date,setDate]=useState(todayISO);
   const [tasks,setTasks]=useState([]);
   const [standards,setStandards]=useState([]);
+  const [technologists,setTechnologists]=useState([]);
+  const technologistsRef=React.useRef([]);
+  const [shiftItemIds,setShiftItemIds]=useState(null);
   const [loading,setLoading]=useState(true);
   const [openTaskId,setOpenTaskId]=useState(null);
   const [showAdd,setShowAdd]=useState(false);
+  const [showScrollTop,setShowScrollTop]=useState(false);
+  useEffect(()=>{
+    const onScroll=()=>setShowScrollTop(window.scrollY>300);
+    window.addEventListener('scroll',onScroll);
+    return ()=>window.removeEventListener('scroll',onScroll);
+  },[]);
 
   const loadData=async(d)=>{
     setLoading(true);
-    const [tr,sr]=await Promise.all([
+    const [tr,sr,shiftR,empR]=await Promise.all([
       fetch(`/api/quality/tasks?date=${d}`).then(r=>r.json()),
       fetch('/api/quality/standards').then(r=>r.json()),
+      fetch(`/api/shifts/${d}`).then(r=>r.json()).catch(()=>({shift:null})),
+      fetch('/api/employees').then(r=>r.json()).catch(()=>({employees:[]})),
     ]);
     setTasks(tr.tasks||[]);
     setStandards(sr.standards||[]);
+    const techs=(empR.employees||[]).filter(e=>e.shop==='Технолог'||e.shop==='Главный технолог');
+    setTechnologists(techs);
+    technologistsRef.current=techs;
+    // Собираем item_id из смены (из ключей doneFlags вида "station-itemId")
+    const shift=shiftR.shift;
+    if(shift){
+      const ids=new Set();
+      for(const key of Object.keys(shift.doneFlags||{})){
+        const parts=key.split('-');
+        if(parts.length>=2) ids.add(Number(parts[parts.length-1]));
+      }
+      // Также из itemPackLines
+      for(const itemId of Object.keys(shift.itemPackLines||{})) ids.add(Number(itemId));
+      setShiftItemIds(ids);
+    } else {
+      setShiftItemIds(new Set());
+    }
     setLoading(false);
   };
 
   useEffect(()=>{loadData(date);},[date]);
 
-  // Авто-создание заданий для "проверять всегда"
+  // Авто-создание заданий для "проверять всегда" — только если позиция есть в сегодняшней смене
   useEffect(()=>{
-    if(!standards.length) return;
-    const alwaysCheck=standards.filter(s=>s.always_check&&!(tasks.some(t=>t.standard_id===s.id)));
+    if(!standards.length||shiftItemIds===null) return;
+    const alwaysCheck=standards.filter(s=>
+      s.always_check&&
+      !(tasks.some(t=>t.standard_id===s.id))&&
+      s.item_id&&shiftItemIds.has(Number(s.item_id))
+    );
     if(!alwaysCheck.length) return;
+    const leadTech=(technologistsRef.current.find(e=>e.shop==='Главный технолог')||null);
     (async()=>{
       for(const s of alwaysCheck){
         await fetch('/api/quality/tasks',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({date,standard_id:s.id})});
+          body:JSON.stringify({date,standard_id:s.id,assigned_to:leadTech?.id||null})});
       }
       await loadData(date);
     })();
   },[standards,date]);
 
   const addTask=async(standard)=>{
+    const leadTech=(technologistsRef.current.find(e=>e.shop==='Главный технолог')||null);
     await fetch('/api/quality/tasks',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({date,standard_id:standard.id})});
+      body:JSON.stringify({date,standard_id:standard.id,assigned_to:leadTech?.id||null})});
     await loadData(date);
   };
 
@@ -9338,7 +9578,9 @@ function TechnologistPage() {
     setStandards(sr.standards||[]);
   };
 
-  return e('div',{style:{padding:'16px',maxWidth:960,margin:'0 auto'}},
+  return e(React.Fragment,null,
+
+    e('div',{style:{padding:'16px',maxWidth:960,margin:'0 auto'}},
     // Табы
     e('div',{className:'mgr-tabs',style:{marginBottom:20}},
       e('button',{className:'mgr-tab'+(tab==='tasks'?' active':''),onClick:()=>setTab('tasks')},'📋 Задания'),
@@ -9370,7 +9612,12 @@ function TechnologistPage() {
                 pending.map(t=>e(QualityTaskCard,{key:t.id,task:t,
                   isOpen:openTaskId===t.id,
                   onToggle:()=>setOpenTaskId(v=>v===t.id?null:t.id),
-                  onDelete:deleteTask,onSave})))
+                  onDelete:deleteTask,onSave,
+                  technologists,onAssign:async(taskId,empId)=>{
+                    await fetch(`/api/quality/tasks/${taskId}/assign`,{method:'PATCH',
+                      headers:{'Content-Type':'application/json'},body:JSON.stringify({assigned_to:empId||null})});
+                    await loadData(date);
+                  }})))
         ),
         done.length>0&&e('div',null,
           e('div',{style:{fontWeight:700,fontSize:16,marginBottom:10}},`Выполнено (${done.length})`),
@@ -9378,7 +9625,11 @@ function TechnologistPage() {
             done.map(t=>e(QualityTaskCard,{key:t.id,task:t,
               isOpen:openTaskId===t.id,
               onToggle:()=>setOpenTaskId(v=>v===t.id?null:t.id),
-              onDelete:deleteTask,onSave})))
+              onDelete:deleteTask,onSave,technologists,onAssign:async(taskId,empId)=>{
+                await fetch(`/api/quality/tasks/${taskId}/assign`,{method:'PATCH',
+                  headers:{'Content-Type':'application/json'},body:JSON.stringify({assigned_to:empId||null})});
+                await loadData(date);
+              }})))
         )
       )
     ),
@@ -9391,6 +9642,12 @@ function TechnologistPage() {
         alignItems:'center',justifyContent:'center',padding:'5vh 16px',zIndex:1000,overflowY:'auto'}},
       e(AddTasksDialog,{standards,todayTasks:tasks,date,onAdd:async(s)=>{await addTask(s);},onClose:()=>setShowAdd(false)})
     )
+  ), // конец внутреннего div с padding
+
+  showScrollTop&&e('button',{
+    className:'scroll-top-btn',
+    onClick:()=>window.scrollTo({top:0,behavior:'smooth'})
+  },'⌃')
   );
 }
 
@@ -9400,9 +9657,21 @@ function ProductJournalPage() {
   const [to,setTo]=useState(todayISO);
   const [company,setCompany]=useState('');
   const [tasks,setTasks]=useState([]);
+  const [employees,setEmployees]=useState([]);
   const [loading,setLoading]=useState(false);
   const [expanded,setExpanded]=useState(null);
   const [lightbox,setLightbox]=useState(null);
+
+  useEffect(()=>{
+    fetch('/api/employees').then(r=>r.json()).then(d=>setEmployees(d.employees||[])).catch(()=>{});
+  },[]);
+
+  const empName=(id)=>{
+    if(!id) return null;
+    const emp=employees.find(e=>e.id===id);
+    if(!emp) return id;
+    return emp.shop==='Главный технолог'?`★ ${emp.name}`:emp.name;
+  };
 
   const load=async()=>{
     setLoading(true);
@@ -9479,7 +9748,9 @@ function ProductJournalPage() {
                 e('span',{style:{fontSize:11,padding:'2px 7px',borderRadius:8,
                   background:task.company==='УД'?'#EEF2FF':'#FFF7ED',
                   color:task.company==='УД'?'#4F46E5':'#C2410C',fontWeight:700}},task.company)
-              )
+              ),
+              task.assigned_to&&e('div',{style:{fontSize:12,color:'var(--muted)',marginTop:2}},
+                `👤 ${empName(task.assigned_to)}`)
             ),
             e('div',{style:{textAlign:'center'}},
               task.results.length===0
