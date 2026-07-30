@@ -7661,34 +7661,6 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
   const todoItems=orderedItems.filter(it=>!shift.doneFlags[`${station.key}-${it.id}`]||sinkingIds.has(it.id));
   const doneItems=orderedItems.filter(it=>!!shift.doneFlags[`${station.key}-${it.id}`]&&!sinkingIds.has(it.id));
 
-  // Перенос из прошлой смены: только конкретные строки упаковки со skip_reason
-  // carriedLinesMap: itemId(string) → number[] (индексы pack lines из вчера)
-  const carriedLinesMap={};
-  (shift.prevSkips||[])
-    .filter(p=>p.stationKey===station.key && p.lineIdx!=null)
-    .forEach(p=>{
-      const id=String(p.itemId);
-      if(!carriedLinesMap[id]) carriedLinesMap[id]=[];
-      if(!carriedLinesMap[id].includes(p.lineIdx)) carriedLinesMap[id].push(p.lineIdx);
-    });
-  // item-level skips (без pack lines) — старый путь
-  const carriedItemLevelIds=new Set(
-    (shift.prevSkips||[]).filter(p=>p.stationKey===station.key&&p.lineIdx==null).map(p=>String(p.itemId))
-  );
-  // Items с хотя бы одной невыполненной перенесённой строкой
-  const carriedItems=todoItems.filter(it=>{
-    const id=String(it.id);
-    if(carriedItemLevelIds.has(id)) return true;
-    const idxs=carriedLinesMap[id];
-    if(!idxs) return false;
-    return idxs.some(li=>!shift.doneFlags[`${station.key}-${it.id}-pl-${li}`]);
-  });
-  // Regular todo: только items без перенесённых строк
-  const carriedItemIds=new Set([
-    ...Object.keys(carriedLinesMap),
-    ...[...carriedItemLevelIds],
-  ]);
-  const todoRegular=todoItems.filter(it=>!carriedItemIds.has(String(it.id)));
   const filterItems=list=>{
     if(!search.trim()) return list;
     const q=search.trim().toLowerCase();
@@ -7698,24 +7670,14 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
   };
   const visibleItems=filterItems(statusTab==='todo'?todoItems:doneItems);
 
-  const renderItem=(item,cleanSkip=false,onlyLinesForItem=null,carriedLineIndices=null)=>{
+  const renderItem=(item)=>{
     const sinking=sinkingIds.has(item.id);
     const settled=settledIds.has(item.id);
-    const ik=`${station.key}-${item.id}`;
-    const shiftForCard=cleanSkip&&Object.keys(shift.skipReasons||{}).some(k=>k.startsWith(ik))
-      ? {...shift,skipReasons:Object.fromEntries(Object.entries(shift.skipReasons||{}).filter(([k])=>!k.startsWith(ik))),
-                  skipTimes:Object.fromEntries(Object.entries(shift.skipTimes||{}).filter(([k])=>!k.startsWith(ik)))}
-      : shift;
     return e('div',{
       key:item.id,
       className:'item-wrapper'+(sinking?' sinking':'')+(settled?' settled':'')
-    }, e(ItemCard,{item,stationKey:station.key,shift:shiftForCard,onShiftChange,shopEmployees,
-                   onlyLineIndices:onlyLinesForItem,carriedLineIndices}));
+    }, e(ItemCard,{item,stationKey:station.key,shift,onShiftChange,shopEmployees}));
   };
-  const renderCarried=(item)=>{
-    return renderItem(item,true,null,carriedLinesMap[String(item.id)]||null);
-  };
-  const renderRegular=(item)=>renderItem(item,false,null,null);
 
   return e('div',{className:'kitchen-content'},
     e('div',{className:'kitchen-header'},
@@ -7754,27 +7716,11 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
     items.length===0
       ? e('div',{className:'empty-state'},'Нет заданий для этой станции')
       : e(React.Fragment,null,
-          // Блок переноса из прошлой смены (только во вкладке "надо выполнить")
-          statusTab==='todo' && carriedItems.length>0 && e('div',{style:{marginBottom:16}},
-            e('div',{style:{
-              display:'flex',alignItems:'center',gap:8,
-              padding:'8px 14px',marginBottom:8,borderRadius:10,
-              background:'#FEF3C7',border:'1.5px solid #F59E0B',
-            }},
-              e('span',{style:{fontSize:14,fontWeight:700,color:'#92400E'}},'⏮ Задание прошлой смены'),
-              e('span',{style:{fontSize:13,color:'#92400E',opacity:0.7}},`${carriedItems.length} позиций`)
-            ),
-            e('div',null,...filterItems(carriedItems).map(renderCarried))
-          ),
-          // Обычные незавершённые задания
           statusTab==='todo' && e('div',null,
-            filterItems(todoRegular).length===0 && carriedItems.length===0
+            filterItems(todoItems).length===0
               ? e('div',{className:'empty-state',style:{marginTop:40}},'Все заготовки выполнены ✓')
-              : filterItems(todoRegular).length===0
-                ? (search.trim()?e('div',{className:'empty-state',style:{marginTop:20}},'Ничего не найдено'):null)
-                : e('div',null,...filterItems(todoRegular).map(renderRegular))
+              : e('div',null,...filterItems(todoItems).map(renderItem))
           ),
-          // Выполненные
           statusTab==='done' && (filterItems(doneItems).length===0
             ? e('div',{className:'empty-state',style:{marginTop:40}},'Ещё ничего не выполнено')
             : e('div',null,...filterItems(doneItems).map(renderItem)))
@@ -7974,10 +7920,9 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
               }
               const skipReason=(s.skipReasons||{})[lk]||null;
               const skipAt=skipReason?(s.skipTimes||{})[lk]||null:null;
-              const isCarriedOver=(s.prevSkips||[]).some(p=>p.stationKey===station.key&&String(p.itemId)===String(item.id)&&(p.lineIdx==null||p.lineIdx===li));
               rows.push({date:dk,shop:shopName,station:station.name,name:item.name,
                 packName:l.packName||'',volume:l.volume||'',planQty:qty,factQty,pct:qty>0?Math.round(factQty/qty*100):0,
-                done:isDone,employee:empName,durationMin,minPerPack,doneAt,skipReason,skipAt,isCarriedOver});
+                done:isDone,employee:empName,durationMin,minPerPack,doneAt,skipReason,skipAt});
             });
           } else {
             const isDone=!!(s.doneFlags||{})[ik];
@@ -7998,10 +7943,9 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
             }
             const skipReason=(s.skipReasons||{})[ik]||null;
             const skipAt=skipReason?(s.skipTimes||{})[ik]||null:null;
-            const isCarriedOver=(s.prevSkips||[]).some(p=>p.stationKey===station.key&&String(p.itemId)===String(item.id)&&p.lineIdx==null);
             rows.push({date:dk,shop:shopName,station:station.name,name:item.name,
               packName:'',volume:'',planQty:qty,factQty,pct:qty>0?Math.round(factQty/qty*100):0,
-              done:isDone,employee:empName,durationMin,minPerPack,doneAt,skipReason,skipAt,isCarriedOver});
+              done:isDone,employee:empName,durationMin,minPerPack,doneAt,skipReason,skipAt});
           }
         });
       });
@@ -8023,12 +7967,6 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
     if(filterStatus==='todo') rows=rows.filter(r=>!r.done&&!r.skipReason);
     if(filterStatus==='delay') rows=rows.filter(r=>!!r.skipReason&&!r.done);
     if(filterEmployee) rows=rows.filter(r=>r.employee.includes(filterEmployee));
-    // Перенесённые невыполненные — всегда вверху
-    if(!sortCol) rows.sort((a,b)=>{
-      const aCarried=a.isCarriedOver&&!a.done?1:0;
-      const bCarried=b.isCarriedOver&&!b.done?1:0;
-      return bCarried-aCarried;
-    });
     if(sortCol){
       rows.sort((a,b)=>{
         let av=a[sortCol],bv=b[sortCol];
@@ -8192,26 +8130,18 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
           e('tbody',null,
             filtered.map((r,idx)=>{
               const bc=r.done?'badge-ok':'badge-danger';
-              const rowBg=r.isCarriedOver&&!r.done?'#FFFBEB':'';
-              const statusCell=r.isCarriedOver
-                ? (r.done
-                    ? e('span',{className:'badge badge-ok'},'✓ Готово')
-                    : e('div',null,
-                        e('span',{className:'badge',style:{background:'#FEF3C7',color:'#92400E',border:'1px solid #F59E0B'}},'⏮ Перенос'),
-                        r.skipReason&&e('div',{style:{fontSize:11,color:'#92400E',marginTop:2}},
-                          SKIP_LABELS[r.skipReason]+(r.skipAt?' · '+new Date(r.skipAt).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):''))))
-                : (r.skipReason&&!r.done
-                    ?e('div',null,
-                        e('span',{className:'badge',style:{background:'#FEF3C7',color:'#92400E',border:'1px solid #F59E0B'}},'⚠ Задержка'),
-                        e('div',{style:{fontSize:11,color:'#92400E',marginTop:2}},
-                          SKIP_LABELS[r.skipReason]+(r.skipAt?' · '+new Date(r.skipAt).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):''))
-                      )
-                    :e('span',{className:'badge '+bc},r.done?'✓ Готово':'Не готово'));
-              return e('tr',{key:idx,style:{background:rowBg}},
+              const statusCell=r.skipReason&&!r.done
+                ? e('div',null,
+                    e('span',{className:'badge',style:{background:'#FEF3C7',color:'#92400E',border:'1px solid #F59E0B'}},'⚠ Задержка'),
+                    e('div',{style:{fontSize:11,color:'#92400E',marginTop:2}},
+                      SKIP_LABELS[r.skipReason]+(r.skipAt?' · '+new Date(r.skipAt).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):''))
+                  )
+                : e('span',{className:'badge '+bc},r.done?'✓ Готово':'Не готово');
+              return e('tr',{key:idx},
                 periodMode!=='today'&&e('td',null,formatDateRu(r.date)),
                 e('td',null,r.shop),
                 e('td',null,r.station.replace(r.shop+' / ','')),
-                e('td',null,r.isCarriedOver&&!r.done?e('span',null,'⏮ ',r.name):r.name),
+                e('td',null,r.name),
                 e('td',null,r.volume||'—'),
                 e('td',null,r.packName||'—'),
                 e('td',{className:'num'},r.planQty||'—'),
@@ -8226,55 +8156,6 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
           )
         )
       ),
-      // Заготовки прошлой смены
-      (()=>{
-        const carriedRows=allRows.filter(r=>r.isCarriedOver);
-        if(!carriedRows.length) return null;
-        const carriedFiltered=carriedRows.filter(r=>{
-          if(filterStatus==='done') return r.done;
-          if(filterStatus==='pending') return !r.done;
-          if(filterStatus==='delay') return r.skipReason&&!r.done;
-          return true;
-        }).filter(r=>!filterShop||r.shop===filterShop);
-        if(!carriedFiltered.length) return null;
-        return e('div',{style:{marginTop:24}},
-          e('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:8}},
-            e('span',{style:{fontSize:14,fontWeight:700,color:'#92400E'}},'⏮ Заготовки прошлой смены'),
-            e('span',{className:'badge',style:{background:'#FEF3C7',color:'#92400E',border:'1px solid #F59E0B'}},carriedFiltered.length)
-          ),
-          e('div',{className:'table-wrap'},
-            e('table',{className:'data-table'},
-              e('thead',null,
-                e('tr',null,
-                  periodMode!=='today'&&e('th',null,'Дата'),
-                  e('th',null,'Цех'),e('th',null,'Станция'),e('th',null,'Позиция'),
-                  e('th',null,'Объём'),e('th',null,'Упаковка'),
-                  e('th',{className:'num'},'Кол-во'),e('th',null,'Статус'),
-                  e('th',{className:'num'},'Время'),e('th',{className:'num'},'Скорость'),e('th',null,'Сотрудник')
-                )
-              ),
-              e('tbody',null,
-                carriedFiltered.map((r,idx)=>{
-                  const bc=r.done?'badge-ok':'badge-danger';
-                  return e('tr',{key:idx,style:{background:'#FFFBEB'}},
-                    periodMode!=='today'&&e('td',null,formatDateRu(r.date)),
-                    e('td',null,r.shop),
-                    e('td',null,r.station.replace(r.shop+' / ','')),
-                    e('td',null,r.name),
-                    e('td',null,r.volume||'—'),
-                    e('td',null,r.packName||'—'),
-                    e('td',{className:'num'},r.planQty||'—'),
-                    e('td',null,e('span',{className:'badge '+bc},r.done?'✓ Готово':'Не готово')),
-                    e('td',{className:'num',style:{whiteSpace:'nowrap'}},r.durationMin!=null?r.durationMin+' мин':'—'),
-                    e('td',{className:'num'},r.minPerPack!=null?r.minPerPack+' уп/мин':'—'),
-                    e('td',null,r.employee)
-                  );
-                })
-              )
-            )
-          )
-        );
-      })()
     )
   );
 }
