@@ -9395,23 +9395,10 @@ function LibraryTab({standards, onReload}) {
     if(!file) return;
     setImporting(true); setImportMsg('');
     try {
-      const CHUNK=20*1024*1024; // 20 МБ — безопасно ниже лимита запроса в продакшене
-      const uploadId=Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);
-      const total=Math.ceil(file.size/CHUNK);
-      for(let i=0;i<total;i++){
-        const fd=new FormData();
-        fd.append('uploadId',uploadId);
-        fd.append('index',String(i));
-        fd.append('chunk',file.slice(i*CHUNK,(i+1)*CHUNK));
-        setImportMsg(`Загрузка файла: ${Math.round(i/total*100)}%...`);
-        const cr=await fetch('/api/quality/standards/import-chunk',{method:'POST',body:fd});
-        const cd=await cr.json();
-        if(cd.error) throw new Error(cd.error);
-      }
-      setImportMsg('Файл загружен, обработка (это может занять пару минут)...');
-      const r=await fetch('/api/quality/standards/import-finish',{method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({uploadId,company:comp,totalChunks:total})});
+      const fd=new FormData();
+      fd.append('file',file);
+      fd.append('company',comp);
+      const r=await fetch('/api/quality/standards/import-file',{method:'POST',body:fd});
       const d=await r.json();
       if(d.error) throw new Error(d.error);
       setImportMsg(`✓ Эталонов: ${d.imported} новых. Фото: ${d.images} загружено`+(d.msg?' ('+d.msg+')':''));
