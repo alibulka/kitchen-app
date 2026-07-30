@@ -4,6 +4,7 @@ const express = require('express');
 const { WebSocketServer } = require('ws');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 
 const { pool, initDb } = require('./db');
 
@@ -25,7 +26,19 @@ app.use('/api/techcards', require('./routes/techcards'));
 app.use('/api/config',    require('./routes/config'));
 app.use('/api/quality',  require('./routes/quality'));
 app.use('/api/acts',     require('./routes/acts'));
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+const objectStorage = require('./lib/objectStorage');
+app.get('/uploads/:filename', async (req, res) => {
+  const filename = path.basename(req.params.filename);
+  try {
+    const ok = await objectStorage.streamObject(filename, res);
+    if (ok) return;
+  } catch (err) {
+    console.error('Object storage error:', err.message);
+  }
+  const localPath = path.join(__dirname, 'uploads', filename);
+  if (fs.existsSync(localPath)) return res.sendFile(localPath);
+  res.status(404).json({ error: 'Файл не найден' });
+});
 
 app.get('/api/shops', async (_req, res) => {
   try {

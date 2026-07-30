@@ -3,7 +3,9 @@ const router = express.Router();
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const os = require('os');
 const { pool } = require('../db');
+const objectStorage = require('../lib/objectStorage');
 
 // Хелпер: WHERE id IN ($1,$2,...) совместимый с SQLite и PostgreSQL
 function inClause(ids, offset=0) {
@@ -20,8 +22,14 @@ const storage = multer.diskStorage({
     cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
   },
 });
-const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 const uploadLarge = multer({ storage, limits: { fileSize: 500 * 1024 * 1024 } });
+const uploadChunk = multer({ storage: multer.memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } });
+
+function makeFilename(originalname) {
+  const ext = path.extname(originalname || '') || '.jpg';
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
+}
 
 // ─── Поиск заготовок из БД ────────────────────────────────────────────────────
 
@@ -132,6 +140,7 @@ router.delete('/standards/:id', async (req, res) => {
     const { id } = req.params;
     const { rows: photos } = await pool.query('SELECT filename FROM quality_standard_photos WHERE standard_id=$1', [id]);
     for (const p of photos) {
+      await objectStorage.deleteObject(p.filename).catch(() => {});
       const fp = path.join(UPLOADS_DIR, p.filename);
       if (fs.existsSync(fp)) fs.unlinkSync(fp);
     }
@@ -174,15 +183,13 @@ router.post('/standards/import', async (req, res) => {
   }
 });
 
-// Импорт эталонов с фото — принимает сырой xlsx файл
-router.post('/standards/import-file', uploadLarge.single('file'), async (req, res) => {
-  try {
+// Общая логика импорта эталонов из xlsx-файла (текст + фото)
+async function importStandardsFromFile(filePath, company) {
     const AdmZip = require('adm-zip');
     const XLSX = require('xlsx');
-    const company = req.body.company || 'EE';
     const sheetName = company === 'УД' ? 'Библиотека эталонов УД' : 'Библиотека эталонов EE';
 
-    const fileBuf = fs.readFileSync(req.file.path);
+    const fileBuf = fs.readFileSync(filePath);
 
     // ─── 1. Парсинг текстовых данных (xlsx) ──────────────────────────────────
     const wb = XLSX.read(fileBuf, { type: 'buffer' });
@@ -195,7 +202,7 @@ router.post('/standards/import-file', uploadLarge.single('file'), async (req, re
         headerRow = i; break;
       }
     }
-    if (headerRow < 0) { fs.unlinkSync(req.file.path); return res.json({ ok: true, imported: 0, images: 0, msg: 'Заголовок не найден' }); }
+    if (headerRow < 0) return { ok: true, imported: 0, images: 0, msg: 'Заголовок не найден' };
 
     const header = rows[headerRow].map(c => String(c).toUpperCase().trim());
     const col = n => header.findIndex(h => h.includes(n));
@@ -243,7 +250,7 @@ router.post('/standards/import-file', uploadLarge.single('file'), async (req, re
     // ─── 2. Извлечение фото (adm-zip + drawing XML) ───────────────────────────
     let imagesSaved = 0;
     try {
-      const zip = new AdmZip(req.file.path);
+      const zip = new AdmZip(filePath);
 
       // Найти файл листа по имени через workbook.xml
       const wbXml = zip.readAsText('xl/workbook.xml') || '';
@@ -302,7 +309,7 @@ router.post('/standards/import-file', uploadLarge.single('file'), async (req, re
 
               const ext = path.extname(imgPath) || '.jpg';
               const filename = `std-${stdId}-${Date.now()}${ext}`;
-              fs.writeFileSync(path.join(UPLOADS_DIR, filename), imgBuf);
+              await objectStorage.putObject(filename, imgBuf);
               await pool.query(
                 'INSERT INTO quality_standard_photos(standard_id,filename) VALUES($1,$2)',
                 [stdId, filename]
@@ -316,11 +323,71 @@ router.post('/standards/import-file', uploadLarge.single('file'), async (req, re
       console.error('Image extraction error:', imgErr.message);
     }
 
-    fs.unlinkSync(req.file.path);
-    res.json({ ok: true, imported, images: imagesSaved });
+    return { ok: true, imported, images: imagesSaved };
+}
+
+// Импорт эталонов с фото — принимает сырой xlsx файл (для небольших файлов)
+router.post('/standards/import-file', uploadLarge.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Файл не получен' });
+    const result = await importStandardsFromFile(req.file.path, req.body.company || 'EE');
+    res.json(result);
   } catch (err) {
-    if (req.file?.path) try { fs.unlinkSync(req.file.path); } catch {}
     res.status(500).json({ error: err.message });
+  } finally {
+    if (req.file?.path) try { fs.unlinkSync(req.file.path); } catch {}
+  }
+});
+
+// ─── Импорт по частям (обход лимита ~32 МБ на запрос в продакшене) ───────────
+// Фрагменты сохраняются в облачное хранилище: в автомасштабируемом продакшене
+// запросы могут попадать на разные серверы, локальный /tmp там не общий.
+const MAX_CHUNKS = 50; // 50 × 30 МБ = до ~1.5 ГБ
+
+router.post('/standards/import-chunk', uploadChunk.single('chunk'), async (req, res) => {
+  try {
+    const { uploadId } = req.body;
+    const index = Number(req.body.index);
+    if (!uploadId || !/^[a-z0-9-]+$/i.test(uploadId) || uploadId.length > 64) {
+      return res.status(400).json({ error: 'Некорректный uploadId' });
+    }
+    if (!Number.isInteger(index) || index < 0 || index >= MAX_CHUNKS) {
+      return res.status(400).json({ error: 'Некорректный номер фрагмента' });
+    }
+    if (!req.file?.buffer || req.file.buffer.length === 0) {
+      return res.status(400).json({ error: 'Пустой фрагмент' });
+    }
+    await objectStorage.putImportPart(uploadId, index, req.file.buffer);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/standards/import-finish', async (req, res) => {
+  const { uploadId, company } = req.body || {};
+  const totalChunks = Number(req.body?.totalChunks);
+  const validId = uploadId && /^[a-z0-9-]+$/i.test(uploadId) && uploadId.length <= 64;
+  const assembled = validId ? path.join(os.tmpdir(), `import-${uploadId}.xlsx`) : null;
+  try {
+    if (!validId) return res.status(400).json({ error: 'Некорректный uploadId' });
+    if (!Number.isInteger(totalChunks) || totalChunks < 1 || totalChunks > MAX_CHUNKS) {
+      return res.status(400).json({ error: 'Неверное число фрагментов' });
+    }
+    fs.writeFileSync(assembled, Buffer.alloc(0));
+    for (let i = 0; i < totalChunks; i++) {
+      const buf = await objectStorage.downloadImportPart(uploadId, i);
+      if (!buf) return res.status(400).json({ error: `Не хватает фрагмента ${i + 1} из ${totalChunks}` });
+      fs.appendFileSync(assembled, buf);
+    }
+    const result = await importStandardsFromFile(assembled, company || 'EE');
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  } finally {
+    if (assembled) try { fs.unlinkSync(assembled); } catch {}
+    if (validId) objectStorage.cleanupImportParts(uploadId).catch(() => {});
+    objectStorage.cleanupStaleImports().catch(() => {});
   }
 });
 
@@ -452,11 +519,13 @@ router.post('/tasks/:id/photos', upload.array('photos', 10), async (req, res) =>
     const taskId = req.params.id;
     const saved = [];
     for (const file of (req.files || [])) {
+      const filename = makeFilename(file.originalname);
+      await objectStorage.putObject(filename, file.buffer);
       await pool.query(
         'INSERT INTO quality_photos(task_id,filename) VALUES($1,$2)',
-        [taskId, file.filename]
+        [taskId, filename]
       );
-      saved.push(file.filename);
+      saved.push(filename);
     }
     res.json({ ok: true, files: saved });
   } catch (err) {
@@ -470,11 +539,13 @@ router.post('/standards/:id/photos', upload.array('photos', 10), async (req, res
     const standardId = req.params.id;
     const saved = [];
     for (const file of (req.files || [])) {
+      const filename = makeFilename(file.originalname);
+      await objectStorage.putObject(filename, file.buffer);
       await pool.query(
         'INSERT INTO quality_standard_photos(standard_id,filename) VALUES($1,$2)',
-        [standardId, file.filename]
+        [standardId, filename]
       );
-      saved.push(file.filename);
+      saved.push(filename);
     }
     res.json({ ok: true, files: saved });
   } catch (err) {
@@ -486,6 +557,7 @@ router.delete('/standard-photos/:filename', async (req, res) => {
   try {
     const { filename } = req.params;
     await pool.query('DELETE FROM quality_standard_photos WHERE filename=$1', [filename]);
+    await objectStorage.deleteObject(filename);
     const fp = path.join(UPLOADS_DIR, filename);
     if (fs.existsSync(fp)) fs.unlinkSync(fp);
     res.json({ ok: true });
@@ -498,6 +570,7 @@ router.delete('/photos/:filename', async (req, res) => {
   try {
     const { filename } = req.params;
     await pool.query('DELETE FROM quality_photos WHERE filename=$1', [filename]);
+    await objectStorage.deleteObject(filename);
     const fp = path.join(UPLOADS_DIR, filename);
     if (fs.existsSync(fp)) fs.unlinkSync(fp);
     res.json({ ok: true });
