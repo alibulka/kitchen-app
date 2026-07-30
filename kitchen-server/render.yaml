@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: kitchen-app
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: PORT
+        value: 3000
+    disk:
+      name: kitchen-db
+      mountPath: /app
+      sizeGB: 1
