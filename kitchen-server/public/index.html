@@ -7470,20 +7470,6 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, onlyLi
           '⚠ '+SKIP_LABELS[skipReason]+(skipAt?' · '+new Date(skipAt).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):''))
       ),
       isDone && e('div',{className:'done-badge'},'✓ Готово'),
-      // Skip button only for items without pack lines
-      packLines.length===0 && !isDone && !skipReason && e('button',{
-        onClick:ev=>{ev.stopPropagation();setShowSkipPicker(v=>!v);},
-        title:'Отметить причину невыполнения',
-        style:{padding:'6px 10px',borderRadius:8,border:'1.5px solid #F59E0B',
-          background:'transparent',color:'#92400E',fontSize:13,fontWeight:700,
-          cursor:'pointer',flexShrink:0,lineHeight:1}
-      },'⚠'),
-      packLines.length===0 && skipReason && e('button',{
-        onClick:ev=>{ev.stopPropagation();clearSkip();},
-        title:'Снять отметку',
-        style:{padding:'6px 10px',borderRadius:8,border:'1.5px solid var(--border)',
-          background:'transparent',color:'var(--muted)',fontSize:13,cursor:'pointer',flexShrink:0}
-      },'✕')
     ),
 
     // SKIP PICKER (only for items without pack lines)
@@ -7547,7 +7533,7 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, onlyLi
                    doneFlags:shift.doneFlags,doneBy:shift.doneBy,
                    onLineEmp,shopEmployees,
                    skipReasons:shift.skipReasons,skipTimes:shift.skipTimes,
-                   onLineSkip,onLineClearSkip,onlyLineIndices,carriedLineIndices})
+                   onLineSkip:null,onLineClearSkip:null,onlyLineIndices,carriedLineIndices})
     ),
 
     // Сотрудник — только для позиций без pack lines (старый режим)
