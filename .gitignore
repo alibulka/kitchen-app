@@ -1,0 +1,8 @@
+kitchen-server/node_modules/
+kitchen-server/uploads/
+kitchen-server/kitchen.db
+kitchen-server/kitchen.db-shm
+kitchen-server/kitchen.db-wal
+.claude/
+*.env
+.env*
