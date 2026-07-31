@@ -1,4 +1,4 @@
-modules = ["nodejs-24"]
+modules = ["nodejs-24", "postgresql-16"]
 [workflows]
 runButton = "Project"
 
@@ -34,3 +34,6 @@ externalPort = 8099
 [deployment]
 deploymentTarget = "autoscale"
 run = ["bash", "-c", "cd kitchen-server && node server.js"]
+
+[nix]
+channel = "stable-25_05"
