@@ -405,6 +405,12 @@ if (process.env.DATABASE_URL) {
     ssl: { rejectUnauthorized: false },
   });
 
+  // Обрыв простаивающего соединения не должен ронять весь сервер:
+  // pool сам создаст новое соединение при следующем запросе.
+  pool.on('error', (err) => {
+    console.error('PostgreSQL pool error (соединение будет пересоздано):', err.message);
+  });
+
   // pg не имеет withTransaction — добавляем
   pool.withTransaction = async function(fn) {
     const client = await pool.connect();
