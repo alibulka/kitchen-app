@@ -37,3 +37,6 @@ run = ["bash", "-c", "cd kitchen-server && node server.js"]
 
 [nix]
 channel = "stable-25_05"
+
+[objectStorage]
+defaultBucketID = "replit-objstore-dc6ebeb4-6b8f-447f-8b1c-ef04bc0ca770"
