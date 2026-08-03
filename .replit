@@ -14,8 +14,8 @@ localPort = 5000
 externalPort = 5000
 
 [deployment]
-run = ["sh", "-c", "npm start"]
-deploymentTarget = "cloudrun"
+run = ["bash", "-c", "cd kitchen-server && node server.js"]
+deploymentTarget = "autoscale"
 
 [agent]
 expertMode = true
@@ -36,10 +36,10 @@ args = "Start application"
 name = "Start application"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "PORT=5000 npm start"
-waitForPort = 5000
-
 [workflows.workflow.metadata]
 outputType = "webview"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd kitchen-server && PORT=5000 npm start"
+waitForPort = 5000
