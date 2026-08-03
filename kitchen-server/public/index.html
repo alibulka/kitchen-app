@@ -7140,9 +7140,9 @@ function SvgSort({dir='none',size=12}) {
 function PackTable({packLines, facts, onFactChange, itemKey,
                     doneFlags, doneBy, onLineEmp, shopEmployees,
                     skipReasons, skipTimes, onLineSkip, onLineClearSkip,
-                    onlyLineIndices, carriedLineIndices}) {
+                    prevLineData, hideCompanions}) {
   const [pickerFor, setPickerFor] = useState(null);
-  // Сортировка: группируем по типу упаковки, внутри группы — по возрастанию объёма
+  const [pendingEmp, setPendingEmp] = useState(null); // {lineIdx, empId} — ждёт причину
   const parseVolume = v => parseFloat((v||'0').replace(',','.')) || 0;
   const packOrder = [...new Set(packLines.map(l => l.packName||''))];
   const sortedLines = [...packLines].sort((a,b) => {
@@ -7150,18 +7150,13 @@ function PackTable({packLines, facts, onFactChange, itemKey,
     if (pi !== 0) return pi;
     return parseVolume(a.volume) - parseVolume(b.volume);
   });
-  // Сохраняем маппинг оригинальных индексов для корректной работы ключей facts/doneFlags
   const origIndex = sortedLines.map(l => packLines.indexOf(l));
-  // Фильтруем строки если задан onlyLineIndices (режим переноса)
-  const visibleSortedLines = onlyLineIndices
-    ? sortedLines.filter((_,si) => onlyLineIndices.includes(origIndex[si]))
-    : sortedLines;
 
   const hasDestination = packLines.some(l => l.destination);
-  // Показываем бейдж ЕЕ/УД когда хотя бы у одной строки есть source (данные из техкарты)
   const hasSource = packLines.some(l => l.source);
   const hasEmps = shopEmployees && shopEmployees.length > 0 && onLineEmp;
-  const colSpan = 5 + (hasDestination ? 1 : 0) + (hasSource ? 1 : 0);
+  const hasYesterday = !!(prevLineData && Object.values(prevLineData).some(p => p.yesterdayFact != null && p.yesterdayFact !== 0));
+  const colSpan = 5 + (hasDestination ? 1 : 0) + (hasSource ? 1 : 0) + (hasYesterday ? 1 : 0);
 
   return e('div',{style:{overflowX:'auto',borderRadius:10,overflow:'hidden'}},
     e('table',{className:'pack-table'},
@@ -7172,30 +7167,46 @@ function PackTable({packLines, facts, onFactChange, itemKey,
           hasDestination && e('th',null,'Назначение'),
           hasSource && e('th',null,''),
           e('th',{className:'num'},'План'),
+          hasYesterday && e('th',{className:'num',style:{color:'#92400E',fontSize:11}},'Вчера'),
           e('th',{className:'num'},'Факт'),
           onLineSkip && e('th',null,''),
         )
       ),
       e('tbody',null,
-        ...visibleSortedLines.flatMap((line,si)=>{
+        ...sortedLines.flatMap((line,si)=>{
           const i=origIndex[si];
           const k=`${itemKey}-pl-${i}`;
           const planQty=Number(line.qty)||0;
-          const factVal=facts[k]!==undefined?facts[k]:planQty;
           const lineDone=!!(doneFlags&&doneFlags[k]);
           const lineEmpIds=(doneBy&&doneBy[k])||[];
           const lineSkip=(skipReasons&&skipReasons[k])||null;
           const lineSkipAt=lineSkip&&skipTimes?skipTimes[k]:null;
-          const isCarriedLine=carriedLineIndices&&carriedLineIndices.includes(i);
-          const rowBg=lineDone?'var(--ok-bg)':lineSkip?'#FFFBEB':isCarriedLine?'#FEF9EC':'';
+          // Данные вчерашнего дня для этой строки
+          const prevLine=prevLineData?prevLineData[i]:null;
+          // done вчера, но факт < план → показываем как partial (нужно дофасовать сегодня)
+          const yesterdayFactNum=prevLine?.yesterdayFact!=null?Number(prevLine.yesterdayFact):null;
+          const isDoneYesterdayFull=prevLine?.status==='done'&&(yesterdayFactNum===null||yesterdayFactNum>=planQty);
+          const isDoneYesterdayShort=prevLine?.status==='done'&&yesterdayFactNum!==null&&yesterdayFactNum<planQty;
+          const isDoneYesterday=isDoneYesterdayFull;
+          const isPartialYesterday=prevLine?.status==='partial'||isDoneYesterdayShort;
+          const isSkippedYesterday=prevLine?.status==='skipped';
+          // companion = строка переноса без причины нехватки → нередактируемая
+          const isCarryoverCompanion=!!prevLine&&!prevLine.skipReason&&!isSkippedYesterday&&!isPartialYesterday;
+          const defaultFact=(yesterdayFactNum!=null&&yesterdayFactNum<planQty)?Math.max(0,planQty-yesterdayFactNum):planQty;
+          const factVal=facts[k]!==undefined?facts[k]:defaultFact;
+          const rowBg=isDoneYesterday?'var(--ok-bg)':lineDone?'var(--ok-bg)':lineSkip?'var(--danger-bg)':(isSkippedYesterday||isPartialYesterday)?'#FFFBEB':'var(--bg)';
           return [
             e('tr',{key:`r-${i}`,style:{background:rowBg}},
               e('td',null,
-                isCarriedLine&&!lineDone
+                isDoneYesterday
                   ? e('span',{style:{display:'flex',alignItems:'center',gap:4}},
-                      e('span',{style:{fontSize:11,color:'#92400E',fontWeight:700}},'⏮'),
+                      e('span',{style:{fontSize:11,color:'var(--ok)',fontWeight:700}},'✓'),
                       line.volume||'—')
-                  : line.volume||'—'
+                  : (isSkippedYesterday||isPartialYesterday)
+                    ? e('span',{style:{display:'flex',alignItems:'center',gap:4}},
+                        e('span',{style:{fontSize:11,color:'#92400E',fontWeight:700}},'⏮'),
+                        line.volume||'—')
+                    : line.volume||'—'
               ),
               e('td',null,line.packName||line.pack||'—'),
               hasDestination && e('td',null,line.destination||'—'),
@@ -7207,19 +7218,24 @@ function PackTable({packLines, facts, onFactChange, itemKey,
                     : null
               ),
               e('td',{className:'num'},e('strong',{style:{fontSize:16}},planQty,' уп')),
-              e('td',{className:'num'},
-                e('input',{
-                  type:'number',step:1,min:0,
-                  className:'pack-fact-input',
-                  value:factVal,
-                  onFocus:ev=>ev.target.select(),
-                  onChange:ev=>onFactChange(k, ev.target.value)
-                })
+              hasYesterday && e('td',{className:'num',style:{color:'#92400E',fontSize:13}},
+                prevLine?.yesterdayFact!=null
+                  ? (prevLine.yesterdayFact+' уп')
+                  : '—'
               ),
-              onLineSkip && e('td',{style:{whiteSpace:'nowrap'}},
+              e('td',{className:'num'},
+                isDoneYesterday
+                  ? e('span',{style:{color:'var(--ok)',fontWeight:700,fontSize:15}},'✓')
+                  : isCarryoverCompanion
+                    ? e('span',{style:{fontWeight:600,fontSize:15,color:'var(--muted)'}},planQty,' уп')
+                    : e('input',{type:'number',step:1,min:0,className:'pack-fact-input',
+                        value:factVal,onFocus:ev=>ev.target.select(),
+                        onChange:ev=>onFactChange(k,ev.target.value)})
+              ),
+              onLineSkip && !isDoneYesterday && !isCarryoverCompanion && e('td',{style:{whiteSpace:'nowrap'}},
                 lineSkip
                   ? e('span',{style:{display:'inline-flex',alignItems:'center',gap:4}},
-                      e('span',{style:{fontSize:11,color:'#92400E',fontWeight:600}},
+                      e('span',{style:{fontSize:11,color:'var(--danger)',fontWeight:600}},
                         '⚠ '+SKIP_LABELS[lineSkip]+(lineSkipAt?' · '+new Date(lineSkipAt).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'')
                       ),
                       e('button',{
@@ -7231,27 +7247,38 @@ function PackTable({packLines, facts, onFactChange, itemKey,
                   : !lineDone && e('button',{
                       onClick:ev=>{ev.stopPropagation();setPickerFor(pickerFor===i?null:i);},
                       title:'Причина невыполнения',
-                      style:{padding:'4px 8px',borderRadius:6,border:'1.5px solid #F59E0B',
-                        background:'transparent',color:'#92400E',fontSize:12,fontWeight:700,cursor:'pointer'}
+                      style:{padding:'4px 8px',borderRadius:6,border:'1.5px solid var(--danger)',
+                        background:'transparent',color:'var(--danger)',fontSize:12,fontWeight:700,cursor:'pointer'}
                     },'⚠')
+              ),
+              (isDoneYesterday||isCarryoverCompanion) && onLineSkip && e('td',null)
+            ),
+            // Причина пропуска вчера (для skipped/partial строк)
+            (isSkippedYesterday||isPartialYesterday) && prevLine.skipReason && e('tr',{key:`prev-reason-${i}`},
+              e('td',{colSpan,style:{padding:'3px 8px 6px',background:'#FEF3C7',fontSize:11,color:'#92400E'}},
+                '⏮ Вчера: '+SKIP_LABELS[prevLine.skipReason]
               )
             ),
-            onLineSkip && pickerFor===i && e('tr',{key:`picker-${i}`},
-              e('td',{colSpan,style:{padding:'6px 8px',background:'#FEF3C7',borderTop:'1px solid #F59E0B'}},
+            pickerFor===i && e('tr',{key:`picker-${i}`},
+              e('td',{colSpan,style:{padding:'6px 8px',background:'var(--danger-bg)',borderTop:'1px solid var(--danger)'}},
                 e('div',{style:{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}},
-                  e('span',{style:{fontSize:12,color:'#92400E',fontWeight:600}},'Причина:'),
+                  e('span',{style:{fontSize:12,color:'var(--danger)',fontWeight:600}},
+                    pendingEmp&&pendingEmp.lineIdx===i?'Укажи причину перед отметкой:':'Причина:'),
                   ['no_material','no_time'].map(r=>e('button',{key:r,
-                    onClick:()=>{onLineSkip(k,r);setPickerFor(null);},
-                    style:{padding:'5px 12px',borderRadius:7,border:'1.5px solid #F59E0B',
-                      background:'white',color:'#92400E',fontSize:12,fontWeight:600,cursor:'pointer'}
+                    onClick:()=>{
+                      onLineSkip(k,r);setPickerFor(null);
+                      if(pendingEmp&&pendingEmp.lineIdx===i){onLineEmp(pendingEmp.lineIdx,pendingEmp.empId);setPendingEmp(null);}
+                    },
+                    style:{padding:'5px 12px',borderRadius:7,border:'1.5px solid var(--danger)',
+                      background:'white',color:'var(--danger)',fontSize:12,fontWeight:600,cursor:'pointer'}
                   },SKIP_LABELS[r])),
-                  e('button',{onClick:()=>setPickerFor(null),
+                  e('button',{onClick:()=>{setPickerFor(null);setPendingEmp(null);},
                     style:{padding:'5px 8px',borderRadius:7,border:'1.5px solid var(--border)',
                       background:'transparent',color:'var(--muted)',fontSize:12,cursor:'pointer'}},'Отмена')
                 )
               )
             ),
-            hasEmps && e('tr',{key:`emp-${i}`},
+            hasEmps && !isDoneYesterday && !isCarryoverCompanion && e('tr',{key:`emp-${i}`},
               e('td',{colSpan,style:{
                 padding:'4px 8px 6px',
                 background:lineDone?'var(--ok-bg)':'var(--bg)',
@@ -7262,7 +7289,19 @@ function PackTable({packLines, facts, onFactChange, itemKey,
                     const sel=lineEmpIds.includes(emp.id);
                     return e('button',{
                       key:emp.id,
-                      onClick:()=>onLineEmp(i, emp.id),
+                      onClick:()=>{
+                        if(!sel){
+                          const explicitFact=facts[k]!==undefined?Number(facts[k]):null;
+                          const totalPlan=planQty+(Number(line.fromWarehouse)||0);
+                          // Для строки переноса эффективный план = plan − yesterdayFact
+                          const effectivePlan=(isSkippedYesterday||isPartialYesterday)&&yesterdayFactNum!=null
+                            ?Math.max(0,totalPlan-yesterdayFactNum):totalPlan;
+                          if(explicitFact!==null&&explicitFact<effectivePlan&&!lineSkip){
+                            setPickerFor(i);setPendingEmp({lineIdx:i,empId:emp.id});return;
+                          }
+                        }
+                        onLineEmp(i,emp.id);
+                      },
                       style:{
                         display:'flex',alignItems:'center',gap:5,
                         padding:'7px 12px',borderRadius:20,
@@ -7308,8 +7347,8 @@ function EmployeeToggles({employees, selectedIds, onToggle, warn}) {
 // ============================================================
 const SKIP_LABELS={'no_material':'Нет сырья','no_time':'Не успели'};
 
-function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, onlyLineIndices, carriedLineIndices}) {
-  const itemKey=`${stationKey}-${item.id}`;
+function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, prevLineData, overridePackLines, keyPrefix}) {
+  const itemKey=`${keyPrefix||''}${stationKey}-${item.id}`;
   const [noEmpWarn,setNoEmpWarn]=useState(false);
   const [showSkipPicker,setShowSkipPicker]=useState(false);
   // Item-level skip (only for items without pack lines)
@@ -7352,7 +7391,7 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, onlyLi
   };
 
   // pack lines: tech card → EXCEL base (only without active techcard) → packPlan fallback
-  const tcLines=(shift.itemPackLines||{})[item.id];
+  const tcLines=overridePackLines||(shift.itemPackLines||{})[item.id];
   const overriddenLines=tcLines
     || (shift.techcardId||shift.udTechcardId ? null : EXCEL_PACK_LINES[item.id])
     || null;
@@ -7361,8 +7400,11 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, onlyLi
     return [{volume, packName, qty:item.packPlan.qty, destination:'', fromWarehouse:undefined}];
   })() : []);
 
-  // isDone: если onlyLineIndices задан — только эти строки; иначе все
-  const checkLines = onlyLineIndices || (packLines.length > 0 ? packLines.map((_,i)=>i) : null);
+  // isDone: для переноса — только не-done-yesterday строки; иначе все
+  const nonDoneYesterdayLines = packLines.length > 0
+    ? packLines.map((_,i)=>i).filter(i=>prevLineData?.[i]?.status !== 'done')
+    : null;
+  const checkLines = nonDoneYesterdayLines?.length > 0 ? nonDoneYesterdayLines : (packLines.length > 0 ? packLines.map((_,i)=>i) : null);
   const isDone = checkLines
     ? checkLines.every(i=>!!shift.doneFlags[`${itemKey}-pl-${i}`])
     : !!shift.doneFlags[itemKey];
@@ -7436,21 +7478,13 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, onlyLi
   const anyLineskipped = packLines.length > 0
     && packLines.some((_,i)=>!!(shift.skipReasons||{})[`${itemKey}-pl-${i}`]);
 
-  const isCarryover = !!onlyLineIndices;
+  const isCarryover = !!prevLineData && Object.values(prevLineData).some(p=>p.status==='skipped'||p.status==='partial');
   return e('div',{className:'item-card'+(isDone?' done':(anyLineskipped||skipReason)?' skipped':''),style:{
-    border: noEmpWarn?'2.5px solid var(--danger)':isCarryover?'2px solid #F59E0B':(anyLineskipped||skipReason)?'2px solid #F59E0B':'',
-    boxShadow: noEmpWarn?'0 0 0 4px rgba(220,38,38,0.15)':isCarryover?'0 0 0 3px rgba(245,158,11,0.15)':(anyLineskipped||skipReason)?'0 0 0 3px rgba(245,158,11,0.15)':'',
-    background: isCarryover?'#FFFBEB':(anyLineskipped||skipReason)?'#FFFBEB':'',
+    border: noEmpWarn?'2.5px solid var(--danger)':(anyLineskipped||skipReason)?'2px solid var(--danger)':isCarryover?'2px solid #F59E0B':'',
+    boxShadow: noEmpWarn?'0 0 0 4px rgba(220,38,38,0.15)':(anyLineskipped||skipReason)?'0 0 0 3px rgba(176,32,32,0.15)':isCarryover?'0 0 0 3px rgba(245,158,11,0.15)':'',
+    background: isCarryover?'#FFFBEB':'',
     transition:'border 0.3s, box-shadow 0.3s'
   }},
-    isCarryover && e('div',{style:{
-      display:'flex',alignItems:'center',gap:6,
-      padding:'6px 14px',marginBottom:4,
-      borderRadius:'8px 8px 0 0',
-      background:'#FEF3C7',borderBottom:'1px solid #F59E0B',
-      fontSize:12,fontWeight:700,color:'#92400E',
-      margin:'-12px -12px 10px -12px',
-    }},'⏮ Задание прошлой смены'),
 
     // HEADER
     e('div',{className:'item-header'},
@@ -7466,7 +7500,7 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, onlyLi
         e('p',{className:'item-name'},item.name),
         item.yieldAmount != null && e('div',{className:'item-yield'},
           'Выход: '+item.yieldAmount.toLocaleString('ru-RU')+' '+(item.yieldUnit||'г')),
-        skipReason && e('div',{style:{fontSize:13,color:'#92400E',fontWeight:600,marginTop:4}},
+        skipReason && e('div',{style:{fontSize:13,color:'var(--danger)',fontWeight:600,marginTop:4}},
           '⚠ '+SKIP_LABELS[skipReason]+(skipAt?' · '+new Date(skipAt).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):''))
       ),
       isDone && e('div',{className:'done-badge'},'✓ Готово'),
@@ -7474,8 +7508,8 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, onlyLi
       packLines.length===0 && !isDone && !skipReason && e('button',{
         onClick:ev=>{ev.stopPropagation();setShowSkipPicker(v=>!v);},
         title:'Отметить причину невыполнения',
-        style:{padding:'6px 10px',borderRadius:8,border:'1.5px solid #F59E0B',
-          background:'transparent',color:'#92400E',fontSize:13,fontWeight:700,
+        style:{padding:'6px 10px',borderRadius:8,border:'1.5px solid var(--border)',
+          background:'transparent',color:'var(--muted)',fontSize:13,fontWeight:700,
           cursor:'pointer',flexShrink:0,lineHeight:1}
       },'⚠'),
       packLines.length===0 && skipReason && e('button',{
@@ -7489,13 +7523,13 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, onlyLi
     // SKIP PICKER (only for items without pack lines)
     packLines.length===0 && showSkipPicker && e('div',{style:{
       display:'flex',gap:8,padding:'10px 12px',
-      background:'#FEF3C7',borderTop:'1px solid #F59E0B',flexWrap:'wrap'
+      background:'var(--danger-bg)',borderTop:'1px solid var(--danger)',flexWrap:'wrap'
     }},
-      e('span',{style:{fontSize:13,color:'#92400E',fontWeight:600,alignSelf:'center'}},'Причина:'),
+      e('span',{style:{fontSize:13,color:'var(--danger)',fontWeight:600,alignSelf:'center'}},'Причина:'),
       ['no_material','no_time'].map(r=>e('button',{key:r,
         onClick:()=>doSkip(r),
-        style:{padding:'6px 14px',borderRadius:8,border:'1.5px solid #F59E0B',
-          background:'white',color:'#92400E',fontSize:13,fontWeight:600,cursor:'pointer'}
+        style:{padding:'6px 14px',borderRadius:8,border:'1.5px solid var(--danger)',
+          background:'white',color:'var(--danger)',fontSize:13,fontWeight:600,cursor:'pointer'}
       },SKIP_LABELS[r])),
       e('button',{onClick:()=>setShowSkipPicker(false),
         style:{padding:'6px 10px',borderRadius:8,border:'1.5px solid var(--border)',
@@ -7547,7 +7581,8 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, onlyLi
                    doneFlags:shift.doneFlags,doneBy:shift.doneBy,
                    onLineEmp,shopEmployees,
                    skipReasons:shift.skipReasons,skipTimes:shift.skipTimes,
-                   onLineSkip,onLineClearSkip,onlyLineIndices,carriedLineIndices})
+                   onLineSkip,onLineClearSkip,prevLineData,
+                   hideCompanions:!!keyPrefix})
     ),
 
     // Сотрудник — только для позиций без pack lines (старый режим)
@@ -7661,34 +7696,49 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
   const todoItems=orderedItems.filter(it=>!shift.doneFlags[`${station.key}-${it.id}`]||sinkingIds.has(it.id));
   const doneItems=orderedItems.filter(it=>!!shift.doneFlags[`${station.key}-${it.id}`]&&!sinkingIds.has(it.id));
 
-  // Перенос из прошлой смены: только конкретные строки упаковки со skip_reason
-  // carriedLinesMap: itemId(string) → number[] (индексы pack lines из вчера)
-  const carriedLinesMap={};
-  (shift.prevSkips||[])
-    .filter(p=>p.stationKey===station.key && p.lineIdx!=null)
-    .forEach(p=>{
-      const id=String(p.itemId);
-      if(!carriedLinesMap[id]) carriedLinesMap[id]=[];
-      if(!carriedLinesMap[id].includes(p.lineIdx)) carriedLinesMap[id].push(p.lineIdx);
-    });
-  // item-level skips (без pack lines) — старый путь
-  const carriedItemLevelIds=new Set(
-    (shift.prevSkips||[]).filter(p=>p.stationKey===station.key&&p.lineIdx==null).map(p=>String(p.itemId))
-  );
-  // Items с хотя бы одной невыполненной перенесённой строкой
-  const carriedItems=todoItems.filter(it=>{
-    const id=String(it.id);
-    if(carriedItemLevelIds.has(id)) return true;
-    const idxs=carriedLinesMap[id];
-    if(!idxs) return false;
-    return idxs.some(li=>!shift.doneFlags[`${station.key}-${it.id}-pl-${li}`]);
-  });
-  // Regular todo: только items без перенесённых строк
-  const carriedItemIds=new Set([
-    ...Object.keys(carriedLinesMap),
-    ...[...carriedItemLevelIds],
-  ]);
-  const todoRegular=todoItems.filter(it=>!carriedItemIds.has(String(it.id)));
+  // Перенос из прошлой смены: prevItemDataMap[itemId][lineIdx] = {status, skipReason, yesterdayFact, volume, packName, planQty}
+  const prevItemDataMap={};
+  for(const p of (shift.prevSkips||[])){
+    if(p.stationKey!==station.key) continue;
+    const id=String(p.itemId);
+    if(!prevItemDataMap[id]) prevItemDataMap[id]={};
+    if(p.lineIdx!=null){
+      prevItemDataMap[id][p.lineIdx]={status:p.status,skipReason:p.skipReason,skipAt:p.skipAt,yesterdayFact:p.yesterdayFact,
+        volume:p.volume,packName:p.packName,planQty:p.planQty};
+    } else {
+      prevItemDataMap[id].__itemLevel={status:p.status||'skipped',skipReason:p.skipReason,skipAt:p.skipAt};
+    }
+  }
+  const todayItemIds=new Set(items.map(it=>String(it.id)));
+  // Items с хотя бы одной skipped/partial строкой (done-only не показываем как перенос)
+  const hasCarryoverSkip=(d)=>d&&Object.values(d).some(p=>p.status==='skipped'||p.status==='partial');
+  const allCarriedItems=todoItems.filter(it=>hasCarryoverSkip(prevItemDataMap[String(it.id)]));
+  // Позиции переноса, которых НЕТ в сегодняшней техкарте
+  const allCarriedOnlyItems=[];
+  const seenCarriedOnly=new Set();
+  for(const p of (shift.prevSkips||[])){
+    if(p.stationKey!==station.key) continue;
+    const sid=String(p.itemId);
+    if(todayItemIds.has(sid)||seenCarriedOnly.has(sid)) continue;
+    if(!hasCarryoverSkip(prevItemDataMap[sid])) continue;
+    seenCarriedOnly.add(sid);
+    allCarriedOnlyItems.push({id:p.itemId,name:p.itemName||`Позиция #${p.itemId}`,ingredients:[]});
+  }
+  // Определяем "выполнено через карryover-блок" по prev- ключам
+  const isCarryoverDone=(itemId)=>{
+    const lineMap=prevItemDataMap[String(itemId)]||{};
+    const skipEntries=Object.entries(lineMap).filter(([k,p])=>k!=='__itemLevel'&&(p.status==='skipped'||p.status==='partial'));
+    if(skipEntries.length===0) return false;
+    return skipEntries.every(([li])=>!!shift.doneFlags[`prev-${station.key}-${itemId}-pl-${li}`]);
+  };
+  const carriedItems=allCarriedItems.filter(it=>!isCarryoverDone(it.id));
+  const carriedOnlyItems=allCarriedOnlyItems.filter(it=>!isCarryoverDone(it.id));
+  const carriedDoneItems=[
+    ...allCarriedItems.filter(it=>isCarryoverDone(it.id)),
+    ...allCarriedOnlyItems.filter(it=>isCarryoverDone(it.id)),
+  ];
+  // Обычные невыполненные — без карryover-позиций (они в "Прошлая смена")
+  const todoRegular=todoItems; // все позиции сегодняшней техкарты — в "Надо выполнить"
   const filterItems=list=>{
     if(!search.trim()) return list;
     const q=search.trim().toLowerCase();
@@ -7698,24 +7748,43 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
   };
   const visibleItems=filterItems(statusTab==='todo'?todoItems:doneItems);
 
-  const renderItem=(item,cleanSkip=false,onlyLinesForItem=null,carriedLineIndices=null)=>{
+  const renderItem=(item,prevLineData=null)=>{
     const sinking=sinkingIds.has(item.id);
     const settled=settledIds.has(item.id);
-    const ik=`${station.key}-${item.id}`;
-    const shiftForCard=cleanSkip&&Object.keys(shift.skipReasons||{}).some(k=>k.startsWith(ik))
-      ? {...shift,skipReasons:Object.fromEntries(Object.entries(shift.skipReasons||{}).filter(([k])=>!k.startsWith(ik))),
-                  skipTimes:Object.fromEntries(Object.entries(shift.skipTimes||{}).filter(([k])=>!k.startsWith(ik)))}
-      : shift;
     return e('div',{
       key:item.id,
       className:'item-wrapper'+(sinking?' sinking':'')+(settled?' settled':'')
-    }, e(ItemCard,{item,stationKey:station.key,shift:shiftForCard,onShiftChange,shopEmployees,
-                   onlyLineIndices:onlyLinesForItem,carriedLineIndices}));
+    }, e(ItemCard,{item,stationKey:station.key,shift,onShiftChange,shopEmployees,prevLineData}));
   };
   const renderCarried=(item)=>{
-    return renderItem(item,true,null,carriedLinesMap[String(item.id)]||null);
+    const lineMap=prevItemDataMap[String(item.id)]||{};
+    return e('div',{key:item.id,className:'item-wrapper'},
+      e(ItemCard,{item,stationKey:station.key,shift,onShiftChange,shopEmployees,prevLineData:lineMap,keyPrefix:'prev-'}));
   };
-  const renderRegular=(item)=>renderItem(item,false,null,null);
+  // Для позиций переноса без сегодняшней техкарты — синтетические packLines из prevSkips
+  const renderCarriedOnly=(synItem)=>{
+    const lineMap=prevItemDataMap[String(synItem.id)]||{};
+    const synPackLines=Object.entries(lineMap)
+      .filter(([k])=>k!=='__itemLevel')
+      .sort(([a],[b])=>Number(a)-Number(b))
+      .map(([,p])=>({volume:p.volume||'',packName:p.packName||'',destination:'',fromWarehouse:0,qty:p.planQty||0}));
+    return e('div',{key:synItem.id,className:'item-wrapper'},
+      e(ItemCard,{item:synItem,stationKey:station.key,shift,onShiftChange,shopEmployees,
+        prevLineData:lineMap,overridePackLines:synPackLines.length>0?synPackLines:null,keyPrefix:'prev-'}));
+  };
+  const renderCarriedDone=(item)=>{
+    const lineMap=prevItemDataMap[String(item.id)]||{};
+    const synPackLines=Object.entries(lineMap)
+      .filter(([k])=>k!=='__itemLevel')
+      .sort(([a],[b])=>Number(a)-Number(b))
+      .map(([,p])=>({volume:p.volume||'',packName:p.packName||'',destination:'',fromWarehouse:0,qty:p.planQty||0}));
+    const hasOverride=synPackLines.length>0&&!todayItemIds.has(String(item.id));
+    return e('div',{key:item.id,className:'item-wrapper'},
+      e(ItemCard,{item,stationKey:station.key,shift,onShiftChange,shopEmployees,
+        prevLineData:lineMap,overridePackLines:hasOverride?synPackLines:null,keyPrefix:'prev-'}));
+  };
+  const renderRegular=(item)=>renderItem(item,null);
+  const totalCarried=carriedItems.length+carriedOnlyItems.length;
 
   return e('div',{className:'kitchen-content'},
     e('div',{className:'kitchen-header'},
@@ -7740,44 +7809,45 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
     ),
     // Status tabs
     e('div',{className:'station-tabs',style:{marginBottom:4}},
+      totalCarried+carriedDoneItems.length>0 && e('button',{
+        className:'station-tab'+(statusTab==='prev'?' active':''),
+        onClick:()=>setStatusTab('prev'),
+        style:{color:statusTab==='prev'?'#92400E':'',background:statusTab==='prev'?'#FEF3C7':''}
+      },`⏮ Прошлая смена (${totalCarried})`),
       e('button',{
         className:'station-tab'+(statusTab==='todo'?' active':''),
         onClick:()=>setStatusTab('todo'),
         style:{color:statusTab==='todo'?'var(--warn)':''}
-      },`Надо выполнить (${todoItems.length})`),
+      },`Надо выполнить (${todoRegular.length})`),
       e('button',{
         className:'station-tab'+(statusTab==='done'?' active':''),
         onClick:()=>setStatusTab('done'),
         style:{color:statusTab==='done'?'var(--ok)':''}
-      },`Выполнено (${doneItems.length})`)
+      },`Выполнено (${doneItems.length+carriedDoneItems.length})`)
     ),
-    items.length===0
+    items.length===0&&totalCarried===0
       ? e('div',{className:'empty-state'},'Нет заданий для этой станции')
       : e(React.Fragment,null,
-          // Блок переноса из прошлой смены (только во вкладке "надо выполнить")
-          statusTab==='todo' && carriedItems.length>0 && e('div',{style:{marginBottom:16}},
-            e('div',{style:{
-              display:'flex',alignItems:'center',gap:8,
-              padding:'8px 14px',marginBottom:8,borderRadius:10,
-              background:'#FEF3C7',border:'1.5px solid #F59E0B',
-            }},
-              e('span',{style:{fontSize:14,fontWeight:700,color:'#92400E'}},'⏮ Задание прошлой смены'),
-              e('span',{style:{fontSize:13,color:'#92400E',opacity:0.7}},`${carriedItems.length} позиций`)
-            ),
-            e('div',null,...filterItems(carriedItems).map(renderCarried))
-          ),
-          // Обычные незавершённые задания
+          // Надо выполнить — только сегодняшние позиции
           statusTab==='todo' && e('div',null,
-            filterItems(todoRegular).length===0 && carriedItems.length===0
+            filterItems(todoRegular).length===0
               ? e('div',{className:'empty-state',style:{marginTop:40}},'Все заготовки выполнены ✓')
-              : filterItems(todoRegular).length===0
-                ? (search.trim()?e('div',{className:'empty-state',style:{marginTop:20}},'Ничего не найдено'):null)
-                : e('div',null,...filterItems(todoRegular).map(renderRegular))
+              : e('div',null,...filterItems(todoRegular).map(renderRegular))
           ),
-          // Выполненные
-          statusTab==='done' && (filterItems(doneItems).length===0
+          // Прошлая смена — карryover-позиции (невыполненные)
+          statusTab==='prev' && e('div',null,
+            totalCarried===0
+              ? e('div',{className:'empty-state',style:{marginTop:40}},'Все задания прошлой смены выполнены ✓')
+              : e('div',null,
+                  ...filterItems(carriedItems).map(renderCarried),
+                  ...filterItems(carriedOnlyItems).map(renderCarriedOnly))
+          ),
+          // Выполненные — и сегодняшние, и карryover
+          statusTab==='done' && (doneItems.length+carriedDoneItems.length===0
             ? e('div',{className:'empty-state',style:{marginTop:40}},'Ещё ничего не выполнено')
-            : e('div',null,...filterItems(doneItems).map(renderItem)))
+            : e('div',null,
+                ...filterItems(doneItems).map(renderItem),
+                ...filterItems(carriedDoneItems).map(renderCarriedDone)))
         ),
     showScrollTop && e('button',{
       className:'scroll-top-btn',
@@ -7970,14 +8040,14 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
                 const prev=(empTimeline[eid]||[]).filter(t=>t<ldat);
                 const prevMs=prev.length>0?new Date(prev[prev.length-1]).getTime():startDate.getTime();
                 durationMin=Math.round((doneMs-prevMs)/60000);
-                if(durationMin>0&&qty>0)minPerPack=+(qty/durationMin).toFixed(1);
+                if(durationMin>0&&factQty>0)minPerPack=+(factQty/durationMin).toFixed(1);
               }
               const skipReason=(s.skipReasons||{})[lk]||null;
               const skipAt=skipReason?(s.skipTimes||{})[lk]||null:null;
-              const isCarriedOver=(s.prevSkips||[]).some(p=>p.stationKey===station.key&&String(p.itemId)===String(item.id)&&(p.lineIdx==null||p.lineIdx===li));
+              // Строка текущей смены
               rows.push({date:dk,shop:shopName,station:station.name,name:item.name,
                 packName:l.packName||'',volume:l.volume||'',planQty:qty,factQty,pct:qty>0?Math.round(factQty/qty*100):0,
-                done:isDone,employee:empName,durationMin,minPerPack,doneAt,skipReason,skipAt,isCarriedOver});
+                done:isDone,employee:empName,durationMin,minPerPack,doneAt,skipReason,skipAt,isCarriedOver:false});
             });
           } else {
             const isDone=!!(s.doneFlags||{})[ik];
@@ -7994,15 +8064,58 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
               const prev=(empTimeline[eid]||[]).filter(t=>t<idat);
               const prevMs=prev.length>0?new Date(prev[prev.length-1]).getTime():startDate.getTime();
               durationMin=Math.round((doneMs-prevMs)/60000);
-              if(durationMin>0&&qty>0)minPerPack=+(qty/durationMin).toFixed(1);
+              if(durationMin>0&&factQty>0)minPerPack=+(factQty/durationMin).toFixed(1);
             }
             const skipReason=(s.skipReasons||{})[ik]||null;
             const skipAt=skipReason?(s.skipTimes||{})[ik]||null:null;
-            const isCarriedOver=(s.prevSkips||[]).some(p=>p.stationKey===station.key&&String(p.itemId)===String(item.id)&&p.lineIdx==null);
             rows.push({date:dk,shop:shopName,station:station.name,name:item.name,
               packName:'',volume:'',planQty:qty,factQty,pct:qty>0?Math.round(factQty/qty*100):0,
-              done:isDone,employee:empName,durationMin,minPerPack,doneAt,skipReason,skipAt,isCarriedOver});
+              done:isDone,employee:empName,durationMin,minPerPack,doneAt,skipReason,skipAt,isCarriedOver:false});
           }
+        });
+
+        // Отдельный проход: строки переноса из вчерашней смены
+        const todayItemIdSet=new Set(station.items.map(it=>String(it.id)));
+        const seenCarryover=new Set();
+        (s.prevSkips||[]).filter(p=>p.stationKey===station.key).forEach(p=>{
+          const ck=`${p.itemId}|${p.lineIdx??'null'}`;
+          if(seenCarryover.has(ck)) return;
+          seenCarryover.add(ck);
+          const itemName=station.items.find(it=>String(it.id)===String(p.itemId))?.name||p.itemName||`ID #${p.itemId}`;
+          const itemPls=(s.itemPackLines||{})[p.itemId];
+          const packLine=p.lineIdx!=null&&itemPls?itemPls[p.lineIdx]:null;
+          const planQty=packLine?(Number(packLine.qty)||0)+(Number(packLine.fromWarehouse)||0):(p.planQty||0);
+          const yFact=p.yesterdayFact!=null?Number(p.yesterdayFact):null;
+          // Показываем только строки с реальной нехваткой (есть причина нехватки)
+          if(p.status!=='skipped'&&p.status!=='partial') return;
+          // Если позиция есть и в сегодняшней техкарте — строка переноса всегда "⏮ Перенос",
+          // выполнение сегодня отражается только в строке из основного цикла.
+          // Если позиции нет в сегодняшней техкарте — читаем doneFlags (карryover-only item).
+          // Карryover-позиции сохраняются с префиксом prev-, читаем оттуда
+          const clk=p.lineIdx!=null?`prev-${p.stationKey}-${p.itemId}-pl-${p.lineIdx}`:`prev-${p.stationKey}-${p.itemId}`;
+          const cDone=!!(s.doneFlags||{})[clk];
+          const cEid=(s.doneBy||{})[clk]?.[0];
+          const cEmpName=cEid?(allEmployees.find(x=>x.id===cEid)?.name||cEid):'—';
+          const cFv=parseFloat((s.facts||{})[clk]);
+          // Для переноса дефолтный факт = plan − yesterdayFact (остаток), а не полный план
+          const effectivePlanQty=yFact!=null?Math.max(0,planQty-yFact):planQty;
+          const cFactQty=cDone?(isNaN(cFv)?effectivePlanQty:cFv):(isNaN(cFv)?0:cFv);
+          const cDat=(s.doneTimes||{})[clk]||null;
+          let cDurationMin=null,cMinPerPack=null;
+          if(cDone&&cDat&&cEid){
+            const doneMs=new Date(cDat).getTime();
+            const prev=(empTimeline[cEid]||[]).filter(t=>t<cDat);
+            const prevMs=prev.length>0?new Date(prev[prev.length-1]).getTime():startDate.getTime();
+            cDurationMin=Math.round((doneMs-prevMs)/60000);
+            if(cDurationMin>0&&cFactQty>0)cMinPerPack=+(cFactQty/cDurationMin).toFixed(1);
+          }
+          rows.push({date:dk,shop:shopName,station:station.name,name:itemName,
+            packName:packLine?.packName||'',volume:packLine?.volume||'',
+            planQty,effectivePlanQty,yesterdayFact:yFact,factQty:cDone?cFactQty:(yFact??0),
+            pct:planQty>0?(cDone?Math.round(cFactQty/planQty*100):(yFact!=null?Math.round(yFact/planQty*100):0)):0,
+            done:cDone,employee:cEmpName,
+            durationMin:cDurationMin,minPerPack:cMinPerPack,doneAt:cDat,
+            skipReason:p.skipReason,skipAt:p.skipAt,isCarriedOver:true});
         });
       });
     };
@@ -8015,7 +8128,7 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
   const shops=useMemo(()=>[...new Set(allRows.map(r=>r.shop))].sort(),[allRows]);
   const stations=useMemo(()=>[...new Set(allRows.filter(r=>!filterShop||r.shop===filterShop).map(r=>r.station))].sort(),[allRows,filterShop]);
   const filtered=useMemo(()=>{
-    let rows=[...allRows];
+    let rows=allRows.filter(r=>!r.isCarriedOver); // переносы — в отдельной секции ниже
     if(filterShop) rows=rows.filter(r=>r.shop===filterShop);
     if(filterText) rows=rows.filter(r=>r.name.toLowerCase().includes(filterText.toLowerCase())||r.station.toLowerCase().includes(filterText.toLowerCase()));
     if(filterStation) rows=rows.filter(r=>r.station===filterStation);
@@ -8023,12 +8136,6 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
     if(filterStatus==='todo') rows=rows.filter(r=>!r.done&&!r.skipReason);
     if(filterStatus==='delay') rows=rows.filter(r=>!!r.skipReason&&!r.done);
     if(filterEmployee) rows=rows.filter(r=>r.employee.includes(filterEmployee));
-    // Перенесённые невыполненные — всегда вверху
-    if(!sortCol) rows.sort((a,b)=>{
-      const aCarried=a.isCarriedOver&&!a.done?1:0;
-      const bCarried=b.isCarriedOver&&!b.done?1:0;
-      return bCarried-aCarried;
-    });
     if(sortCol){
       rows.sort((a,b)=>{
         let av=a[sortCol],bv=b[sortCol];
@@ -8116,7 +8223,7 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
       stationSummary.map(s=>{
         const ratio=s.plan>0?s.fact/s.plan:0;
         const color=ratio>=0.95?'var(--ok)':ratio>=0.85?'var(--warn)':'var(--danger)';
-        const skipped=allRows.filter(r=>r.station===s.name&&r.skipReason&&!r.done);
+        const skipped=allRows.filter(r=>r.station===s.name&&r.skipReason&&!r.done&&!r.isCarriedOver);
         return e('div',{key:s.name,className:'progress-row'},
           e('div',{className:'progress-row-top'},
             e('span',null,s.name),
@@ -8130,7 +8237,7 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
             skipped.map((r,i)=>e('div',{key:i,style:{
               display:'flex',alignItems:'center',gap:8,
               padding:'4px 10px',borderRadius:6,
-              background:'#FEF3C7',fontSize:12,color:'#92400E'
+              background:'var(--danger-bg)',fontSize:12,color:'var(--danger)'
             }},
               e('span',{style:{fontWeight:700}},'⚠'),
               e('span',{style:{flex:1}},r.name+(r.packName?' · '+r.packName:'')),
@@ -8174,76 +8281,24 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
           onClick:()=>{setFilterText('');setFilterShop('');setFilterStation('');setFilterStatus('');setFilterEmployee('');}},
           '✕ Сбросить')
       ),
-      e('div',{style:{overflowX:'auto'}},
-        e('table',{className:'report-table'},
-          e('thead',null,e('tr',null,
-            periodMode!=='today' && thSort('date','Дата'),
-            thSort('shop','Цех'),
-            thSort('station','Станция'),
-            thSort('name','Заготовка'),
-            thSort('volume','Объём'),
-            thSort('packName','Упаковка'),
-            thSort('planQty','Кол-во'),
-            thSort('done','Статус'),
-            thSort('durationMin','Время'),
-            thSort('minPerPack','Уп/мин'),
-            thSort('employee','Сотрудник')
-          )),
-          e('tbody',null,
-            filtered.map((r,idx)=>{
-              const bc=r.done?'badge-ok':'badge-danger';
-              const rowBg=r.isCarriedOver&&!r.done?'#FFFBEB':'';
-              const statusCell=r.isCarriedOver
-                ? (r.done
-                    ? e('span',{className:'badge badge-ok'},'✓ Готово')
-                    : e('div',null,
-                        e('span',{className:'badge',style:{background:'#FEF3C7',color:'#92400E',border:'1px solid #F59E0B'}},'⏮ Перенос'),
-                        r.skipReason&&e('div',{style:{fontSize:11,color:'#92400E',marginTop:2}},
-                          SKIP_LABELS[r.skipReason]+(r.skipAt?' · '+new Date(r.skipAt).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):''))))
-                : (r.skipReason&&!r.done
-                    ?e('div',null,
-                        e('span',{className:'badge',style:{background:'#FEF3C7',color:'#92400E',border:'1px solid #F59E0B'}},'⚠ Задержка'),
-                        e('div',{style:{fontSize:11,color:'#92400E',marginTop:2}},
-                          SKIP_LABELS[r.skipReason]+(r.skipAt?' · '+new Date(r.skipAt).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):''))
-                      )
-                    :e('span',{className:'badge '+bc},r.done?'✓ Готово':'Не готово'));
-              return e('tr',{key:idx,style:{background:rowBg}},
-                periodMode!=='today'&&e('td',null,formatDateRu(r.date)),
-                e('td',null,r.shop),
-                e('td',null,r.station.replace(r.shop+' / ','')),
-                e('td',null,r.isCarriedOver&&!r.done?e('span',null,'⏮ ',r.name):r.name),
-                e('td',null,r.volume||'—'),
-                e('td',null,r.packName||'—'),
-                e('td',{className:'num'},r.planQty||'—'),
-                e('td',null,statusCell),
-                e('td',{className:'num',style:{whiteSpace:'nowrap'}},
-                  r.durationMin!=null?r.durationMin+' мин':'—'),
-                e('td',{className:'num'},
-                  r.minPerPack!=null?r.minPerPack+' уп/мин':'—'),
-                e('td',null,r.employee)
-              );
-            })
-          )
-        )
-      ),
-      // Заготовки прошлой смены
+      // Заготовки прошлой смены — вверху
       (()=>{
         const carriedRows=allRows.filter(r=>r.isCarriedOver);
         if(!carriedRows.length) return null;
         const carriedFiltered=carriedRows.filter(r=>{
           if(filterStatus==='done') return r.done;
           if(filterStatus==='pending') return !r.done;
-          if(filterStatus==='delay') return r.skipReason&&!r.done;
+          if(filterStatus==='delay') return r.skipReason&&!r.done&&!r.isCarriedOver;
           return true;
         }).filter(r=>!filterShop||r.shop===filterShop);
         if(!carriedFiltered.length) return null;
-        return e('div',{style:{marginTop:24}},
+        return e('div',{style:{marginBottom:24}},
           e('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:8}},
             e('span',{style:{fontSize:14,fontWeight:700,color:'#92400E'}},'⏮ Заготовки прошлой смены'),
             e('span',{className:'badge',style:{background:'#FEF3C7',color:'#92400E',border:'1px solid #F59E0B'}},carriedFiltered.length)
           ),
-          e('div',{className:'table-wrap'},
-            e('table',{className:'data-table'},
+          e('div',{style:{overflowX:'auto'}},
+            e('table',{className:'report-table'},
               e('thead',null,
                 e('tr',null,
                   periodMode!=='today'&&e('th',null,'Дата'),
@@ -8263,7 +8318,7 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
                     e('td',null,r.name),
                     e('td',null,r.volume||'—'),
                     e('td',null,r.packName||'—'),
-                    e('td',{className:'num'},r.planQty||'—'),
+                    e('td',{className:'num'},r.done?(r.factQty!=null&&r.factQty!==0?r.factQty:'—'):(r.effectivePlanQty!=null?r.effectivePlanQty:'—')),
                     e('td',null,e('span',{className:'badge '+bc},r.done?'✓ Готово':'Не готово')),
                     e('td',{className:'num',style:{whiteSpace:'nowrap'}},r.durationMin!=null?r.durationMin+' мин':'—'),
                     e('td',{className:'num'},r.minPerPack!=null?r.minPerPack+' уп/мин':'—'),
@@ -8274,7 +8329,52 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
             )
           )
         );
-      })()
+      })(),
+      e('div',{style:{overflowX:'auto'}},
+        e('table',{className:'report-table'},
+          e('thead',null,e('tr',null,
+            periodMode!=='today' && thSort('date','Дата'),
+            thSort('shop','Цех'),
+            thSort('station','Станция'),
+            thSort('name','Заготовка'),
+            thSort('volume','Объём'),
+            thSort('packName','Упаковка'),
+            thSort('planQty','Кол-во'),
+            thSort('done','Статус'),
+            thSort('durationMin','Время'),
+            thSort('minPerPack','Уп/мин'),
+            thSort('employee','Сотрудник')
+          )),
+          e('tbody',null,
+            filtered.map((r,idx)=>{
+              const bc=r.done?'badge-ok':'badge-danger';
+              const rowBg=r.skipReason&&!r.done?'var(--danger-bg)':'';
+              const statusCell=r.skipReason&&!r.done
+                ? e('div',null,
+                    e('span',{className:'badge badge-danger'},'⚠ Нехватка'),
+                    e('div',{style:{fontSize:11,color:'var(--danger)',marginTop:2}},
+                      SKIP_LABELS[r.skipReason]+(r.skipAt?' · '+new Date(r.skipAt).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):''))
+                  )
+                : e('span',{className:'badge '+bc},r.done?'✓ Готово':'Не готово');
+              return e('tr',{key:idx,style:{background:rowBg}},
+                periodMode!=='today'&&e('td',null,formatDateRu(r.date)),
+                e('td',null,r.shop),
+                e('td',null,r.station.replace(r.shop+' / ','')),
+                e('td',null,r.name),
+                e('td',null,r.volume||'—'),
+                e('td',null,r.packName||'—'),
+                e('td',{className:'num'},r.done&&r.factQty!=null?r.factQty:(r.planQty||'—')),
+                e('td',null,statusCell),
+                e('td',{className:'num',style:{whiteSpace:'nowrap'}},
+                  r.durationMin!=null?r.durationMin+' мин':'—'),
+                e('td',{className:'num'},
+                  r.minPerPack!=null?r.minPerPack+' уп/мин':'—'),
+                e('td',null,r.employee)
+              );
+            })
+          )
+        )
+      )
     )
   );
 }
@@ -11066,6 +11166,11 @@ function App() {
         // Игнорируем собственные апдейты (clientId совпадает с нашим)
         if(msg.type==='shift_updated' && msg.date===shift.date && msg.clientId!==MY_CLIENT_ID){
           setShift(msg.shift);
+          // Обновляем техкарты если изменились
+          if(msg.shift.techcardId){ loadTechCard(msg.shift.techcardId).then(tc=>{if(tc)setActiveTcEE(tc);}); }
+          else setActiveTcEE(null);
+          if(msg.shift.udTechcardId){ loadTechCard(msg.shift.udTechcardId).then(tc=>{if(tc)setActiveTcUD(tc);}); }
+          else setActiveTcUD(null);
         }
       } catch(_){}
     };

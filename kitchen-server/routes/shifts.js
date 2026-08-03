@@ -31,25 +31,117 @@ async function buildShift(date) {
     }
   }
 
-  // Переносы из предыдущего дня: позиции со skip_reason
+  // Переносы из предыдущего дня: расширенная логика
   const prevDate = getPrevDate(date);
-  const { rows: prevSkipRows } = prevDate
-    ? await pool.query(
-        'SELECT station_key, item_id, skip_reason, skip_at FROM shift_item_status WHERE shift_date=$1 AND skip_reason IS NOT NULL AND done=0',
-        [prevDate]
-      )
-    : { rows: [] };
-  const prevSkips = prevSkipRows.map(r => {
-    // Pack-line skip: station_key is `${actualStationKey}-${itemId}-pl`, item_id is line index
-    if (r.station_key.endsWith('-pl')) {
-      const parts = r.station_key.split('-');
-      parts.pop(); // 'pl'
-      const itemId = parts.pop();
-      const stationKey = parts.join('-');
-      return { stationKey, itemId, lineIdx: Number(r.item_id), skipReason: r.skip_reason, skipAt: r.skip_at };
+  let prevSkips = [];
+  if (prevDate) {
+    const { rows: [prevShiftRow] } = await pool.query(
+      'SELECT techcard_id, ud_techcard_id FROM shifts WHERE date=$1', [prevDate]
+    );
+
+    const prevTcIds = prevShiftRow ? [prevShiftRow.techcard_id, prevShiftRow.ud_techcard_id].filter(Boolean) : [];
+    const planQtyMap = {}; // itemId|lineIdx → qty (for skip-check)
+    const planLineMap = {}; // itemId|lineIdx → {qty, volume, packName}
+    if (prevTcIds.length > 0) {
+      const ph = prevTcIds.map((_,i) => `$${i+1}`).join(',');
+      const { rows: planRows } = await pool.query(
+        `SELECT item_id, line_idx, qty, volume, pack_name FROM techcard_pack_lines WHERE techcard_id IN (${ph}) ORDER BY item_id, line_idx`,
+        prevTcIds
+      );
+      for (const r of planRows) {
+        const k = `${r.item_id}|${r.line_idx}`;
+        planQtyMap[k] = r.qty;
+        planLineMap[k] = { qty: r.qty, volume: r.volume || '', packName: r.pack_name || '' };
+      }
     }
-    return { stationKey: r.station_key, itemId: r.item_id, lineIdx: null, skipReason: r.skip_reason, skipAt: r.skip_at };
-  });
+
+    const [{ rows: prevAllStatusRows }, { rows: prevFactRows }] = await Promise.all([
+      pool.query(
+        'SELECT station_key, item_id, done, skip_reason, skip_at FROM shift_item_status WHERE shift_date=$1',
+        [prevDate]
+      ),
+      pool.query(
+        'SELECT station_key, item_id, line_idx, value FROM shift_facts_n WHERE shift_date=$1',
+        [prevDate]
+      ),
+    ]);
+
+    // Факты вчера: stationKey|itemId|lineIdx → value
+    const prevFactMap = {};
+    for (const r of prevFactRows) {
+      prevFactMap[`${r.station_key}|${r.item_id}|${r.line_idx}`] = r.value;
+    }
+
+    // Разбираем статусы на pack-line и item-level
+    const packLineRows = [];
+    const itemLevelRows = [];
+    for (const r of prevAllStatusRows) {
+      if (r.station_key.endsWith('-pl')) {
+        const parts = r.station_key.split('-');
+        parts.pop(); // 'pl'
+        const itemId = parts.pop();
+        const stationKey = parts.join('-');
+        packLineRows.push({ stationKey, itemId, lineIdx: Number(r.item_id), done: r.done === 1, skipReason: r.skip_reason, skipAt: r.skip_at });
+      } else {
+        itemLevelRows.push({ stationKey: r.station_key, itemId: r.item_id, done: r.done === 1, skipReason: r.skip_reason, skipAt: r.skip_at });
+      }
+    }
+
+    // Находим "проблемные позиции" — те, у которых хоть одна упаковка со skip_reason
+    // и при этом факт < план (или факт не указан). Если done=1 и fact >= plan — не переносим.
+    const carriedKeys = new Set();
+    for (const r of packLineRows) {
+      if (!r.skipReason) continue;
+      if (r.done) {
+        const fact = prevFactMap[`${r.stationKey}|${r.itemId}|${r.lineIdx}`] ?? null;
+        const plan = planQtyMap[`${r.itemId}|${r.lineIdx}`] ?? null;
+        if (fact !== null && plan !== null && Number(fact) >= Number(plan)) continue; // выполнено полностью
+      }
+      carriedKeys.add(`${r.stationKey}|${r.itemId}`);
+    }
+    // Item-level: только явно пропущенные (done=0, skip_reason)
+    for (const r of itemLevelRows) {
+      if (r.skipReason && !r.done) carriedKeys.add(`${r.stationKey}|${r.itemId}`);
+    }
+
+    // Имена позиций для carryover
+    const prevItemIds = [...new Set(packLineRows.map(r => r.itemId))];
+    const itemNameMap = {};
+    if (prevItemIds.length > 0) {
+      const iph = prevItemIds.map((_,i) => `$${i+1}`).join(',');
+      const { rows: nameRows } = await pool.query(
+        `SELECT item_id, name FROM items WHERE item_id IN (${iph})`, prevItemIds
+      );
+      for (const r of nameRows) itemNameMap[r.item_id] = r.name;
+    }
+
+    // Для каждой проблемной позиции включаем ВСЕ её pack-line строки со статусами
+    for (const r of packLineRows) {
+      const key = `${r.stationKey}|${r.itemId}`;
+      if (!carriedKeys.has(key)) continue;
+      let status;
+      if (r.skipReason) {
+        status = r.done ? 'partial' : 'skipped';
+      } else {
+        status = r.done ? 'done' : 'pending';
+      }
+      const yesterdayFact = prevFactMap[`${r.stationKey}|${r.itemId}|${r.lineIdx}`] ?? null;
+      const ld = planLineMap[`${r.itemId}|${r.lineIdx}`] || {};
+      prevSkips.push({
+        stationKey: r.stationKey, itemId: r.itemId, lineIdx: r.lineIdx,
+        status, skipReason: r.skipReason, skipAt: r.skipAt, yesterdayFact,
+        itemName: itemNameMap[r.itemId] || null,
+        volume: ld.volume || null, packName: ld.packName || null, planQty: ld.qty ?? null,
+      });
+    }
+
+    // Item-level переносы (позиции без pack lines)
+    for (const r of itemLevelRows) {
+      if (r.skipReason && !r.done) {
+        prevSkips.push({ stationKey: r.stationKey, itemId: r.itemId, lineIdx: null, status: 'skipped', skipReason: r.skipReason, skipAt: r.skipAt, yesterdayFact: null });
+      }
+    }
+  }
 
   // Если для смены нет времён начала станций — берём глобальные настройки
   let stationStartTimes = {};
