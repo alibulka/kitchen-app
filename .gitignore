@@ -3,6 +3,12 @@ kitchen-server/uploads/
 kitchen-server/kitchen.db
 kitchen-server/kitchen.db-shm
 kitchen-server/kitchen.db-wal
-.claude/
-*.env
+node_modules/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.local
 .env*
+uploads/
+.claude/
