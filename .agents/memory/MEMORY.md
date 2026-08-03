@@ -1,0 +1,2 @@
+- [Дубли кода: корень vs kitchen-server](repo-dual-copies.md) — актуален только kitchen-server/; merge с Mac может переключить запуск на старую корневую копию.
+- [Password protected деплой](password-protected-deployment.md) — парольный режим публикации вешает fetch на телефонах; держать Public.
