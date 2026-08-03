@@ -7138,8 +7138,11 @@ function SvgSort({dir='none',size=12}) {
 // PACK TABLE
 // ============================================================
 function PackTable({packLines, facts, onFactChange, itemKey,
-                    doneFlags, doneBy, onLineEmp, shopEmployees}) {
-  // Сортировка: группируем по типу упаковки, внутри группы — по возрастанию объёма
+                    doneFlags, doneBy, onLineEmp, shopEmployees,
+                    skipReasons, skipTimes, onLineSkip, onLineClearSkip,
+                    prevLineData, hideCompanions}) {
+  const [pickerFor, setPickerFor] = useState(null);
+  const [pendingEmp, setPendingEmp] = useState(null); // {lineIdx, empId} — ждёт причину
   const parseVolume = v => parseFloat((v||'0').replace(',','.')) || 0;
   const packOrder = [...new Set(packLines.map(l => l.packName||''))];
   const sortedLines = [...packLines].sort((a,b) => {
@@ -7147,14 +7150,13 @@ function PackTable({packLines, facts, onFactChange, itemKey,
     if (pi !== 0) return pi;
     return parseVolume(a.volume) - parseVolume(b.volume);
   });
-  // Сохраняем маппинг оригинальных индексов для корректной работы ключей facts/doneFlags
   const origIndex = sortedLines.map(l => packLines.indexOf(l));
 
   const hasDestination = packLines.some(l => l.destination);
-  // Показываем бейдж ЕЕ/УД когда хотя бы у одной строки есть source (данные из техкарты)
   const hasSource = packLines.some(l => l.source);
   const hasEmps = shopEmployees && shopEmployees.length > 0 && onLineEmp;
-  const colSpan = 4 + (hasDestination ? 1 : 0) + (hasSource ? 1 : 0);
+  const hasYesterday = !!(prevLineData && Object.values(prevLineData).some(p => p.yesterdayFact != null && p.yesterdayFact !== 0));
+  const colSpan = 5 + (hasDestination ? 1 : 0) + (hasSource ? 1 : 0) + (hasYesterday ? 1 : 0);
 
   return e('div',{style:{overflowX:'auto',borderRadius:10,overflow:'hidden'}},
     e('table',{className:'pack-table'},
@@ -7165,7 +7167,9 @@ function PackTable({packLines, facts, onFactChange, itemKey,
           hasDestination && e('th',null,'Назначение'),
           hasSource && e('th',null,''),
           e('th',{className:'num'},'План'),
+          hasYesterday && e('th',{className:'num',style:{color:'#92400E',fontSize:11}},'Вчера'),
           e('th',{className:'num'},'Факт'),
+          onLineSkip && e('th',null,''),
         )
       ),
       e('tbody',null,
@@ -7173,12 +7177,37 @@ function PackTable({packLines, facts, onFactChange, itemKey,
           const i=origIndex[si];
           const k=`${itemKey}-pl-${i}`;
           const planQty=Number(line.qty)||0;
-          const factVal=facts[k]!==undefined?facts[k]:planQty;
           const lineDone=!!(doneFlags&&doneFlags[k]);
           const lineEmpIds=(doneBy&&doneBy[k])||[];
+          const lineSkip=(skipReasons&&skipReasons[k])||null;
+          const lineSkipAt=lineSkip&&skipTimes?skipTimes[k]:null;
+          // Данные вчерашнего дня для этой строки
+          const prevLine=prevLineData?prevLineData[i]:null;
+          // done вчера, но факт < план → показываем как partial (нужно дофасовать сегодня)
+          const yesterdayFactNum=prevLine?.yesterdayFact!=null?Number(prevLine.yesterdayFact):null;
+          const isDoneYesterdayFull=prevLine?.status==='done'&&(yesterdayFactNum===null||yesterdayFactNum>=planQty);
+          const isDoneYesterdayShort=prevLine?.status==='done'&&yesterdayFactNum!==null&&yesterdayFactNum<planQty;
+          const isDoneYesterday=isDoneYesterdayFull;
+          const isPartialYesterday=prevLine?.status==='partial'||isDoneYesterdayShort;
+          const isSkippedYesterday=prevLine?.status==='skipped';
+          // companion = строка переноса без причины нехватки → нередактируемая
+          const isCarryoverCompanion=!!prevLine&&!prevLine.skipReason&&!isSkippedYesterday&&!isPartialYesterday;
+          const defaultFact=(yesterdayFactNum!=null&&yesterdayFactNum<planQty)?Math.max(0,planQty-yesterdayFactNum):planQty;
+          const factVal=facts[k]!==undefined?facts[k]:defaultFact;
+          const rowBg=isDoneYesterday?'var(--ok-bg)':lineDone?'var(--ok-bg)':lineSkip?'var(--danger-bg)':(isSkippedYesterday||isPartialYesterday)?'#FFFBEB':'var(--bg)';
           return [
-            e('tr',{key:`r-${i}`,style:{background:lineDone?'var(--ok-bg)':''}},
-              e('td',null,line.volume||'—'),
+            e('tr',{key:`r-${i}`,style:{background:rowBg}},
+              e('td',null,
+                isDoneYesterday
+                  ? e('span',{style:{display:'flex',alignItems:'center',gap:4}},
+                      e('span',{style:{fontSize:11,color:'var(--ok)',fontWeight:700}},'✓'),
+                      line.volume||'—')
+                  : (isSkippedYesterday||isPartialYesterday)
+                    ? e('span',{style:{display:'flex',alignItems:'center',gap:4}},
+                        e('span',{style:{fontSize:11,color:'#92400E',fontWeight:700}},'⏮'),
+                        line.volume||'—')
+                    : line.volume||'—'
+              ),
               e('td',null,line.packName||line.pack||'—'),
               hasDestination && e('td',null,line.destination||'—'),
               hasSource && e('td',null,
@@ -7189,17 +7218,67 @@ function PackTable({packLines, facts, onFactChange, itemKey,
                     : null
               ),
               e('td',{className:'num'},e('strong',{style:{fontSize:16}},planQty,' уп')),
+              hasYesterday && e('td',{className:'num',style:{color:'#92400E',fontSize:13}},
+                prevLine?.yesterdayFact!=null
+                  ? (prevLine.yesterdayFact+' уп')
+                  : '—'
+              ),
               e('td',{className:'num'},
-                e('input',{
-                  type:'number',step:1,min:0,
-                  className:'pack-fact-input',
-                  value:factVal,
-                  onFocus:ev=>ev.target.select(),
-                  onChange:ev=>onFactChange(k, ev.target.value)
-                })
+                isDoneYesterday
+                  ? e('span',{style:{color:'var(--ok)',fontWeight:700,fontSize:15}},'✓')
+                  : isCarryoverCompanion
+                    ? e('span',{style:{fontWeight:600,fontSize:15,color:'var(--muted)'}},planQty,' уп')
+                    : e('input',{type:'number',step:1,min:0,className:'pack-fact-input',
+                        value:factVal,onFocus:ev=>ev.target.select(),
+                        onChange:ev=>onFactChange(k,ev.target.value)})
+              ),
+              onLineSkip && !isDoneYesterday && !isCarryoverCompanion && e('td',{style:{whiteSpace:'nowrap'}},
+                lineSkip
+                  ? e('span',{style:{display:'inline-flex',alignItems:'center',gap:4}},
+                      e('span',{style:{fontSize:11,color:'var(--danger)',fontWeight:600}},
+                        '⚠ '+SKIP_LABELS[lineSkip]+(lineSkipAt?' · '+new Date(lineSkipAt).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'')
+                      ),
+                      e('button',{
+                        onClick:ev=>{ev.stopPropagation();onLineClearSkip(k);},
+                        style:{padding:'2px 6px',borderRadius:6,border:'1px solid var(--border)',
+                          background:'transparent',color:'var(--muted)',fontSize:12,cursor:'pointer'}
+                      },'✕')
+                    )
+                  : !lineDone && e('button',{
+                      onClick:ev=>{ev.stopPropagation();setPickerFor(pickerFor===i?null:i);},
+                      title:'Причина невыполнения',
+                      style:{padding:'4px 8px',borderRadius:6,border:'1.5px solid var(--danger)',
+                        background:'transparent',color:'var(--danger)',fontSize:12,fontWeight:700,cursor:'pointer'}
+                    },'⚠')
+              ),
+              (isDoneYesterday||isCarryoverCompanion) && onLineSkip && e('td',null)
+            ),
+            // Причина пропуска вчера (для skipped/partial строк)
+            (isSkippedYesterday||isPartialYesterday) && prevLine.skipReason && e('tr',{key:`prev-reason-${i}`},
+              e('td',{colSpan,style:{padding:'3px 8px 6px',background:'#FEF3C7',fontSize:11,color:'#92400E'}},
+                '⏮ Вчера: '+SKIP_LABELS[prevLine.skipReason]
               )
             ),
-            hasEmps && e('tr',{key:`emp-${i}`},
+            pickerFor===i && e('tr',{key:`picker-${i}`},
+              e('td',{colSpan,style:{padding:'6px 8px',background:'var(--danger-bg)',borderTop:'1px solid var(--danger)'}},
+                e('div',{style:{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}},
+                  e('span',{style:{fontSize:12,color:'var(--danger)',fontWeight:600}},
+                    pendingEmp&&pendingEmp.lineIdx===i?'Укажи причину перед отметкой:':'Причина:'),
+                  ['no_material','no_time'].map(r=>e('button',{key:r,
+                    onClick:()=>{
+                      onLineSkip(k,r);setPickerFor(null);
+                      if(pendingEmp&&pendingEmp.lineIdx===i){onLineEmp(pendingEmp.lineIdx,pendingEmp.empId);setPendingEmp(null);}
+                    },
+                    style:{padding:'5px 12px',borderRadius:7,border:'1.5px solid var(--danger)',
+                      background:'white',color:'var(--danger)',fontSize:12,fontWeight:600,cursor:'pointer'}
+                  },SKIP_LABELS[r])),
+                  e('button',{onClick:()=>{setPickerFor(null);setPendingEmp(null);},
+                    style:{padding:'5px 8px',borderRadius:7,border:'1.5px solid var(--border)',
+                      background:'transparent',color:'var(--muted)',fontSize:12,cursor:'pointer'}},'Отмена')
+                )
+              )
+            ),
+            hasEmps && !isDoneYesterday && !isCarryoverCompanion && e('tr',{key:`emp-${i}`},
               e('td',{colSpan,style:{
                 padding:'4px 8px 6px',
                 background:lineDone?'var(--ok-bg)':'var(--bg)',
@@ -7210,7 +7289,19 @@ function PackTable({packLines, facts, onFactChange, itemKey,
                     const sel=lineEmpIds.includes(emp.id);
                     return e('button',{
                       key:emp.id,
-                      onClick:()=>onLineEmp(i, emp.id),
+                      onClick:()=>{
+                        if(!sel){
+                          const explicitFact=facts[k]!==undefined?Number(facts[k]):null;
+                          const totalPlan=planQty+(Number(line.fromWarehouse)||0);
+                          // Для строки переноса эффективный план = plan − yesterdayFact
+                          const effectivePlan=(isSkippedYesterday||isPartialYesterday)&&yesterdayFactNum!=null
+                            ?Math.max(0,totalPlan-yesterdayFactNum):totalPlan;
+                          if(explicitFact!==null&&explicitFact<effectivePlan&&!lineSkip){
+                            setPickerFor(i);setPendingEmp({lineIdx:i,empId:emp.id});return;
+                          }
+                        }
+                        onLineEmp(i,emp.id);
+                      },
                       style:{
                         display:'flex',alignItems:'center',gap:5,
                         padding:'7px 12px',borderRadius:20,
@@ -7254,12 +7345,53 @@ function EmployeeToggles({employees, selectedIds, onToggle, warn}) {
 // ============================================================
 // ITEM CARD (всегда раскрыта, без инструкций)
 // ============================================================
-function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees}) {
-  const itemKey=`${stationKey}-${item.id}`;
+const SKIP_LABELS={'no_material':'Нет сырья','no_time':'Не успели'};
+
+function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, prevLineData, overridePackLines, keyPrefix}) {
+  const itemKey=`${keyPrefix||''}${stationKey}-${item.id}`;
   const [noEmpWarn,setNoEmpWarn]=useState(false);
+  const [showSkipPicker,setShowSkipPicker]=useState(false);
+  // Item-level skip (only for items without pack lines)
+  const itemSkipReason=(shift.skipReasons||{})[itemKey];
+  const itemSkipAt=(shift.skipTimes||{})[itemKey];
+
+  const doSkip=(reason)=>{
+    const nowIso=new Date().toISOString();
+    onShiftChange(prev=>({
+      ...prev,
+      skipReasons:{...(prev.skipReasons||{}),[itemKey]:reason},
+      skipTimes:{...(prev.skipTimes||{}),[itemKey]:nowIso},
+    }));
+    setShowSkipPicker(false);
+  };
+  const clearSkip=()=>{
+    onShiftChange(prev=>{
+      const nr={...(prev.skipReasons||{})};
+      const nt={...(prev.skipTimes||{})};
+      delete nr[itemKey]; delete nt[itemKey];
+      return {...prev,skipReasons:nr,skipTimes:nt};
+    });
+  };
+  // Pack-line level skip handlers
+  const onLineSkip=(plKey,reason)=>{
+    const nowIso=new Date().toISOString();
+    onShiftChange(prev=>({
+      ...prev,
+      skipReasons:{...(prev.skipReasons||{}),[plKey]:reason},
+      skipTimes:{...(prev.skipTimes||{}),[plKey]:nowIso},
+    }));
+  };
+  const onLineClearSkip=(plKey)=>{
+    onShiftChange(prev=>{
+      const nr={...(prev.skipReasons||{})};
+      const nt={...(prev.skipTimes||{})};
+      delete nr[plKey]; delete nt[plKey];
+      return {...prev,skipReasons:nr,skipTimes:nt};
+    });
+  };
 
   // pack lines: tech card → EXCEL base (only without active techcard) → packPlan fallback
-  const tcLines=(shift.itemPackLines||{})[item.id];
+  const tcLines=overridePackLines||(shift.itemPackLines||{})[item.id];
   const overriddenLines=tcLines
     || (shift.techcardId||shift.udTechcardId ? null : EXCEL_PACK_LINES[item.id])
     || null;
@@ -7268,9 +7400,13 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees}) {
     return [{volume, packName, qty:item.packPlan.qty, destination:'', fromWarehouse:undefined}];
   })() : []);
 
-  // isDone: all pack lines checked (or single flag for items without pack lines)
-  const isDone = packLines.length > 0
-    ? packLines.every((_,i)=>!!shift.doneFlags[`${itemKey}-pl-${i}`])
+  // isDone: для переноса — только не-done-yesterday строки; иначе все
+  const nonDoneYesterdayLines = packLines.length > 0
+    ? packLines.map((_,i)=>i).filter(i=>prevLineData?.[i]?.status !== 'done')
+    : null;
+  const checkLines = nonDoneYesterdayLines?.length > 0 ? nonDoneYesterdayLines : (packLines.length > 0 ? packLines.map((_,i)=>i) : null);
+  const isDone = checkLines
+    ? checkLines.every(i=>!!shift.doneFlags[`${itemKey}-pl-${i}`])
     : !!shift.doneFlags[itemKey];
 
   const setFact=(k,v)=>onShiftChange({...shift,facts:{...shift.facts,[k]:v}});
@@ -7334,16 +7470,27 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees}) {
   const mainIngs=(item.ingredients||[]).filter(i=>!i.isSubprep);
   const totalPlan=packLines.reduce((s,l)=>s+(Number(l.qty)||0)+(Number(l.fromWarehouse)||0),0);
 
-  return e('div',{className:'item-card'+(isDone?' done':''),style:{
-    border: noEmpWarn?'2.5px solid var(--danger)':'',
-    boxShadow: noEmpWarn?'0 0 0 4px rgba(220,38,38,0.15)':'',
+  // For pack-line items: skip is per line; for no-pack-line items: item-level skip
+  const skipReason = packLines.length > 0
+    ? null  // per-line, no item-level skip
+    : itemSkipReason;
+  const skipAt = packLines.length > 0 ? null : itemSkipAt;
+  const anyLineskipped = packLines.length > 0
+    && packLines.some((_,i)=>!!(shift.skipReasons||{})[`${itemKey}-pl-${i}`]);
+
+  const isCarryover = !!prevLineData && Object.values(prevLineData).some(p=>p.status==='skipped'||p.status==='partial');
+  return e('div',{className:'item-card'+(isDone?' done':(anyLineskipped||skipReason)?' skipped':''),style:{
+    border: noEmpWarn?'2.5px solid var(--danger)':(anyLineskipped||skipReason)?'2px solid var(--danger)':isCarryover?'2px solid #F59E0B':'',
+    boxShadow: noEmpWarn?'0 0 0 4px rgba(220,38,38,0.15)':(anyLineskipped||skipReason)?'0 0 0 3px rgba(176,32,32,0.15)':isCarryover?'0 0 0 3px rgba(245,158,11,0.15)':'',
+    background: isCarryover?'#FFFBEB':'',
     transition:'border 0.3s, box-shadow 0.3s'
   }},
 
     // HEADER
     e('div',{className:'item-header'},
       packLines.length===0
-        ? e('button',{className:'done-toggle'+(isDone?' checked':''),onClick:toggleDone},
+        ? e('button',{className:'done-toggle'+(isDone?' checked':''),onClick:skipReason?undefined:toggleDone,
+            style:{opacity:skipReason?0.3:''}},
             isDone && e(SvgCheck,{size:28,color:'white'}))
         : e('div',{className:'done-toggle'+(isDone?' checked':''),
             style:{cursor:'default',display:'flex',alignItems:'center',justifyContent:'center'}},
@@ -7352,9 +7499,41 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees}) {
         e('div',{className:'item-id'},'ID #'+item.id),
         e('p',{className:'item-name'},item.name),
         item.yieldAmount != null && e('div',{className:'item-yield'},
-          'Выход: '+item.yieldAmount.toLocaleString('ru-RU')+' '+(item.yieldUnit||'г'))
+          'Выход: '+item.yieldAmount.toLocaleString('ru-RU')+' '+(item.yieldUnit||'г')),
+        skipReason && e('div',{style:{fontSize:13,color:'var(--danger)',fontWeight:600,marginTop:4}},
+          '⚠ '+SKIP_LABELS[skipReason]+(skipAt?' · '+new Date(skipAt).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):''))
       ),
-      isDone && e('div',{className:'done-badge'},'✓ Готово')
+      isDone && e('div',{className:'done-badge'},'✓ Готово'),
+      // Skip button only for items without pack lines
+      packLines.length===0 && !isDone && !skipReason && e('button',{
+        onClick:ev=>{ev.stopPropagation();setShowSkipPicker(v=>!v);},
+        title:'Отметить причину невыполнения',
+        style:{padding:'6px 10px',borderRadius:8,border:'1.5px solid var(--border)',
+          background:'transparent',color:'var(--muted)',fontSize:13,fontWeight:700,
+          cursor:'pointer',flexShrink:0,lineHeight:1}
+      },'⚠'),
+      packLines.length===0 && skipReason && e('button',{
+        onClick:ev=>{ev.stopPropagation();clearSkip();},
+        title:'Снять отметку',
+        style:{padding:'6px 10px',borderRadius:8,border:'1.5px solid var(--border)',
+          background:'transparent',color:'var(--muted)',fontSize:13,cursor:'pointer',flexShrink:0}
+      },'✕')
+    ),
+
+    // SKIP PICKER (only for items without pack lines)
+    packLines.length===0 && showSkipPicker && e('div',{style:{
+      display:'flex',gap:8,padding:'10px 12px',
+      background:'var(--danger-bg)',borderTop:'1px solid var(--danger)',flexWrap:'wrap'
+    }},
+      e('span',{style:{fontSize:13,color:'var(--danger)',fontWeight:600,alignSelf:'center'}},'Причина:'),
+      ['no_material','no_time'].map(r=>e('button',{key:r,
+        onClick:()=>doSkip(r),
+        style:{padding:'6px 14px',borderRadius:8,border:'1.5px solid var(--danger)',
+          background:'white',color:'var(--danger)',fontSize:13,fontWeight:600,cursor:'pointer'}
+      },SKIP_LABELS[r])),
+      e('button',{onClick:()=>setShowSkipPicker(false),
+        style:{padding:'6px 10px',borderRadius:8,border:'1.5px solid var(--border)',
+          background:'transparent',color:'var(--muted)',fontSize:13,cursor:'pointer'}},'Отмена')
     ),
 
     // ПОДЗАГОТОВКИ (рекурсивно, любая глубина)
@@ -7400,7 +7579,10 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees}) {
       e('div',{style:{padding:'0 2px 6px',fontSize:11,fontWeight:800,color:'var(--muted)',textTransform:'uppercase',letterSpacing:'0.07em'}},'▼ Итоговые позиции — что нужно сделать'),
       e(PackTable,{packLines,facts:shift.facts,onFactChange:setFact,itemKey,
                    doneFlags:shift.doneFlags,doneBy:shift.doneBy,
-                   onLineEmp,shopEmployees})
+                   onLineEmp,shopEmployees,
+                   skipReasons:shift.skipReasons,skipTimes:shift.skipTimes,
+                   onLineSkip,onLineClearSkip,prevLineData,
+                   hideCompanions:!!keyPrefix})
     ),
 
     // Сотрудник — только для позиций без pack lines (старый режим)
@@ -7455,7 +7637,8 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
   );
   const timersRef=useRef({});
 
-  // Reset when station changes
+  // Reset when station changes or items change (e.g. new techcard applied)
+  const itemsKey=items.map(i=>i.id).join(',');
   useEffect(()=>{
     const todoIds=items.filter(i=>!shift.doneFlags[`${station.key}-${i.id}`]).map(i=>i.id);
     const doneIds=items.filter(i=>!!shift.doneFlags[`${station.key}-${i.id}`]).map(i=>i.id);
@@ -7465,7 +7648,7 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
     prevDoneRef.current=Object.fromEntries(items.map(i=>[i.id,!!shift.doneFlags[`${station.key}-${i.id}`]]));
     Object.values(timersRef.current).forEach(clearTimeout);
     timersRef.current={};
-  },[station.key]);
+  },[station.key,itemsKey]);
 
   // Watch done flag changes
   useEffect(()=>{
@@ -7512,6 +7695,50 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
   // sinking items stay in todo while animating, then move to done
   const todoItems=orderedItems.filter(it=>!shift.doneFlags[`${station.key}-${it.id}`]||sinkingIds.has(it.id));
   const doneItems=orderedItems.filter(it=>!!shift.doneFlags[`${station.key}-${it.id}`]&&!sinkingIds.has(it.id));
+
+  // Перенос из прошлой смены: prevItemDataMap[itemId][lineIdx] = {status, skipReason, yesterdayFact, volume, packName, planQty}
+  const prevItemDataMap={};
+  for(const p of (shift.prevSkips||[])){
+    if(p.stationKey!==station.key) continue;
+    const id=String(p.itemId);
+    if(!prevItemDataMap[id]) prevItemDataMap[id]={};
+    if(p.lineIdx!=null){
+      prevItemDataMap[id][p.lineIdx]={status:p.status,skipReason:p.skipReason,skipAt:p.skipAt,yesterdayFact:p.yesterdayFact,
+        volume:p.volume,packName:p.packName,planQty:p.planQty};
+    } else {
+      prevItemDataMap[id].__itemLevel={status:p.status||'skipped',skipReason:p.skipReason,skipAt:p.skipAt};
+    }
+  }
+  const todayItemIds=new Set(items.map(it=>String(it.id)));
+  // Items с хотя бы одной skipped/partial строкой (done-only не показываем как перенос)
+  const hasCarryoverSkip=(d)=>d&&Object.values(d).some(p=>p.status==='skipped'||p.status==='partial');
+  const allCarriedItems=todoItems.filter(it=>hasCarryoverSkip(prevItemDataMap[String(it.id)]));
+  // Позиции переноса, которых НЕТ в сегодняшней техкарте
+  const allCarriedOnlyItems=[];
+  const seenCarriedOnly=new Set();
+  for(const p of (shift.prevSkips||[])){
+    if(p.stationKey!==station.key) continue;
+    const sid=String(p.itemId);
+    if(todayItemIds.has(sid)||seenCarriedOnly.has(sid)) continue;
+    if(!hasCarryoverSkip(prevItemDataMap[sid])) continue;
+    seenCarriedOnly.add(sid);
+    allCarriedOnlyItems.push({id:p.itemId,name:p.itemName||`Позиция #${p.itemId}`,ingredients:[]});
+  }
+  // Определяем "выполнено через карryover-блок" по prev- ключам
+  const isCarryoverDone=(itemId)=>{
+    const lineMap=prevItemDataMap[String(itemId)]||{};
+    const skipEntries=Object.entries(lineMap).filter(([k,p])=>k!=='__itemLevel'&&(p.status==='skipped'||p.status==='partial'));
+    if(skipEntries.length===0) return false;
+    return skipEntries.every(([li])=>!!shift.doneFlags[`prev-${station.key}-${itemId}-pl-${li}`]);
+  };
+  const carriedItems=allCarriedItems.filter(it=>!isCarryoverDone(it.id));
+  const carriedOnlyItems=allCarriedOnlyItems.filter(it=>!isCarryoverDone(it.id));
+  const carriedDoneItems=[
+    ...allCarriedItems.filter(it=>isCarryoverDone(it.id)),
+    ...allCarriedOnlyItems.filter(it=>isCarryoverDone(it.id)),
+  ];
+  // Обычные невыполненные — без карryover-позиций (они в "Прошлая смена")
+  const todoRegular=todoItems; // все позиции сегодняшней техкарты — в "Надо выполнить"
   const filterItems=list=>{
     if(!search.trim()) return list;
     const q=search.trim().toLowerCase();
@@ -7521,14 +7748,43 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
   };
   const visibleItems=filterItems(statusTab==='todo'?todoItems:doneItems);
 
-  const renderItem=(item)=>{
+  const renderItem=(item,prevLineData=null)=>{
     const sinking=sinkingIds.has(item.id);
     const settled=settledIds.has(item.id);
     return e('div',{
       key:item.id,
       className:'item-wrapper'+(sinking?' sinking':'')+(settled?' settled':'')
-    }, e(ItemCard,{item,stationKey:station.key,shift,onShiftChange,shopEmployees}));
+    }, e(ItemCard,{item,stationKey:station.key,shift,onShiftChange,shopEmployees,prevLineData}));
   };
+  const renderCarried=(item)=>{
+    const lineMap=prevItemDataMap[String(item.id)]||{};
+    return e('div',{key:item.id,className:'item-wrapper'},
+      e(ItemCard,{item,stationKey:station.key,shift,onShiftChange,shopEmployees,prevLineData:lineMap,keyPrefix:'prev-'}));
+  };
+  // Для позиций переноса без сегодняшней техкарты — синтетические packLines из prevSkips
+  const renderCarriedOnly=(synItem)=>{
+    const lineMap=prevItemDataMap[String(synItem.id)]||{};
+    const synPackLines=Object.entries(lineMap)
+      .filter(([k])=>k!=='__itemLevel')
+      .sort(([a],[b])=>Number(a)-Number(b))
+      .map(([,p])=>({volume:p.volume||'',packName:p.packName||'',destination:'',fromWarehouse:0,qty:p.planQty||0}));
+    return e('div',{key:synItem.id,className:'item-wrapper'},
+      e(ItemCard,{item:synItem,stationKey:station.key,shift,onShiftChange,shopEmployees,
+        prevLineData:lineMap,overridePackLines:synPackLines.length>0?synPackLines:null,keyPrefix:'prev-'}));
+  };
+  const renderCarriedDone=(item)=>{
+    const lineMap=prevItemDataMap[String(item.id)]||{};
+    const synPackLines=Object.entries(lineMap)
+      .filter(([k])=>k!=='__itemLevel')
+      .sort(([a],[b])=>Number(a)-Number(b))
+      .map(([,p])=>({volume:p.volume||'',packName:p.packName||'',destination:'',fromWarehouse:0,qty:p.planQty||0}));
+    const hasOverride=synPackLines.length>0&&!todayItemIds.has(String(item.id));
+    return e('div',{key:item.id,className:'item-wrapper'},
+      e(ItemCard,{item,stationKey:station.key,shift,onShiftChange,shopEmployees,
+        prevLineData:lineMap,overridePackLines:hasOverride?synPackLines:null,keyPrefix:'prev-'}));
+  };
+  const renderRegular=(item)=>renderItem(item,null);
+  const totalCarried=carriedItems.length+carriedOnlyItems.length;
 
   return e('div',{className:'kitchen-content'},
     e('div',{className:'kitchen-header'},
@@ -7553,23 +7809,46 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
     ),
     // Status tabs
     e('div',{className:'station-tabs',style:{marginBottom:4}},
+      totalCarried+carriedDoneItems.length>0 && e('button',{
+        className:'station-tab'+(statusTab==='prev'?' active':''),
+        onClick:()=>setStatusTab('prev'),
+        style:{color:statusTab==='prev'?'#92400E':'',background:statusTab==='prev'?'#FEF3C7':''}
+      },`⏮ Прошлая смена (${totalCarried})`),
       e('button',{
         className:'station-tab'+(statusTab==='todo'?' active':''),
         onClick:()=>setStatusTab('todo'),
         style:{color:statusTab==='todo'?'var(--warn)':''}
-      },`Надо выполнить (${todoItems.length})`),
+      },`Надо выполнить (${todoRegular.length})`),
       e('button',{
         className:'station-tab'+(statusTab==='done'?' active':''),
         onClick:()=>setStatusTab('done'),
         style:{color:statusTab==='done'?'var(--ok)':''}
-      },`Выполнено (${doneItems.length})`)
+      },`Выполнено (${doneItems.length+carriedDoneItems.length})`)
     ),
-    items.length===0
+    items.length===0&&totalCarried===0
       ? e('div',{className:'empty-state'},'Нет заданий для этой станции')
-      : visibleItems.length===0
-        ? e('div',{className:'empty-state',style:{marginTop:40}},
-            search.trim() ? 'Ничего не найдено' : statusTab==='todo'?'Все заготовки выполнены ✓':'Ещё ничего не выполнено')
-        : e('div',null,...visibleItems.map(renderItem)),
+      : e(React.Fragment,null,
+          // Надо выполнить — только сегодняшние позиции
+          statusTab==='todo' && e('div',null,
+            filterItems(todoRegular).length===0
+              ? e('div',{className:'empty-state',style:{marginTop:40}},'Все заготовки выполнены ✓')
+              : e('div',null,...filterItems(todoRegular).map(renderRegular))
+          ),
+          // Прошлая смена — карryover-позиции (невыполненные)
+          statusTab==='prev' && e('div',null,
+            totalCarried===0
+              ? e('div',{className:'empty-state',style:{marginTop:40}},'Все задания прошлой смены выполнены ✓')
+              : e('div',null,
+                  ...filterItems(carriedItems).map(renderCarried),
+                  ...filterItems(carriedOnlyItems).map(renderCarriedOnly))
+          ),
+          // Выполненные — и сегодняшние, и карryover
+          statusTab==='done' && (doneItems.length+carriedDoneItems.length===0
+            ? e('div',{className:'empty-state',style:{marginTop:40}},'Ещё ничего не выполнено')
+            : e('div',null,
+                ...filterItems(doneItems).map(renderItem),
+                ...filterItems(carriedDoneItems).map(renderCarriedDone)))
+        ),
     showScrollTop && e('button',{
       className:'scroll-top-btn',
       onClick:()=>window.scrollTo({top:0,behavior:'smooth'})
@@ -7761,11 +8040,14 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
                 const prev=(empTimeline[eid]||[]).filter(t=>t<ldat);
                 const prevMs=prev.length>0?new Date(prev[prev.length-1]).getTime():startDate.getTime();
                 durationMin=Math.round((doneMs-prevMs)/60000);
-                if(durationMin>0&&qty>0)minPerPack=+(qty/durationMin).toFixed(1);
+                if(durationMin>0&&factQty>0)minPerPack=+(factQty/durationMin).toFixed(1);
               }
+              const skipReason=(s.skipReasons||{})[lk]||null;
+              const skipAt=skipReason?(s.skipTimes||{})[lk]||null:null;
+              // Строка текущей смены
               rows.push({date:dk,shop:shopName,station:station.name,name:item.name,
                 packName:l.packName||'',volume:l.volume||'',planQty:qty,factQty,pct:qty>0?Math.round(factQty/qty*100):0,
-                done:isDone,employee:empName,durationMin,minPerPack,doneAt});
+                done:isDone,employee:empName,durationMin,minPerPack,doneAt,skipReason,skipAt,isCarriedOver:false});
             });
           } else {
             const isDone=!!(s.doneFlags||{})[ik];
@@ -7782,12 +8064,58 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
               const prev=(empTimeline[eid]||[]).filter(t=>t<idat);
               const prevMs=prev.length>0?new Date(prev[prev.length-1]).getTime():startDate.getTime();
               durationMin=Math.round((doneMs-prevMs)/60000);
-              if(durationMin>0&&qty>0)minPerPack=+(qty/durationMin).toFixed(1);
+              if(durationMin>0&&factQty>0)minPerPack=+(factQty/durationMin).toFixed(1);
             }
+            const skipReason=(s.skipReasons||{})[ik]||null;
+            const skipAt=skipReason?(s.skipTimes||{})[ik]||null:null;
             rows.push({date:dk,shop:shopName,station:station.name,name:item.name,
               packName:'',volume:'',planQty:qty,factQty,pct:qty>0?Math.round(factQty/qty*100):0,
-              done:isDone,employee:empName,durationMin,minPerPack,doneAt});
+              done:isDone,employee:empName,durationMin,minPerPack,doneAt,skipReason,skipAt,isCarriedOver:false});
           }
+        });
+
+        // Отдельный проход: строки переноса из вчерашней смены
+        const todayItemIdSet=new Set(station.items.map(it=>String(it.id)));
+        const seenCarryover=new Set();
+        (s.prevSkips||[]).filter(p=>p.stationKey===station.key).forEach(p=>{
+          const ck=`${p.itemId}|${p.lineIdx??'null'}`;
+          if(seenCarryover.has(ck)) return;
+          seenCarryover.add(ck);
+          const itemName=station.items.find(it=>String(it.id)===String(p.itemId))?.name||p.itemName||`ID #${p.itemId}`;
+          const itemPls=(s.itemPackLines||{})[p.itemId];
+          const packLine=p.lineIdx!=null&&itemPls?itemPls[p.lineIdx]:null;
+          const planQty=packLine?(Number(packLine.qty)||0)+(Number(packLine.fromWarehouse)||0):(p.planQty||0);
+          const yFact=p.yesterdayFact!=null?Number(p.yesterdayFact):null;
+          // Показываем только строки с реальной нехваткой (есть причина нехватки)
+          if(p.status!=='skipped'&&p.status!=='partial') return;
+          // Если позиция есть и в сегодняшней техкарте — строка переноса всегда "⏮ Перенос",
+          // выполнение сегодня отражается только в строке из основного цикла.
+          // Если позиции нет в сегодняшней техкарте — читаем doneFlags (карryover-only item).
+          // Карryover-позиции сохраняются с префиксом prev-, читаем оттуда
+          const clk=p.lineIdx!=null?`prev-${p.stationKey}-${p.itemId}-pl-${p.lineIdx}`:`prev-${p.stationKey}-${p.itemId}`;
+          const cDone=!!(s.doneFlags||{})[clk];
+          const cEid=(s.doneBy||{})[clk]?.[0];
+          const cEmpName=cEid?(allEmployees.find(x=>x.id===cEid)?.name||cEid):'—';
+          const cFv=parseFloat((s.facts||{})[clk]);
+          // Для переноса дефолтный факт = plan − yesterdayFact (остаток), а не полный план
+          const effectivePlanQty=yFact!=null?Math.max(0,planQty-yFact):planQty;
+          const cFactQty=cDone?(isNaN(cFv)?effectivePlanQty:cFv):(isNaN(cFv)?0:cFv);
+          const cDat=(s.doneTimes||{})[clk]||null;
+          let cDurationMin=null,cMinPerPack=null;
+          if(cDone&&cDat&&cEid){
+            const doneMs=new Date(cDat).getTime();
+            const prev=(empTimeline[cEid]||[]).filter(t=>t<cDat);
+            const prevMs=prev.length>0?new Date(prev[prev.length-1]).getTime():startDate.getTime();
+            cDurationMin=Math.round((doneMs-prevMs)/60000);
+            if(cDurationMin>0&&cFactQty>0)cMinPerPack=+(cFactQty/cDurationMin).toFixed(1);
+          }
+          rows.push({date:dk,shop:shopName,station:station.name,name:itemName,
+            packName:packLine?.packName||'',volume:packLine?.volume||'',
+            planQty,effectivePlanQty,yesterdayFact:yFact,factQty:cDone?cFactQty:(yFact??0),
+            pct:planQty>0?(cDone?Math.round(cFactQty/planQty*100):(yFact!=null?Math.round(yFact/planQty*100):0)):0,
+            done:cDone,employee:cEmpName,
+            durationMin:cDurationMin,minPerPack:cMinPerPack,doneAt:cDat,
+            skipReason:p.skipReason,skipAt:p.skipAt,isCarriedOver:true});
         });
       });
     };
@@ -7800,12 +8128,13 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
   const shops=useMemo(()=>[...new Set(allRows.map(r=>r.shop))].sort(),[allRows]);
   const stations=useMemo(()=>[...new Set(allRows.filter(r=>!filterShop||r.shop===filterShop).map(r=>r.station))].sort(),[allRows,filterShop]);
   const filtered=useMemo(()=>{
-    let rows=[...allRows];
+    let rows=allRows.filter(r=>!r.isCarriedOver); // переносы — в отдельной секции ниже
     if(filterShop) rows=rows.filter(r=>r.shop===filterShop);
     if(filterText) rows=rows.filter(r=>r.name.toLowerCase().includes(filterText.toLowerCase())||r.station.toLowerCase().includes(filterText.toLowerCase()));
     if(filterStation) rows=rows.filter(r=>r.station===filterStation);
     if(filterStatus==='done') rows=rows.filter(r=>r.done);
-    if(filterStatus==='todo') rows=rows.filter(r=>!r.done);
+    if(filterStatus==='todo') rows=rows.filter(r=>!r.done&&!r.skipReason);
+    if(filterStatus==='delay') rows=rows.filter(r=>!!r.skipReason&&!r.done);
     if(filterEmployee) rows=rows.filter(r=>r.employee.includes(filterEmployee));
     if(sortCol){
       rows.sort((a,b)=>{
@@ -7894,6 +8223,7 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
       stationSummary.map(s=>{
         const ratio=s.plan>0?s.fact/s.plan:0;
         const color=ratio>=0.95?'var(--ok)':ratio>=0.85?'var(--warn)':'var(--danger)';
+        const skipped=allRows.filter(r=>r.station===s.name&&r.skipReason&&!r.done&&!r.isCarriedOver);
         return e('div',{key:s.name,className:'progress-row'},
           e('div',{className:'progress-row-top'},
             e('span',null,s.name),
@@ -7902,6 +8232,19 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
           e('div',{className:'progress-track'},
             e('div',{className:'progress-fill',
               style:{width:`${Math.min(ratio*100,100)}%`,background:color,transition:'width 0.4s ease'}})
+          ),
+          skipped.length>0&&e('div',{style:{marginTop:6,display:'flex',flexDirection:'column',gap:3}},
+            skipped.map((r,i)=>e('div',{key:i,style:{
+              display:'flex',alignItems:'center',gap:8,
+              padding:'4px 10px',borderRadius:6,
+              background:'var(--danger-bg)',fontSize:12,color:'var(--danger)'
+            }},
+              e('span',{style:{fontWeight:700}},'⚠'),
+              e('span',{style:{flex:1}},r.name+(r.packName?' · '+r.packName:'')),
+              e('span',{style:{fontWeight:600}},SKIP_LABELS[r.skipReason]),
+              r.skipAt&&e('span',{style:{opacity:0.7}},
+                new Date(r.skipAt).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}))
+            ))
           )
         );
       })
@@ -7927,7 +8270,8 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
         e('select',{className:'filter-select',value:filterStatus,onChange:ev=>setFilterStatus(ev.target.value)},
           e('option',{value:''},'Все статусы'),
           e('option',{value:'done'},'✓ Готово'),
-          e('option',{value:'todo'},'В работе')
+          e('option',{value:'todo'},'В работе'),
+          e('option',{value:'delay'},'⚠ Задержка')
         ),
         e('select',{className:'filter-select',value:filterEmployee,onChange:ev=>setFilterEmployee(ev.target.value)},
           e('option',{value:''},'Все сотрудники'),
@@ -7937,6 +8281,55 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
           onClick:()=>{setFilterText('');setFilterShop('');setFilterStation('');setFilterStatus('');setFilterEmployee('');}},
           '✕ Сбросить')
       ),
+      // Заготовки прошлой смены — вверху
+      (()=>{
+        const carriedRows=allRows.filter(r=>r.isCarriedOver);
+        if(!carriedRows.length) return null;
+        const carriedFiltered=carriedRows.filter(r=>{
+          if(filterStatus==='done') return r.done;
+          if(filterStatus==='pending') return !r.done;
+          if(filterStatus==='delay') return r.skipReason&&!r.done&&!r.isCarriedOver;
+          return true;
+        }).filter(r=>!filterShop||r.shop===filterShop);
+        if(!carriedFiltered.length) return null;
+        return e('div',{style:{marginBottom:24}},
+          e('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:8}},
+            e('span',{style:{fontSize:14,fontWeight:700,color:'#92400E'}},'⏮ Заготовки прошлой смены'),
+            e('span',{className:'badge',style:{background:'#FEF3C7',color:'#92400E',border:'1px solid #F59E0B'}},carriedFiltered.length)
+          ),
+          e('div',{style:{overflowX:'auto'}},
+            e('table',{className:'report-table'},
+              e('thead',null,
+                e('tr',null,
+                  periodMode!=='today'&&e('th',null,'Дата'),
+                  e('th',null,'Цех'),e('th',null,'Станция'),e('th',null,'Позиция'),
+                  e('th',null,'Объём'),e('th',null,'Упаковка'),
+                  e('th',{className:'num'},'Кол-во'),e('th',null,'Статус'),
+                  e('th',{className:'num'},'Время'),e('th',{className:'num'},'Скорость'),e('th',null,'Сотрудник')
+                )
+              ),
+              e('tbody',null,
+                carriedFiltered.map((r,idx)=>{
+                  const bc=r.done?'badge-ok':'badge-danger';
+                  return e('tr',{key:idx,style:{background:'#FFFBEB'}},
+                    periodMode!=='today'&&e('td',null,formatDateRu(r.date)),
+                    e('td',null,r.shop),
+                    e('td',null,r.station.replace(r.shop+' / ','')),
+                    e('td',null,r.name),
+                    e('td',null,r.volume||'—'),
+                    e('td',null,r.packName||'—'),
+                    e('td',{className:'num'},r.done?(r.factQty!=null&&r.factQty!==0?r.factQty:'—'):(r.effectivePlanQty!=null?r.effectivePlanQty:'—')),
+                    e('td',null,e('span',{className:'badge '+bc},r.done?'✓ Готово':'Не готово')),
+                    e('td',{className:'num',style:{whiteSpace:'nowrap'}},r.durationMin!=null?r.durationMin+' мин':'—'),
+                    e('td',{className:'num'},r.minPerPack!=null?r.minPerPack+' уп/мин':'—'),
+                    e('td',null,r.employee)
+                  );
+                })
+              )
+            )
+          )
+        );
+      })(),
       e('div',{style:{overflowX:'auto'}},
         e('table',{className:'report-table'},
           e('thead',null,e('tr',null,
@@ -7955,15 +8348,23 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
           e('tbody',null,
             filtered.map((r,idx)=>{
               const bc=r.done?'badge-ok':'badge-danger';
-              return e('tr',{key:idx},
+              const rowBg=r.skipReason&&!r.done?'var(--danger-bg)':'';
+              const statusCell=r.skipReason&&!r.done
+                ? e('div',null,
+                    e('span',{className:'badge badge-danger'},'⚠ Нехватка'),
+                    e('div',{style:{fontSize:11,color:'var(--danger)',marginTop:2}},
+                      SKIP_LABELS[r.skipReason]+(r.skipAt?' · '+new Date(r.skipAt).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):''))
+                  )
+                : e('span',{className:'badge '+bc},r.done?'✓ Готово':'Не готово');
+              return e('tr',{key:idx,style:{background:rowBg}},
                 periodMode!=='today'&&e('td',null,formatDateRu(r.date)),
                 e('td',null,r.shop),
                 e('td',null,r.station.replace(r.shop+' / ','')),
                 e('td',null,r.name),
                 e('td',null,r.volume||'—'),
                 e('td',null,r.packName||'—'),
-                e('td',{className:'num'},r.planQty||'—'),
-                e('td',null,e('span',{className:'badge '+bc},r.done?'✓ Готово':'Не готово')),
+                e('td',{className:'num'},r.done&&r.factQty!=null?r.factQty:(r.planQty||'—')),
+                e('td',null,statusCell),
                 e('td',{className:'num',style:{whiteSpace:'nowrap'}},
                   r.durationMin!=null?r.durationMin+' мин':'—'),
                 e('td',{className:'num'},
@@ -8070,17 +8471,16 @@ function ShiftReportPanel({dk, allEmployees, onClose}) {
           if(!byShop[station.shop]) byShop[station.shop]={shop:station.shop,plan:0,done:0};
           station.items.forEach(item=>{
             const ik=`${station.key}-${item.id}`;
-            const isDone=!!(s.doneFlags||{})[ik];
             const pl=(s.itemPackLines||{})[item.id]||(s.techcardId||s.udTechcardId ? null : EXCEL_PACK_LINES[item.id])||null;
-            const planQty=pl?pl.reduce((a,l)=>a+(Number(l.qty)||0)+(Number(l.fromWarehouse)||0),0):(item.packPlan?.qty||0);
-            const factQty=isDone?planQty:0;
-            byShop[station.shop].plan+=planQty;
-            byShop[station.shop].done+=factQty;
-            totalPlan+=planQty;
-            totalDone+=factQty;
+            const isDone=!!((s.doneFlags||{})[ik])
+              ||(pl&&pl.length>0&&pl.every((_,li)=>!!((s.doneFlags||{})[`${ik}-pl-${li}`])));
+            byShop[station.shop].plan+=1;
+            byShop[station.shop].done+=isDone?1:0;
+            totalPlan+=1;
+            totalDone+=isDone?1:0;
           });
         });
-        setData({shift:s,cat,tc,byShop:Object.values(byShop),totalPlan,totalDone});
+        setData({shift:s,cat,tc:tcEE||tcUD,byShop:Object.values(byShop),totalPlan,totalDone});
       } catch(err) {
         console.error('ShiftReportPanel error:', err);
       } finally {
@@ -8131,7 +8531,7 @@ function ShiftReportPanel({dk, allEmployees, onClose}) {
     ),
     // Итог
     e('div',{className:'metric-grid',style:{marginBottom:16}},
-      e('div',{className:'metric-card'},e('p',{className:'metric-label'},'План'),e('p',{className:'metric-value'},data.totalPlan,' уп')),
+      e('div',{className:'metric-card'},e('p',{className:'metric-label'},'Всего позиций'),e('p',{className:'metric-value'},data.totalPlan)),
       e('div',{className:'metric-card'},e('p',{className:'metric-label'},'Выполнение'),
         e('p',{className:'metric-value',style:{color:pct>=90?'var(--ok)':'var(--warn)'}},pct,'%')),
       e('div',{className:'metric-card'},e('p',{className:'metric-label'},'Позиций'),e('p',{className:'metric-value'},
@@ -8146,7 +8546,7 @@ function ShiftReportPanel({dk, allEmployees, onClose}) {
         return e('div',{key:s.shop,className:'progress-row'},
           e('div',{className:'progress-row-top'},
             e('span',null,s.shop),
-            e('span',{style:{color:'var(--muted)'}},`${Math.round(r*100)}% (${s.done}/${s.plan} уп)`)
+            e('span',{style:{color:'var(--muted)'}},`${Math.round(r*100)}% (${s.done}/${s.plan} позиций)`)
           ),
           e('div',{className:'progress-track'},
             e('div',{className:'progress-fill',style:{width:`${Math.min(r*100,100)}%`,background:color}}))
@@ -8623,6 +9023,8 @@ function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesCh
         '🔬 Технолог'),
       e('button',{className:'mgr-tab'+(tab==='product'?' active':''),onClick:()=>switchTab('product')},
         '📋 Журнал проверок ПК'),
+      e('button',{className:'mgr-tab'+(tab==='acts'?' active':''),onClick:()=>switchTab('acts')},
+        '🧪 Акты проработки'),
     ),
     tab==='dashboard' && e(DashboardTab,{dateKey,shift,allEmployees,archiveIndex,activeTcEE,activeTcUD,globalStationConfig,shopGroups}),
     tab==='kitchen' && (
@@ -8641,7 +9043,8 @@ function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesCh
     tab==='shifts' && e(ShiftsTab,{archiveIndex,globalStationConfig,onStationConfigChange,shopGroups}),
     tab==='upload' && e(TechcardsTab,{shift,allTechcards,activeTcEE,activeTcUD,onApplyTechcard,onDeactivate,onRefreshTechcards}),
     tab==='technologist' && e(TechnologistPage,null),
-    tab==='product' && e(ProductJournalPage,null)
+    tab==='product' && e(ProductJournalPage,null),
+    tab==='acts' && e(ActsPage,null)
   );
 }
 
@@ -8659,6 +9062,58 @@ function todayISO(){ return new Date().toISOString().slice(0,10); }
 
 // Чек-лист одного задания
 // Лайтбокс для просмотра фото
+// Кнопка загрузки фото с выбором: камера или галерея
+function PhotoPickerButton({onFiles, uploading, label, style}) {
+  const cameraRef = useRef();
+  const galleryRef = useRef();
+  const [open, setOpen] = useState(false);
+
+  const pick = (ref) => {
+    setOpen(false);
+    setTimeout(() => ref.current && ref.current.click(), 50);
+  };
+  const onInput = (ev) => {
+    if(!ev.target.files||!ev.target.files.length) return;
+    const arr = Array.from(ev.target.files);
+    ev.target.value = '';
+    onFiles(arr);
+  };
+
+  return e('div',{style:{position:'relative',display:'inline-block'}},
+    e('button',{
+      onClick:()=>setOpen(o=>!o),
+      disabled:!!uploading,
+      style:{padding:'7px 14px',borderRadius:8,border:'1.5px dashed var(--border)',
+        background:'transparent',color:'var(--muted)',fontSize:13,cursor:'pointer',...style}},
+      uploading ? 'Загрузка…' : (label||'+ Фото')),
+
+    open&&e(React.Fragment,null,
+      // Затемнение для закрытия
+      e('div',{onClick:()=>setOpen(false),
+        style:{position:'fixed',inset:0,zIndex:999}}),
+      e('div',{style:{position:'absolute',bottom:'calc(100% + 6px)',left:0,zIndex:1000,
+        background:'var(--surface)',border:'1.5px solid var(--border)',borderRadius:12,
+        boxShadow:'0 4px 20px rgba(0,0,0,0.15)',overflow:'hidden',minWidth:200}},
+        e('button',{onClick:()=>pick(cameraRef),
+          style:{display:'flex',alignItems:'center',gap:10,width:'100%',padding:'13px 16px',
+            border:'none',background:'transparent',color:'var(--text)',fontSize:14,
+            cursor:'pointer',textAlign:'left',borderBottom:'1px solid var(--border)'}},
+          '📷 Сфотографировать'),
+        e('button',{onClick:()=>pick(galleryRef),
+          style:{display:'flex',alignItems:'center',gap:10,width:'100%',padding:'13px 16px',
+            border:'none',background:'transparent',color:'var(--text)',fontSize:14,
+            cursor:'pointer',textAlign:'left'}},
+          '🖼 Из галереи'),
+      )
+    ),
+
+    e('input',{type:'file',ref:cameraRef,accept:'image/*',capture:'environment',
+      multiple:true,style:{display:'none'},onChange:onInput}),
+    e('input',{type:'file',ref:galleryRef,accept:'image/*',
+      multiple:true,style:{display:'none'},onChange:onInput}),
+  );
+}
+
 function Lightbox({photos, startIndex, onClose}) {
   const [cur,setCur]=useState(startIndex||0);
   useEffect(()=>{
@@ -8738,21 +9193,36 @@ function QualityChecklist({task, onSave, onClose}) {
     setSaving(true);
     const results=fields.map(f=>({field_name:f,result:vals[f]?.result||null,comment:vals[f]?.comment||'',action:vals[f]?.action||''}));
     const status=done?'done':'pending';
-    await fetch(`/api/quality/tasks/${task.id}/results`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({results,status})});
-    setSaving(false);
-    onSave(task.id,status,results);
-    if(done) onClose();
+    try {
+      const r=await fetch(`/api/quality/tasks/${task.id}/results`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({results,status})});
+      const d=await r.json();
+      if(!r.ok||d.error) { alert('Ошибка сохранения: '+(d.error||r.status)); return; }
+      onSave(task.id,status,results,photos);
+      if(done) onClose();
+    } catch(e) {
+      alert('Ошибка сети: '+e.message);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handlePhoto=async(files)=>{
     if(!files||!files.length) return;
+    // Копируем файлы в массив до сброса input, т.к. FileList становится пустым после value=''
+    const fileArr=Array.from(files);
+    if(fileRef.current) fileRef.current.value='';
     setUploading(true);
-    const fd=new FormData();
-    for(const f of files) fd.append('photos',f);
-    const r=await fetch(`/api/quality/tasks/${task.id}/photos`,{method:'POST',body:fd});
-    const d=await r.json();
-    if(d.files) setPhotos(prev=>[...prev,...d.files.map(fn=>({filename:fn}))]);
-    setUploading(false);
+    try {
+      const fd=new FormData();
+      for(const f of fileArr) fd.append('photos',f);
+      const r=await fetch(`/api/quality/tasks/${task.id}/photos`,{method:'POST',body:fd});
+      const d=await r.json();
+      if(d.files) setPhotos(prev=>[...prev,...d.files.map(fn=>({filename:fn}))]);
+    } catch(e) {
+      console.error('Ошибка загрузки фото:',e);
+    } finally {
+      setUploading(false);
+    }
   };
 
   const deletePhoto=async(filename)=>{
@@ -8834,12 +9304,7 @@ function QualityChecklist({task, onSave, onClose}) {
               display:'flex',alignItems:'center',justifyContent:'center'}},'✕')
         ))
       ),
-      e('button',{onClick:()=>fileRef.current&&fileRef.current.click(),
-        style:{padding:'8px 16px',borderRadius:8,border:'1.5px dashed var(--border)',background:'transparent',
-          color:'var(--muted)',fontSize:13,cursor:'pointer'}},
-        uploading?'Загрузка…':'+ Добавить фото'),
-      e('input',{type:'file',ref:fileRef,accept:'image/*',multiple:true,style:{display:'none'},
-        onChange:ev=>handlePhoto(ev.target.files)})
+      e(PhotoPickerButton,{onFiles:handlePhoto,uploading,label:'+ Добавить фото'})
     ),
 
     // Кнопки сохранения
@@ -9119,12 +9584,7 @@ function CreateStandardFromItemDialog({onClose, onCreated}) {
                   display:'flex',alignItems:'center',justifyContent:'center',lineHeight:1}},'×')
             ))
           ),
-          e('button',{onClick:()=>photoRef.current&&photoRef.current.click(),
-            style:{padding:'6px 14px',borderRadius:8,border:'1.5px dashed var(--border)',
-              background:'transparent',color:'var(--muted)',fontSize:13,cursor:'pointer'}},
-            '+ Добавить фото'),
-          e('input',{type:'file',ref:photoRef,accept:'image/*',multiple:true,style:{display:'none'},
-            onChange:ev=>{addPhotos(ev.target.files);ev.target.value='';}})
+          e(PhotoPickerButton,{onFiles:addPhotos,label:'+ Добавить фото'})
         ),
         error&&e('div',{style:{color:'var(--danger)',fontSize:13}},error),
         e('div',{style:{display:'flex',gap:10,marginTop:4}},
@@ -9437,12 +9897,8 @@ function StandardCard({s, onToggleAlways, onReload, onDelete}) {
 
         // Кнопка добавить фото — только в режиме редактирования
         editing&&e('div',{style:{marginTop:10}},
-          e('button',{onClick:()=>fileRef.current&&fileRef.current.click(),
-            style:{padding:'4px 10px',borderRadius:7,border:'1.5px dashed var(--border)',background:'transparent',
-              color:'var(--muted)',fontSize:12,cursor:'pointer'}},
-            uploading?'Загрузка…':'+ Добавить фото'),
-          e('input',{type:'file',ref:fileRef,accept:'image/*',multiple:true,style:{display:'none'},
-            onChange:ev=>uploadPhotos(ev.target.files)})
+          e(PhotoPickerButton,{onFiles:uploadPhotos,uploading,label:'+ Добавить фото',
+            style:{padding:'4px 10px',fontSize:12}})
         )
       ),
 
@@ -9566,8 +10022,8 @@ function TechnologistPage() {
     setTasks(prev=>prev.filter(t=>t.id!==id));
   };
 
-  const onSave=(taskId,status,results)=>{
-    setTasks(prev=>prev.map(t=>t.id===taskId?{...t,status,results}:t));
+  const onSave=(taskId,status,results,photos)=>{
+    setTasks(prev=>prev.map(t=>t.id===taskId?{...t,status,results,...(photos!=null?{photos}:{})}:t));
   };
 
   const pending=tasks.filter(t=>t.status==='pending'||t.status==='overdue');
@@ -9584,7 +10040,8 @@ function TechnologistPage() {
     // Табы
     e('div',{className:'mgr-tabs',style:{marginBottom:20}},
       e('button',{className:'mgr-tab'+(tab==='tasks'?' active':''),onClick:()=>setTab('tasks')},'📋 Задания'),
-      e('button',{className:'mgr-tab'+(tab==='library'?' active':''),onClick:()=>setTab('library')},'📚 Библиотека эталонов')
+      e('button',{className:'mgr-tab'+(tab==='library'?' active':''),onClick:()=>setTab('library')},'📚 Библиотека эталонов'),
+      e('button',{className:'mgr-tab'+(tab==='acts'?' active':''),onClick:()=>setTab('acts')},'🧪 Акты проработки')
     ),
 
     // Вкладка Задания
@@ -9636,6 +10093,7 @@ function TechnologistPage() {
 
     // Вкладка Библиотека
     tab==='library'&&e(LibraryTab,{standards,onReload:async()=>{await reloadStandards();}}),
+    tab==='acts'&&e(ActsPage,null),
 
     // Модалка добавления
     showAdd&&e('div',{style:{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',
@@ -9651,8 +10109,162 @@ function TechnologistPage() {
   );
 }
 
+// Просмотр актов проработки (только чтение — для технолога и продуктовой команды)
+function ActsViewer({readOnly}) {
+  const [acts,setActs]=useState([]);
+  const [templates,setTemplates]=useState([]);
+  const [filterTemplate,setFilterTemplate]=useState('');
+  const [filterStatus,setFilterStatus]=useState('');
+  const [filterRaw,setFilterRaw]=useState('');
+  const [from,setFrom]=useState(()=>{const d=new Date();d.setDate(d.getDate()-30);return d.toISOString().slice(0,10);});
+  const [to,setTo]=useState(todayISO);
+  const [openAct,setOpenAct]=useState(null); // полный акт с данными
+  const [template,setTemplate]=useState(null); // шаблон открытого акта
+  const [lightbox,setLightbox]=useState(null);
+
+  useEffect(()=>{
+    fetch('/api/acts/templates').then(r=>r.json()).then(d=>setTemplates(d.templates||[]));
+    load();
+  },[]);
+
+  const load=async()=>{
+    const r=await fetch('/api/acts/acts').then(r=>r.json());
+    setActs(r.acts||[]);
+  };
+
+  const openActDetail=async(act)=>{
+    const [ar,tr]=await Promise.all([
+      fetch(`/api/acts/acts/${act.id}`).then(r=>r.json()),
+      fetch(`/api/acts/templates/${act.template_id}`).then(r=>r.json()),
+    ]);
+    setOpenAct(ar.act);
+    setTemplate(tr.template);
+  };
+
+  const statusLabel=(s)=>s==='done'?'✓ Завершён':s==='draft'?'Черновик':'—';
+  const statusColor=(s)=>s==='done'?'var(--ok)':'var(--muted)';
+
+  const filtered=acts.filter(a=>{
+    if(filterTemplate&&a.template_id!==Number(filterTemplate)) return false;
+    if(filterStatus&&a.status!==filterStatus) return false;
+    if(filterRaw&&!(a.raw_material||'').toLowerCase().includes(filterRaw.toLowerCase())) return false;
+    if(a.date<from||a.date>to) return false;
+    return true;
+  });
+
+  // Детальный просмотр акта
+  if(openAct&&template) {
+    const values=openAct.values||{};
+    const photos=openAct.photos||[];
+    return e('div',{style:{maxWidth:720,margin:'0 auto',padding:'0 16px 40px'}},
+      e('div',{style:{display:'flex',alignItems:'center',gap:12,margin:'16px 0 20px'}},
+        e('button',{onClick:()=>{setOpenAct(null);setTemplate(null);},
+          style:{padding:'6px 14px',borderRadius:8,border:'1.5px solid var(--border)',
+            background:'transparent',color:'var(--text)',fontWeight:600,fontSize:13,cursor:'pointer'}},'← Назад'),
+        e('div',{style:{flex:1}},
+          e('h2',{style:{margin:0,fontSize:18,fontWeight:700}},template.name),
+          e('div',{style:{fontSize:13,color:'var(--muted)',marginTop:2}},
+            new Date(openAct.date).toLocaleDateString('ru-RU'),
+            openAct.raw_material&&` · ${openAct.raw_material}`,
+            e('span',{style:{marginLeft:8,fontWeight:600,color:statusColor(openAct.status)}},
+              statusLabel(openAct.status))),
+        ),
+        e('a',{href:`/api/acts/acts/${openAct.id}/docx`,download:true,
+          style:{padding:'7px 14px',borderRadius:8,border:'1.5px solid var(--border)',
+            background:'transparent',color:'var(--text)',fontWeight:600,fontSize:13,
+            textDecoration:'none',display:'inline-flex',alignItems:'center',gap:6}},
+          '⬇ Скачать .docx'),
+      ),
+      lightbox&&e(Lightbox,{photos:lightbox.photos,startIndex:lightbox.index,onClose:()=>setLightbox(null)}),
+
+      (template.sections||[]).map(sec=>
+        e('div',{key:sec.id,style:{marginBottom:16,background:'var(--surface)',borderRadius:14,
+          border:'1.5px solid var(--border)',overflow:'hidden'}},
+          e('div',{style:{padding:'12px 16px',background:'var(--bg)',
+            borderBottom:'1.5px solid var(--border)',fontWeight:700,fontSize:15}},sec.title),
+          e('div',{style:{padding:'16px'}},
+            (sec.fields||[]).map(f=>{
+              const val=values[f.id];
+              const fieldPhotos=photos.filter(p=>p.field_id===f.id);
+              if(!val&&!fieldPhotos.length) return null;
+              return e('div',{key:f.id,style:{marginBottom:14,paddingBottom:14,
+                borderBottom:'1px solid var(--border)'}},
+                e('div',{style:{fontSize:12,color:'var(--muted)',marginBottom:4,fontWeight:600}},
+                  f.label,
+                  f.description&&e('span',{style:{fontWeight:400,marginLeft:6}},`(${f.description})`)),
+                // Значение
+                val&&e('div',{style:{fontSize:14,fontWeight:500,color:
+                  f.type==='comply'?(val==='соответствует'?'var(--ok)':'var(--danger)'):
+                  f.type==='yes_no'?(val==='да'?'var(--ok)':'var(--danger)'):'var(--text)'}},
+                  f.type==='multiselect'?(val||'').split('|').filter(Boolean).join(', '):val),
+                // Фото
+                fieldPhotos.length>0&&e('div',{style:{display:'flex',flexWrap:'wrap',gap:8,marginTop:8}},
+                  fieldPhotos.map((p,i)=>e('img',{key:p.filename,
+                    src:`/uploads/${p.filename}`,
+                    onClick:()=>setLightbox({photos:fieldPhotos,index:i}),
+                    style:{width:80,height:80,objectFit:'cover',borderRadius:8,
+                      border:'1px solid var(--border)',cursor:'pointer'}}))
+                ),
+              );
+            })
+          ),
+        )
+      ),
+    );
+  }
+
+  return e('div',{style:{maxWidth:900,margin:'0 auto',padding:'0 16px'}},
+    // Фильтры
+    e('div',{style:{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16,alignItems:'center'}},
+      e('input',{type:'date',className:'filter-input',value:from,onChange:ev=>setFrom(ev.target.value)}),
+      e('span',{style:{color:'var(--muted)'}},'—'),
+      e('input',{type:'date',className:'filter-input',value:to,onChange:ev=>setTo(ev.target.value)}),
+      e('select',{className:'filter-input',value:filterTemplate,onChange:ev=>setFilterTemplate(ev.target.value)},
+        e('option',{value:''},'Все шаблоны'),
+        templates.map(t=>e('option',{key:t.id,value:t.id},t.name))),
+      readOnly
+        ? e('select',{className:'filter-input',value:filterStatus,onChange:ev=>setFilterStatus(ev.target.value)},
+            e('option',{value:'done'},'Только завершённые'),
+            e('option',{value:''},'Все'))
+        : e('select',{className:'filter-input',value:filterStatus,onChange:ev=>setFilterStatus(ev.target.value)},
+            e('option',{value:''},'Все'),
+            e('option',{value:'done'},'Завершённые'),
+            e('option',{value:'draft'},'Черновики')),
+      e('input',{className:'filter-input',value:filterRaw,onChange:ev=>setFilterRaw(ev.target.value),
+        placeholder:'Поиск по сырью…',style:{minWidth:160}}),
+    ),
+
+    filtered.length===0
+      ? e('div',{className:'empty-state'},'Нет актов за выбранный период')
+      : e('div',{style:{background:'var(--surface)',borderRadius:14,border:'1.5px solid var(--border)',overflow:'hidden'}},
+          e('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:14}},
+            e('thead',null,e('tr',null,
+              ['Дата','Сырьё','Шаблон','Статус',''].map(h=>
+                e('th',{key:h,style:{padding:'10px 14px',textAlign:'left',
+                  borderBottom:'2px solid var(--border)',fontSize:12,color:'var(--muted)',
+                  fontWeight:700,textTransform:'uppercase',letterSpacing:'0.04em'}},h))
+            )),
+            e('tbody',null,filtered.map(a=>
+              e('tr',{key:a.id,style:{borderBottom:'1px solid var(--border)',cursor:'pointer'},
+                onClick:()=>openActDetail(a)},
+                e('td',{style:{padding:'11px 14px'}},new Date(a.date).toLocaleDateString('ru-RU')),
+                e('td',{style:{padding:'11px 14px',fontWeight:600}},a.raw_material||'—'),
+                e('td',{style:{padding:'11px 14px',color:'var(--muted)',fontSize:13}},a.template_name),
+                e('td',{style:{padding:'11px 14px'}},
+                  e('span',{style:{fontWeight:600,fontSize:13,color:statusColor(a.status)}},
+                    statusLabel(a.status))),
+                e('td',{style:{padding:'11px 14px'}},
+                  e('span',{style:{color:'var(--muted)',fontSize:18}},'›')),
+              )
+            )),
+          )
+        ),
+  );
+}
+
 // Журнал для продуктовой команды
 function ProductJournalPage() {
+  const [tab,setTab]=useState('journal');
   const [from,setFrom]=useState(()=>{ const d=new Date(); d.setDate(d.getDate()-7); return d.toISOString().slice(0,10); });
   const [to,setTo]=useState(todayISO);
   const [company,setCompany]=useState('');
@@ -9698,6 +10310,13 @@ function ProductJournalPage() {
     lightbox&&e(Lightbox,{photos:lightbox.photos,startIndex:lightbox.index,onClose:()=>setLightbox(null)}),
 
     e('h2',{className:'page-title'},'Журнал проверок'),
+    e('div',{className:'mgr-tabs',style:{marginBottom:20}},
+      e('button',{className:'mgr-tab'+(tab==='journal'?' active':''),onClick:()=>setTab('journal')},'📋 Проверки качества'),
+      e('button',{className:'mgr-tab'+(tab==='acts'?' active':''),onClick:()=>setTab('acts')},'🧪 Акты проработки'),
+    ),
+
+    tab==='acts'&&e(ActsViewer,{readOnly:true}),
+    tab==='journal'&&e(React.Fragment,null,
 
     // Фильтры
     e('div',{style:{display:'flex',gap:10,flexWrap:'wrap',marginBottom:20,alignItems:'center'}},
@@ -9826,6 +10445,652 @@ function ProductJournalPage() {
         );
       })
     )
+  ) // конец React.Fragment для journal
+  );
+}
+
+// ============================================================
+// АКТЫ ПРОРАБОТКИ СЫРЬЯ
+// ============================================================
+
+const ACT_FIELD_TYPES = [
+  {value:'text',       label:'Текст'},
+  {value:'number',     label:'Число'},
+  {value:'date',       label:'Дата'},
+  {value:'autodate',   label:'Авто-дата'},
+  {value:'comply',     label:'Соответствует / Не соответствует'},
+  {value:'yes_no',     label:'Да / Нет'},
+  {value:'select',     label:'Выбор из списка'},
+  {value:'multiselect',label:'Множественный выбор'},
+  {value:'photo',      label:'Фото'},
+  {value:'comment',    label:'Комментарий'},
+];
+
+// ── Конструктор шаблона ───────────────────────────────────────────────────────
+function ActTemplateEditor({template, onSave, onBack}) {
+  const isNew = !template;
+  const [name, setName] = useState(template?.name || '');
+  const [sections, setSections] = useState(template?.sections || []);
+  const [saving, setSaving] = useState(false);
+
+  const addSection = () => setSections(prev => [...prev, {title:'Новый раздел', fields:[], _key:Date.now()}]);
+
+  const updateSection = (si, key, val) =>
+    setSections(prev => prev.map((s,i) => i===si ? {...s, [key]:val} : s));
+
+  const removeSection = (si) =>
+    setSections(prev => prev.filter((_,i) => i!==si));
+
+  const addField = (si) =>
+    setSections(prev => prev.map((s,i) => i!==si ? s : {
+      ...s, fields: [...s.fields, {label:'', type:'text', description:'', required:false, config:{}, _key:Date.now()}]
+    }));
+
+  const updateField = (si, fi, key, val) =>
+    setSections(prev => prev.map((s,i) => i!==si ? s : {
+      ...s, fields: s.fields.map((f,j) => j!==fi ? f : {...f, [key]:val})
+    }));
+
+  const removeField = (si, fi) =>
+    setSections(prev => prev.map((s,i) => i!==si ? s : {
+      ...s, fields: s.fields.filter((_,j) => j!==fi)
+    }));
+
+  const moveField = (si, fi, dir) => {
+    setSections(prev => prev.map((s,i) => {
+      if(i!==si) return s;
+      const fields=[...s.fields];
+      const ni=fi+dir;
+      if(ni<0||ni>=fields.length) return s;
+      [fields[fi],fields[ni]]=[fields[ni],fields[fi]];
+      return {...s,fields};
+    }));
+  };
+
+  const handleSave = async() => {
+    if(!name.trim()) return alert('Введите название шаблона');
+    setSaving(true);
+    try {
+      const payload = {name: name.trim(), sections: sections.map(s=>({
+        title: s.title,
+        fields: (s.fields||[]).map(f=>({
+          label: f.label, description: f.description||'', type: f.type||'text',
+          required: !!f.required, config: f.config||{},
+        }))
+      }))};
+      let r;
+      if(isNew) {
+        r = await fetch('/api/acts/templates', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+      } else {
+        r = await fetch(`/api/acts/templates/${template.id}`, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+      }
+      const d = await r.json();
+      if(!r.ok||d.error) return alert('Ошибка: '+d.error);
+      onSave(d.id||template.id);
+    } finally { setSaving(false); }
+  };
+
+  const inputStyle={width:'100%',padding:'7px 10px',borderRadius:8,border:'1.5px solid var(--border)',
+    background:'var(--surface)',color:'var(--text)',fontSize:14,boxSizing:'border-box'};
+  const btnStyle=(primary)=>({padding:'7px 16px',borderRadius:8,border:primary?'none':'1.5px solid var(--border)',
+    background:primary?'var(--accent)':'transparent',color:primary?'white':'var(--text)',
+    fontWeight:600,fontSize:13,cursor:'pointer'});
+
+  return e('div',{style:{maxWidth:860,margin:'0 auto',padding:'0 16px 40px'}},
+    e('div',{style:{display:'flex',alignItems:'center',gap:12,margin:'16px 0 20px'}},
+      e('button',{onClick:onBack,style:{...btnStyle(false),padding:'6px 12px'}}, '← Назад'),
+      e('h2',{style:{margin:0,fontSize:20,fontWeight:700}}, isNew?'Новый шаблон':'Редактировать шаблон'),
+    ),
+
+    e('div',{style:{marginBottom:20}},
+      e('label',{style:{fontSize:13,fontWeight:600,display:'block',marginBottom:6}},'Название шаблона'),
+      e('input',{value:name,onChange:ev=>setName(ev.target.value),placeholder:'Например: Курица охлажденная',style:inputStyle}),
+    ),
+
+    sections.map((sec,si)=>
+      e('div',{key:sec._key||sec.id||si,style:{background:'var(--surface)',borderRadius:14,
+        border:'1.5px solid var(--border)',marginBottom:16,overflow:'hidden'}},
+        // Заголовок секции
+        e('div',{style:{display:'flex',alignItems:'center',gap:10,padding:'12px 16px',
+          background:'var(--bg)',borderBottom:'1.5px solid var(--border)'}},
+          e('input',{value:sec.title,onChange:ev=>updateSection(si,'title',ev.target.value),
+            placeholder:'Название раздела',
+            style:{...inputStyle,fontWeight:700,fontSize:15,border:'none',background:'transparent',padding:'2px 6px'}}),
+          e('button',{onClick:()=>removeSection(si),
+            style:{marginLeft:'auto',padding:'4px 10px',borderRadius:6,border:'1px solid var(--danger)',
+              background:'transparent',color:'var(--danger)',fontSize:12,cursor:'pointer'}},'✕ Удалить раздел'),
+        ),
+
+        // Поля секции
+        e('div',{style:{padding:'12px 16px'}},
+          sec.fields.map((f,fi)=>
+            e('div',{key:f._key||fi,style:{background:'var(--bg)',borderRadius:10,border:'1px solid var(--border)',
+              padding:'12px',marginBottom:10}},
+              e('div',{style:{display:'flex',gap:8,marginBottom:8,alignItems:'center'}},
+                e('input',{value:f.label,onChange:ev=>updateField(si,fi,'label',ev.target.value),
+                  placeholder:'Название поля',style:{...inputStyle,flex:2}}),
+                e('select',{value:f.type,onChange:ev=>updateField(si,fi,'type',ev.target.value),
+                  style:{...inputStyle,flex:1}},
+                  ACT_FIELD_TYPES.map(t=>e('option',{key:t.value,value:t.value},t.label))),
+                e('label',{style:{fontSize:12,whiteSpace:'nowrap',display:'flex',alignItems:'center',gap:4}},
+                  e('input',{type:'checkbox',checked:!!f.required,
+                    onChange:ev=>updateField(si,fi,'required',ev.target.checked)}),
+                  'Обязательное'),
+                e('div',{style:{display:'flex',gap:4}},
+                  fi>0&&e('button',{onClick:()=>moveField(si,fi,-1),title:'Вверх',
+                    style:{padding:'4px 7px',borderRadius:6,border:'1px solid var(--border)',background:'transparent',cursor:'pointer',fontSize:12}},'↑'),
+                  fi<sec.fields.length-1&&e('button',{onClick:()=>moveField(si,fi,1),title:'Вниз',
+                    style:{padding:'4px 7px',borderRadius:6,border:'1px solid var(--border)',background:'transparent',cursor:'pointer',fontSize:12}},'↓'),
+                  e('button',{onClick:()=>removeField(si,fi),
+                    style:{padding:'4px 7px',borderRadius:6,border:'1px solid var(--danger)',
+                      background:'transparent',color:'var(--danger)',cursor:'pointer',fontSize:12}},'✕'),
+                ),
+              ),
+              e('input',{value:f.description||'',onChange:ev=>updateField(si,fi,'description',ev.target.value),
+                placeholder:'Описание / критерий (необязательно)',
+                style:{...inputStyle,fontSize:12,color:'var(--muted)'}}),
+              // Варианты для select/multiselect
+              (f.type==='select'||f.type==='multiselect')&&e('div',{style:{marginTop:8}},
+                e('label',{style:{fontSize:12,color:'var(--muted)',display:'block',marginBottom:4}},
+                  'Варианты через запятую:'),
+                e('input',{
+                  value:(f.config?.options||[]).join(', '),
+                  onChange:ev=>updateField(si,fi,'config',{...f.config,
+                    options:ev.target.value.split(',').map(s=>s.trim()).filter(Boolean)}),
+                  placeholder:'Вариант 1, Вариант 2, Вариант 3',
+                  style:{...inputStyle,fontSize:12}}),
+              ),
+            )
+          ),
+          e('button',{onClick:()=>addField(si),
+            style:{width:'100%',padding:'8px',borderRadius:8,border:'1.5px dashed var(--border)',
+              background:'transparent',color:'var(--muted)',fontSize:13,cursor:'pointer',marginTop:4}},
+            '+ Добавить поле'),
+        ),
+      )
+    ),
+
+    e('div',{style:{display:'flex',gap:12,marginBottom:16}},
+      e('button',{onClick:addSection,style:{...btnStyle(false)}}, '+ Добавить раздел'),
+    ),
+    e('div',{style:{display:'flex',gap:12,justifyContent:'flex-end'}},
+      e('button',{onClick:onBack,style:btnStyle(false)},'Отмена'),
+      e('button',{onClick:handleSave,disabled:saving,style:btnStyle(true)},
+        saving?'Сохранение…':'Сохранить шаблон'),
+    ),
+  );
+}
+
+// ── Форма заполнения акта ─────────────────────────────────────────────────────
+function ActForm({actId, templateId, onBack, onSaved}) {
+  const [act, setAct] = useState(null);
+  const [template, setTemplate] = useState(null);
+  const [values, setValues] = useState({});
+  const [photos, setPhotos] = useState([]); // [{id,field_id,filename}]
+  const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(null); // field_id being uploaded
+  const fileRefs = useRef({});
+
+  useEffect(()=>{
+    if(actId) {
+      fetch(`/api/acts/acts/${actId}`).then(r=>r.json()).then(d=>{
+        if(d.act) {
+          setAct(d.act);
+          setValues(d.act.values||{});
+          setPhotos(d.act.photos||[]);
+          fetch(`/api/acts/templates/${d.act.template_id}`).then(r=>r.json()).then(td=>{
+            if(td.template) setTemplate(td.template);
+          });
+        }
+      });
+    } else if(templateId) {
+      fetch(`/api/acts/templates/${templateId}`).then(r=>r.json()).then(d=>{
+        if(d.template) setTemplate(d.template);
+      });
+      // autodate для даты проработки
+      setValues(prev=>({...prev, _raw_material:'', _date:new Date().toISOString().slice(0,10)}));
+    }
+  },[actId,templateId]);
+
+  // Авто-даты: при монтировании проставляем текущую дату для autodate полей
+  useEffect(()=>{
+    if(!template) return;
+    const today = new Date().toISOString().slice(0,10);
+    const updates={};
+    for(const sec of template.sections||[]) {
+      for(const f of sec.fields||[]) {
+        if(f.type==='autodate' && !values[f.id]) updates[f.id]=today;
+      }
+    }
+    if(Object.keys(updates).length) setValues(prev=>({...prev,...updates}));
+  },[template]);
+
+  const set = (fieldId, val) => setValues(prev=>({...prev,[fieldId]:val}));
+
+  // Видимость поля (show_if)
+  const isVisible = (field) => {
+    if(!field.show_if_field) return true;
+    return values[field.show_if_field] === field.show_if_value;
+  };
+
+  // Загрузка фото
+  const handlePhoto = async(fieldId, files) => {
+    if(!files||!files.length) return;
+    const fileArr = Array.from(files);
+    if(fileRefs.current[fieldId]) fileRefs.current[fieldId].value='';
+    setUploading(fieldId);
+    try {
+      // Если акт ещё не создан — создаём его
+      let aid = act?.id || actId;
+      if(!aid) {
+        const cr = await fetch('/api/acts/acts',{method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({template_id:templateId, date:values._date||new Date().toISOString().slice(0,10),
+            raw_material:values._raw_material||''})});
+        const cd = await cr.json();
+        aid = cd.id;
+        setAct(prev=>({...(prev||{}),id:aid}));
+      }
+      const fd = new FormData();
+      for(const f of fileArr) fd.append('photos',f);
+      if(fieldId) fd.append('field_id', fieldId);
+      const r = await fetch(`/api/acts/acts/${aid}/photos`,{method:'POST',body:fd});
+      const d = await r.json();
+      if(d.files) setPhotos(prev=>[...prev,...d.files]);
+    } catch(e){console.error(e);}
+    finally{setUploading(null);}
+  };
+
+  const deletePhoto = async(filename) => {
+    await fetch(`/api/acts/acts/photos/${encodeURIComponent(filename)}`,{method:'DELETE'});
+    setPhotos(prev=>prev.filter(p=>p.filename!==filename));
+  };
+
+  const handleSave = async(status='draft') => {
+    setSaving(true);
+    try {
+      let aid = act?.id || actId;
+      const date = values._date || new Date().toISOString().slice(0,10);
+      const rawMaterial = values._raw_material || template?.name || '';
+      const saveValues = {...values};
+      delete saveValues._date; delete saveValues._raw_material;
+
+      if(!aid) {
+        const cr = await fetch('/api/acts/acts',{method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({template_id:templateId||act?.template_id, date, raw_material:rawMaterial})});
+        const cd = await cr.json();
+        if(cd.error) return alert('Ошибка: '+cd.error);
+        aid = cd.id;
+        setAct(prev=>({...(prev||{}),id:aid,date,raw_material:rawMaterial}));
+      }
+      const r = await fetch(`/api/acts/acts/${aid}`,{method:'PUT',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({values:saveValues, status, raw_material:rawMaterial})});
+      const d = await r.json();
+      if(d.error) return alert('Ошибка: '+d.error);
+      if(onSaved) onSaved(aid, status);
+      if(status==='done') onBack();
+    } finally{setSaving(false);}
+  };
+
+  if(!template) return e('div',{style:{padding:32,textAlign:'center',color:'var(--muted)'}},'Загрузка…');
+
+  const inputStyle={width:'100%',padding:'8px 10px',borderRadius:8,border:'1.5px solid var(--border)',
+    background:'var(--surface)',color:'var(--text)',fontSize:14,boxSizing:'border-box'};
+  const btnStyle=(primary,danger)=>({padding:'8px 18px',borderRadius:8,
+    border:danger?'1.5px solid var(--danger)':primary?'none':'1.5px solid var(--border)',
+    background:danger?'transparent':primary?'var(--accent)':'transparent',
+    color:danger?'var(--danger)':primary?'white':'var(--text)',
+    fontWeight:600,fontSize:13,cursor:'pointer'});
+
+  const renderField = (field) => {
+    if(!isVisible(field)) return null;
+    const val = values[field.id];
+    const fieldPhotos = photos.filter(p=>p.field_id===field.id);
+
+    const label = e('div',{style:{marginBottom:6}},
+      e('span',{style:{fontSize:14,fontWeight:600}}, field.label,
+        !!field.required&&e('span',{style:{color:'var(--danger)',marginLeft:2}},'*')),
+      !!field.description&&e('div',{style:{fontSize:12,color:'var(--muted)',marginTop:2}},field.description),
+    );
+
+    let control;
+    if(field.type==='text') {
+      control=e('input',{value:val||'',onChange:ev=>set(field.id,ev.target.value),style:inputStyle});
+    } else if(field.type==='number') {
+      control=e('input',{type:'number',value:val||'',onChange:ev=>set(field.id,ev.target.value),style:inputStyle});
+    } else if(field.type==='date'||field.type==='autodate') {
+      control=e('input',{type:'date',value:val||'',onChange:ev=>set(field.id,ev.target.value),style:inputStyle});
+    } else if(field.type==='comply') {
+      control=e('div',{style:{display:'flex',gap:8}},
+        ['соответствует','не соответствует'].map(opt=>
+          e('button',{key:opt,onClick:()=>set(field.id,val===opt?null:opt),
+            style:{flex:1,padding:'8px',borderRadius:8,fontWeight:600,fontSize:13,cursor:'pointer',
+              border:'1.5px solid '+(val===opt?(opt==='соответствует'?'var(--ok)':'var(--danger)'):'var(--border)'),
+              background:val===opt?(opt==='соответствует'?'var(--ok-bg)':'#FEF2F2'):'var(--surface)',
+              color:val===opt?(opt==='соответствует'?'var(--ok)':'var(--danger)'):'var(--text)'}},
+            opt==='соответствует'?'✓ Соответствует':'✗ Не соответствует')
+        )
+      );
+    } else if(field.type==='yes_no') {
+      control=e('div',{style:{display:'flex',gap:8}},
+        ['да','нет'].map(opt=>
+          e('button',{key:opt,onClick:()=>set(field.id,val===opt?null:opt),
+            style:{flex:1,padding:'8px',borderRadius:8,fontWeight:600,fontSize:13,cursor:'pointer',
+              border:'1.5px solid '+(val===opt?'var(--accent)':'var(--border)'),
+              background:val===opt?'var(--accent-light, #FEF2F0)':'var(--surface)',
+              color:val===opt?'var(--accent)':'var(--text)'}},
+            opt.charAt(0).toUpperCase()+opt.slice(1))
+        )
+      );
+    } else if(field.type==='select') {
+      const opts = field.config?.options||[];
+      control=e('div',{style:{display:'flex',flexWrap:'wrap',gap:6}},
+        opts.map(opt=>e('button',{key:opt,onClick:()=>set(field.id,val===opt?null:opt),
+          style:{padding:'6px 12px',borderRadius:20,fontSize:13,cursor:'pointer',
+            border:'1.5px solid '+(val===opt?'var(--accent)':'var(--border)'),
+            background:val===opt?'var(--accent-light, #FEF2F0)':'var(--surface)',
+            color:val===opt?'var(--accent)':'var(--text)',fontWeight:val===opt?600:400}},
+          opt))
+      );
+    } else if(field.type==='multiselect') {
+      const opts = field.config?.options||[];
+      const selected = val ? val.split('|').filter(Boolean) : [];
+      const toggle = (opt) => {
+        const next = selected.includes(opt)?selected.filter(x=>x!==opt):[...selected,opt];
+        set(field.id, next.join('|'));
+      };
+      control=e('div',{style:{display:'flex',flexWrap:'wrap',gap:6}},
+        opts.map(opt=>e('button',{key:opt,onClick:()=>toggle(opt),
+          style:{padding:'6px 12px',borderRadius:20,fontSize:13,cursor:'pointer',
+            border:'1.5px solid '+(selected.includes(opt)?'var(--accent)':'var(--border)'),
+            background:selected.includes(opt)?'var(--accent-light, #FEF2F0)':'var(--surface)',
+            color:selected.includes(opt)?'var(--accent)':'var(--text)',fontWeight:selected.includes(opt)?600:400}},
+          opt))
+      );
+    } else if(field.type==='comment') {
+      control=e('textarea',{value:val||'',onChange:ev=>set(field.id,ev.target.value),
+        rows:3,style:{...inputStyle,resize:'vertical'}});
+    } else if(field.type==='photo') {
+      control=e('div',null,
+        fieldPhotos.length>0&&e('div',{style:{display:'flex',flexWrap:'wrap',gap:8,marginBottom:8}},
+          fieldPhotos.map(p=>e('div',{key:p.filename,style:{position:'relative'}},
+            e('img',{src:`/uploads/${p.filename}`,style:{width:80,height:80,objectFit:'cover',borderRadius:8,border:'1px solid var(--border)'}}),
+            e('button',{onClick:()=>deletePhoto(p.filename),
+              style:{position:'absolute',top:-6,right:-6,width:20,height:20,borderRadius:'50%',border:'none',
+                background:'var(--danger)',color:'white',fontSize:10,cursor:'pointer',
+                display:'flex',alignItems:'center',justifyContent:'center'}},'✕')
+          ))
+        ),
+        e(PhotoPickerButton,{
+          onFiles:(files)=>handlePhoto(field.id,files),
+          uploading:uploading===field.id,
+          label:'+ Фото'}),
+      );
+    } else {
+      control=e('input',{value:val||'',onChange:ev=>set(field.id,ev.target.value),style:inputStyle});
+    }
+
+    return e('div',{key:field.id,style:{marginBottom:16}}, label, control);
+  };
+
+  return e('div',{style:{maxWidth:720,margin:'0 auto',padding:'0 16px 40px'}},
+    e('div',{style:{display:'flex',alignItems:'center',gap:12,margin:'16px 0 20px'}},
+      e('button',{onClick:onBack,style:{padding:'6px 12px',borderRadius:8,border:'1.5px solid var(--border)',
+        background:'transparent',color:'var(--text)',fontWeight:600,fontSize:13,cursor:'pointer'}},'← Назад'),
+      e('h2',{style:{margin:0,fontSize:20,fontWeight:700}},template.name),
+    ),
+
+    // Название сырья и дата
+    e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:20,
+      background:'var(--surface)',borderRadius:12,border:'1.5px solid var(--border)',padding:16}},
+      e('div',null,
+        e('label',{style:{fontSize:13,fontWeight:600,display:'block',marginBottom:6}},'Наименование сырья'),
+        e('input',{value:values._raw_material||'',onChange:ev=>setValues(p=>({...p,_raw_material:ev.target.value})),
+          placeholder:template.name,style:inputStyle}),
+      ),
+      e('div',null,
+        e('label',{style:{fontSize:13,fontWeight:600,display:'block',marginBottom:6}},'Дата проработки'),
+        e('input',{type:'date',value:values._date||'',onChange:ev=>setValues(p=>({...p,_date:ev.target.value})),
+          style:inputStyle}),
+      ),
+    ),
+
+    // Секции с полями
+    (template.sections||[]).map(sec=>
+      e('div',{key:sec.id,style:{marginBottom:20,background:'var(--surface)',borderRadius:14,
+        border:'1.5px solid var(--border)',overflow:'hidden'}},
+        e('div',{style:{padding:'12px 16px',background:'var(--bg)',borderBottom:'1.5px solid var(--border)',
+          fontWeight:700,fontSize:15}}, sec.title),
+        e('div',{style:{padding:'16px'}},
+          (sec.fields||[]).map(f=>renderField(f))
+        ),
+      )
+    ),
+
+    e('div',{style:{display:'flex',gap:10,justifyContent:'flex-end'}},
+      e('button',{onClick:()=>handleSave('draft'),disabled:saving,
+        style:btnStyle(false)}, saving?'…':'Сохранить черновик'),
+      e('button',{onClick:()=>handleSave('done'),disabled:saving,
+        style:btnStyle(true)}, saving?'…':'✓ Завершить акт'),
+    ),
+  );
+}
+
+// ── Главная страница Актов ────────────────────────────────────────────────────
+function ActsPage() {
+  const [view, setView] = useState('list'); // 'list'|'templates'|'new-template'|'edit-template'|'new-act'|'fill-act'
+  const [templates, setTemplates] = useState([]);
+  const [acts, setActs] = useState([]);
+  const [selectedTemplate, setSelectedTemplate] = useState(null);
+  const [selectedActId, setSelectedActId] = useState(null);
+  const [cloneTarget, setCloneTarget] = useState(null);
+  const [cloneName, setCloneName] = useState('');
+  const [listFilterRaw, setListFilterRaw] = useState('');
+  const [listFilterTemplate, setListFilterTemplate] = useState('');
+  const [listFilterStatus, setListFilterStatus] = useState('');
+  const [filteredActs, setFilteredActs] = useState(null);
+
+  const loadTemplates = () =>
+    fetch('/api/acts/templates').then(r=>r.json()).then(d=>setTemplates(d.templates||[]));
+  const loadActs = () =>
+    fetch('/api/acts/acts').then(r=>r.json()).then(d=>{setActs(d.acts||[]);setFilteredActs(null);setListFilterRaw('');setListFilterTemplate('');setListFilterStatus('');});
+
+  useEffect(()=>{ loadTemplates(); loadActs(); },[]);
+
+  const deleteTemplate = async(id) => {
+    if(!confirm('Удалить шаблон? Все акты по этому шаблону останутся.')) return;
+    await fetch(`/api/acts/templates/${id}`,{method:'DELETE'});
+    loadTemplates();
+  };
+
+  const deleteAct = async(id) => {
+    if(!confirm('Удалить акт?')) return;
+    await fetch(`/api/acts/acts/${id}`,{method:'DELETE'});
+    loadActs();
+  };
+
+  const startClone = (tmpl) => { setCloneTarget(tmpl); setCloneName(tmpl.name+' (копия)'); };
+  const doClone = async() => {
+    if(!cloneName.trim()) return;
+    await fetch(`/api/acts/templates/${cloneTarget.id}/clone`,{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({name:cloneName})});
+    setCloneTarget(null); setCloneName('');
+    loadTemplates();
+  };
+
+  const statusLabel = (s) => s==='done'?'✓ Завершён':s==='draft'?'Черновик':'—';
+  const statusColor = (s) => s==='done'?'var(--ok)':s==='draft'?'var(--muted)':'var(--muted)';
+
+  const btnStyle=(primary)=>({padding:'8px 16px',borderRadius:8,
+    border:primary?'none':'1.5px solid var(--border)',
+    background:primary?'var(--accent)':'transparent',
+    color:primary?'white':'var(--text)',fontWeight:600,fontSize:13,cursor:'pointer'});
+
+  // Экраны-подстраницы
+  if(view==='new-template')
+    return e(ActTemplateEditor,{template:null,
+      onBack:()=>setView('templates'),
+      onSave:()=>{ loadTemplates(); setView('templates'); }});
+  if(view==='edit-template'&&selectedTemplate)
+    return e(ActTemplateEditor,{template:selectedTemplate,
+      onBack:()=>setView('templates'),
+      onSave:()=>{ loadTemplates(); setView('templates'); }});
+  if(view==='fill-act')
+    return e(ActForm,{
+      actId:selectedActId,
+      templateId:selectedActId?null:selectedTemplate?.id,
+      onBack:()=>{ setView('list'); loadActs(); },
+      onSaved:(id)=>{ setSelectedActId(id); }});
+
+  return e('div',{style:{maxWidth:900,margin:'0 auto',padding:'16px'}},
+
+    // Вкладки Акты / Шаблоны
+    e('div',{style:{display:'flex',gap:8,marginBottom:20}},
+      e('button',{onClick:()=>setView('list'),
+        style:{...btnStyle(view==='list'),borderBottom:view==='list'?'2.5px solid var(--accent)':''}},
+        '📄 Акты проработки'),
+      e('button',{onClick:()=>setView('templates'),
+        style:{...btnStyle(view==='templates'),borderBottom:view==='templates'?'2.5px solid var(--accent)':''}},
+        '🗂 Шаблоны'),
+    ),
+
+    // ── Список шаблонов ──────────────────────────────────────────────────────
+    view==='templates'&&e('div',null,
+      e('div',{style:{display:'flex',justifyContent:'flex-end',marginBottom:12}},
+        e('button',{onClick:()=>setView('new-template'),style:btnStyle(true)},'+ Новый шаблон'),
+      ),
+      templates.length===0
+        ? e('div',{style:{textAlign:'center',color:'var(--muted)',padding:32}},'Нет шаблонов. Создайте первый.')
+        : templates.map(t=>
+          e('div',{key:t.id,style:{display:'flex',alignItems:'center',gap:12,padding:'12px 16px',
+            background:'var(--surface)',borderRadius:12,border:'1.5px solid var(--border)',marginBottom:8}},
+            e('div',{style:{flex:1}},
+              e('div',{style:{fontWeight:700,fontSize:15}},t.name),
+              e('div',{style:{fontSize:12,color:'var(--muted)',marginTop:2}},
+                new Date(t.created_at).toLocaleDateString('ru-RU')),
+            ),
+            e('a',{href:`/api/acts/templates/${t.id}/docx`,download:true,
+              style:{...btnStyle(false),padding:'6px 12px',fontSize:12,textDecoration:'none',display:'inline-flex',alignItems:'center',gap:4}},
+              '⬇ .docx'),
+            e('button',{onClick:()=>startClone(t),
+              style:{...btnStyle(false),padding:'6px 12px',fontSize:12}},'Копировать'),
+            e('button',{
+              onClick:async()=>{
+                const r=await fetch(`/api/acts/templates/${t.id}`).then(r=>r.json());
+                if(r.template){setSelectedTemplate(r.template);setView('edit-template');}
+              },
+              style:{...btnStyle(false),padding:'6px 12px',fontSize:12}},'Изменить'),
+            e('button',{onClick:()=>deleteTemplate(t.id),
+              style:{...btnStyle(false),padding:'6px 12px',fontSize:12,
+                borderColor:'var(--danger)',color:'var(--danger)'}},'✕'),
+          )
+        ),
+      // Диалог клонирования
+      cloneTarget&&e('div',{style:{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',
+        display:'flex',alignItems:'center',justifyContent:'center',zIndex:1000}},
+        e('div',{style:{background:'var(--surface)',borderRadius:16,padding:24,width:360,
+          boxShadow:'0 8px 32px rgba(0,0,0,0.15)'}},
+          e('h3',{style:{margin:'0 0 16px',fontSize:17}},'Копировать шаблон'),
+          e('input',{value:cloneName,onChange:ev=>setCloneName(ev.target.value),
+            style:{width:'100%',padding:'8px 12px',borderRadius:8,border:'1.5px solid var(--border)',
+              background:'var(--bg)',color:'var(--text)',fontSize:14,boxSizing:'border-box',marginBottom:16}}),
+          e('div',{style:{display:'flex',gap:8,justifyContent:'flex-end'}},
+            e('button',{onClick:()=>setCloneTarget(null),style:btnStyle(false)},'Отмена'),
+            e('button',{onClick:doClone,style:btnStyle(true)},'Создать копию'),
+          ),
+        )
+      ),
+    ),
+
+    // ── Список актов ─────────────────────────────────────────────────────────
+    view==='list'&&e('div',null,
+      templates.length>0&&e('div',{style:{display:'flex',gap:8,marginBottom:12,flexWrap:'wrap'}},
+        e('span',{style:{fontSize:13,color:'var(--muted)',alignSelf:'center'}},'Создать акт:'),
+        templates.map(t=>e('button',{key:t.id,
+          onClick:()=>{setSelectedTemplate(t);setSelectedActId(null);setView('fill-act');},
+          style:{...btnStyle(false),fontSize:12,padding:'6px 12px'}},t.name)),
+      ),
+      e('div',{style:{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}},
+        e('input',{className:'filter-input',value:listFilterRaw,placeholder:'Поиск по сырью…',style:{minWidth:160},
+          onChange:ev=>{
+            const v=ev.target.value; setListFilterRaw(v);
+            setFilteredActs(acts.filter(a=>
+              (!v||(a.raw_material||'').toLowerCase().includes(v.toLowerCase()))&&
+              (!listFilterTemplate||a.template_id===Number(listFilterTemplate))&&
+              (!listFilterStatus||a.status===listFilterStatus)
+            ));
+          }}),
+        e('select',{className:'filter-input',value:listFilterTemplate,
+          onChange:ev=>{
+            const v=ev.target.value; setListFilterTemplate(v);
+            setFilteredActs(acts.filter(a=>
+              (!listFilterRaw||(a.raw_material||'').toLowerCase().includes(listFilterRaw.toLowerCase()))&&
+              (!v||a.template_id===Number(v))&&
+              (!listFilterStatus||a.status===listFilterStatus)
+            ));
+          }},
+          e('option',{value:''},'Все шаблоны'),
+          templates.map(t=>e('option',{key:t.id,value:t.id},t.name))),
+        e('select',{className:'filter-input',value:listFilterStatus,
+          onChange:ev=>{
+            const v=ev.target.value; setListFilterStatus(v);
+            setFilteredActs(acts.filter(a=>
+              (!listFilterRaw||(a.raw_material||'').toLowerCase().includes(listFilterRaw.toLowerCase()))&&
+              (!listFilterTemplate||a.template_id===Number(listFilterTemplate))&&
+              (!v||a.status===v)
+            ));
+          }},
+          e('option',{value:''},'Все'),
+          e('option',{value:'done'},'Завершённые'),
+          e('option',{value:'draft'},'Черновики')),
+      ),
+      (filteredActs||acts).length===0
+        ? e('div',{style:{textAlign:'center',color:'var(--muted)',padding:32}},'Нет актов.')
+        : e('div',{style:{overflowX:'auto'}},
+          e('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:14}},
+            e('thead',null,e('tr',null,
+              ['Дата','Сырьё','Шаблон','Статус',''].map(h=>
+                e('th',{key:h,style:{padding:'8px 12px',textAlign:'left',
+                  borderBottom:'2px solid var(--border)',fontSize:13,color:'var(--muted)',fontWeight:600}},h))
+            )),
+            e('tbody',null,(filteredActs||acts).map(a=>
+              e('tr',{key:a.id,style:{borderBottom:'1px solid var(--border)'}},
+                e('td',{style:{padding:'10px 12px'}},new Date(a.date).toLocaleDateString('ru-RU')),
+                e('td',{style:{padding:'10px 12px',fontWeight:600}},a.raw_material||'—'),
+                e('td',{style:{padding:'10px 12px',color:'var(--muted)',fontSize:13}},a.template_name),
+                e('td',{style:{padding:'10px 12px'}},
+                  e('span',{style:{fontSize:12,fontWeight:600,color:statusColor(a.status)}},statusLabel(a.status))),
+                e('td',{style:{padding:'10px 12px'}},
+                  e('div',{style:{display:'flex',gap:6}},
+                    e('button',{onClick:()=>{setSelectedActId(a.id);setView('fill-act');},
+                      style:{...btnStyle(false),padding:'5px 10px',fontSize:12}},
+                      a.status==='done'?'Просмотр':'Продолжить'),
+                    e('a',{href:`/api/acts/acts/${a.id}/docx`,download:true,
+                      style:{...btnStyle(false),padding:'5px 8px',fontSize:12,textDecoration:'none',display:'inline-flex',alignItems:'center'}},
+                      '⬇'),
+                    e('button',{onClick:()=>deleteAct(a.id),
+                      style:{...btnStyle(false),padding:'5px 8px',fontSize:12,
+                        borderColor:'var(--danger)',color:'var(--danger)'}},'✕'),
+                  )
+                ),
+              )
+            )),
+          )
+        ),
+    ),
+
+    // ── Выбор шаблона для нового акта ────────────────────────────────────────
+    view==='new-act'&&selectedTemplate&&e('div',null,
+      e('div',{style:{display:'flex',alignItems:'center',gap:12,marginBottom:20}},
+        e('button',{onClick:()=>setView('list'),style:{...btnStyle(false),padding:'6px 12px'}},'← Назад'),
+        e('h2',{style:{margin:0,fontSize:18}},`Новый акт: ${selectedTemplate.name}`),
+      ),
+      e(ActForm,{templateId:selectedTemplate.id,
+        onBack:()=>{ setView('list'); loadActs(); },
+        onSaved:(id)=>{ setSelectedActId(id); }}),
+    ),
   );
 }
 
@@ -9901,6 +11166,11 @@ function App() {
         // Игнорируем собственные апдейты (clientId совпадает с нашим)
         if(msg.type==='shift_updated' && msg.date===shift.date && msg.clientId!==MY_CLIENT_ID){
           setShift(msg.shift);
+          // Обновляем техкарты если изменились
+          if(msg.shift.techcardId){ loadTechCard(msg.shift.techcardId).then(tc=>{if(tc)setActiveTcEE(tc);}); }
+          else setActiveTcEE(null);
+          if(msg.shift.udTechcardId){ loadTechCard(msg.shift.udTechcardId).then(tc=>{if(tc)setActiveTcUD(tc);}); }
+          else setActiveTcUD(null);
         }
       } catch(_){}
     };

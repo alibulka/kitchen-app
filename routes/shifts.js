@@ -11,7 +11,7 @@ async function buildShift(date) {
   if (!shiftRow) return null;
 
   const [{ rows: statusRows }, { rows: empRows }, { rows: factRows }, { rows: stationStartRows }] = await Promise.all([
-    pool.query('SELECT station_key, item_id, done, done_at FROM shift_item_status WHERE shift_date = $1', [date]),
+    pool.query('SELECT station_key, item_id, done, done_at, skip_reason, skip_at FROM shift_item_status WHERE shift_date = $1', [date]),
     pool.query('SELECT station_key, item_id, employee_id FROM shift_item_employees WHERE shift_date = $1', [date]),
     pool.query('SELECT station_key, item_id, line_idx, value FROM shift_facts_n WHERE shift_date = $1', [date]),
     pool.query('SELECT station_key, start_time FROM shift_station_start WHERE shift_date = $1', [date]),
@@ -19,10 +19,128 @@ async function buildShift(date) {
 
   const doneFlags = {};
   const doneTimes = {};
+  const skipReasons = {};
+  const skipTimes = {};
   for (const r of statusRows) {
     const key = `${r.station_key}-${r.item_id}`;
     doneFlags[key] = r.done === 1;
     if (r.done_at) doneTimes[key] = r.done_at;
+    if (r.skip_reason) {
+      skipReasons[key] = r.skip_reason;
+      if (r.skip_at) skipTimes[key] = r.skip_at;
+    }
+  }
+
+  // Переносы из предыдущего дня: расширенная логика
+  const prevDate = getPrevDate(date);
+  let prevSkips = [];
+  if (prevDate) {
+    const { rows: [prevShiftRow] } = await pool.query(
+      'SELECT techcard_id, ud_techcard_id FROM shifts WHERE date=$1', [prevDate]
+    );
+
+    const prevTcIds = prevShiftRow ? [prevShiftRow.techcard_id, prevShiftRow.ud_techcard_id].filter(Boolean) : [];
+    const planQtyMap = {}; // itemId|lineIdx → qty (for skip-check)
+    const planLineMap = {}; // itemId|lineIdx → {qty, volume, packName}
+    if (prevTcIds.length > 0) {
+      const ph = prevTcIds.map((_,i) => `$${i+1}`).join(',');
+      const { rows: planRows } = await pool.query(
+        `SELECT item_id, line_idx, qty, volume, pack_name FROM techcard_pack_lines WHERE techcard_id IN (${ph}) ORDER BY item_id, line_idx`,
+        prevTcIds
+      );
+      for (const r of planRows) {
+        const k = `${r.item_id}|${r.line_idx}`;
+        planQtyMap[k] = r.qty;
+        planLineMap[k] = { qty: r.qty, volume: r.volume || '', packName: r.pack_name || '' };
+      }
+    }
+
+    const [{ rows: prevAllStatusRows }, { rows: prevFactRows }] = await Promise.all([
+      pool.query(
+        'SELECT station_key, item_id, done, skip_reason, skip_at FROM shift_item_status WHERE shift_date=$1',
+        [prevDate]
+      ),
+      pool.query(
+        'SELECT station_key, item_id, line_idx, value FROM shift_facts_n WHERE shift_date=$1',
+        [prevDate]
+      ),
+    ]);
+
+    // Факты вчера: stationKey|itemId|lineIdx → value
+    const prevFactMap = {};
+    for (const r of prevFactRows) {
+      prevFactMap[`${r.station_key}|${r.item_id}|${r.line_idx}`] = r.value;
+    }
+
+    // Разбираем статусы на pack-line и item-level
+    const packLineRows = [];
+    const itemLevelRows = [];
+    for (const r of prevAllStatusRows) {
+      if (r.station_key.endsWith('-pl')) {
+        const parts = r.station_key.split('-');
+        parts.pop(); // 'pl'
+        const itemId = parts.pop();
+        const stationKey = parts.join('-');
+        packLineRows.push({ stationKey, itemId, lineIdx: Number(r.item_id), done: r.done === 1, skipReason: r.skip_reason, skipAt: r.skip_at });
+      } else {
+        itemLevelRows.push({ stationKey: r.station_key, itemId: r.item_id, done: r.done === 1, skipReason: r.skip_reason, skipAt: r.skip_at });
+      }
+    }
+
+    // Находим "проблемные позиции" — те, у которых хоть одна упаковка со skip_reason
+    // и при этом факт < план (или факт не указан). Если done=1 и fact >= plan — не переносим.
+    const carriedKeys = new Set();
+    for (const r of packLineRows) {
+      if (!r.skipReason) continue;
+      if (r.done) {
+        const fact = prevFactMap[`${r.stationKey}|${r.itemId}|${r.lineIdx}`] ?? null;
+        const plan = planQtyMap[`${r.itemId}|${r.lineIdx}`] ?? null;
+        if (fact !== null && plan !== null && Number(fact) >= Number(plan)) continue; // выполнено полностью
+      }
+      carriedKeys.add(`${r.stationKey}|${r.itemId}`);
+    }
+    // Item-level: только явно пропущенные (done=0, skip_reason)
+    for (const r of itemLevelRows) {
+      if (r.skipReason && !r.done) carriedKeys.add(`${r.stationKey}|${r.itemId}`);
+    }
+
+    // Имена позиций для carryover
+    const prevItemIds = [...new Set(packLineRows.map(r => r.itemId))];
+    const itemNameMap = {};
+    if (prevItemIds.length > 0) {
+      const iph = prevItemIds.map((_,i) => `$${i+1}`).join(',');
+      const { rows: nameRows } = await pool.query(
+        `SELECT item_id, name FROM items WHERE item_id IN (${iph})`, prevItemIds
+      );
+      for (const r of nameRows) itemNameMap[r.item_id] = r.name;
+    }
+
+    // Для каждой проблемной позиции включаем ВСЕ её pack-line строки со статусами
+    for (const r of packLineRows) {
+      const key = `${r.stationKey}|${r.itemId}`;
+      if (!carriedKeys.has(key)) continue;
+      let status;
+      if (r.skipReason) {
+        status = r.done ? 'partial' : 'skipped';
+      } else {
+        status = r.done ? 'done' : 'pending';
+      }
+      const yesterdayFact = prevFactMap[`${r.stationKey}|${r.itemId}|${r.lineIdx}`] ?? null;
+      const ld = planLineMap[`${r.itemId}|${r.lineIdx}`] || {};
+      prevSkips.push({
+        stationKey: r.stationKey, itemId: r.itemId, lineIdx: r.lineIdx,
+        status, skipReason: r.skipReason, skipAt: r.skipAt, yesterdayFact,
+        itemName: itemNameMap[r.itemId] || null,
+        volume: ld.volume || null, packName: ld.packName || null, planQty: ld.qty ?? null,
+      });
+    }
+
+    // Item-level переносы (позиции без pack lines)
+    for (const r of itemLevelRows) {
+      if (r.skipReason && !r.done) {
+        prevSkips.push({ stationKey: r.stationKey, itemId: r.itemId, lineIdx: null, status: 'skipped', skipReason: r.skipReason, skipAt: r.skipAt, yesterdayFact: null });
+      }
+    }
   }
 
   // Если для смены нет времён начала станций — берём глобальные настройки
@@ -52,7 +170,8 @@ async function buildShift(date) {
     date,
     techcardId: shiftRow.techcard_id || null,
     udTechcardId: shiftRow.ud_techcard_id || null,
-    doneFlags, doneTimes, doneBy, facts, itemPackLines, stationStartTimes, assignments: {}
+    doneFlags, doneTimes, skipReasons, skipTimes, prevSkips,
+    doneBy, facts, itemPackLines, stationStartTimes, assignments: {}
   };
 }
 
@@ -102,15 +221,22 @@ async function saveShift(date, shift) {
       ON CONFLICT(date) DO UPDATE SET techcard_id = $2, ud_techcard_id = $3, updated_at = NOW()::text
     `, [date, techcardId, udTechcardId]);
 
-    // Статусы выполнения — UPSERT чтобы не затирать отметки других устройств
-    for (const [compKey, done] of Object.entries(shift.doneFlags || {})) {
+    // Статусы выполнения + skip — UPSERT чтобы не затирать отметки других устройств
+    const allKeys = new Set([
+      ...Object.keys(shift.doneFlags || {}),
+      ...Object.keys(shift.skipReasons || {}),
+    ]);
+    for (const compKey of allKeys) {
       const { stationKey, itemId } = splitCompKey(compKey);
+      const done = !!(shift.doneFlags || {})[compKey];
       const doneAt = (shift.doneTimes || {})[compKey] || null;
+      const skipReason = done ? null : ((shift.skipReasons || {})[compKey] || null);
+      const skipAt = skipReason ? ((shift.skipTimes || {})[compKey] || null) : null;
       await client.query(
-        `INSERT INTO shift_item_status(shift_date, station_key, item_id, done, done_at)
-         VALUES($1,$2,$3,$4,$5)
-         ON CONFLICT(shift_date, station_key, item_id) DO UPDATE SET done=$4, done_at=$5`,
-        [date, stationKey, itemId, done ? 1 : 0, doneAt]
+        `INSERT INTO shift_item_status(shift_date, station_key, item_id, done, done_at, skip_reason, skip_at)
+         VALUES($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT(shift_date, station_key, item_id) DO UPDATE SET done=$4, done_at=$5, skip_reason=$6, skip_at=$7`,
+        [date, stationKey, itemId, done ? 1 : 0, doneAt, skipReason, skipAt]
       );
     }
 
@@ -130,7 +256,7 @@ async function saveShift(date, shift) {
       await client.query(
         `INSERT INTO shift_item_status(shift_date, station_key, item_id, done)
          VALUES($1,$2,$3,$4) ON CONFLICT(shift_date, station_key, item_id) DO NOTHING`,
-        [date, stationKey, itemId, (shift.doneFlags || {})[compKey] ? 1 : 0]
+        [date, stationKey, itemId, (shift.doneFlags || {})[`${stationKey}-${itemId}`] ? 1 : 0]
       );
       // Заменяем сотрудников только для этой позиции
       await client.query(
@@ -165,6 +291,12 @@ async function saveShift(date, shift) {
   });
 }
 
+function getPrevDate(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
 function splitCompKey(compKey) {
   const sep = compKey.lastIndexOf('-');
   return { stationKey: compKey.slice(0, sep), itemId: compKey.slice(sep + 1) };
@@ -185,21 +317,31 @@ router.get('/index', async (req, res) => {
 router.get('/summary', async (req, res) => {
   try {
     const { rows: shifts } = await pool.query(`
-      SELECT s.date, s.techcard_id, t.name AS techcard_name
+      SELECT s.date, s.techcard_id, s.ud_techcard_id, t.name AS techcard_name
       FROM shifts s LEFT JOIN techcards t ON t.id = s.techcard_id
       ORDER BY s.date DESC
     `);
     const summary = await Promise.all(shifts.map(async row => {
-      const [{ rows: [total] }, { rows: [done] }] = await Promise.all([
-        pool.query('SELECT COUNT(*) AS cnt FROM shift_item_status WHERE shift_date = $1', [row.date]),
-        pool.query('SELECT COUNT(*) AS cnt FROM shift_item_status WHERE shift_date = $1 AND done = 1', [row.date]),
+      const tcIds = [row.techcard_id, row.ud_techcard_id].filter(Boolean);
+      const placeholders = tcIds.map((_,i) => `$${i+1}`).join(',');
+      const [totalRes, doneRes] = await Promise.all([
+        tcIds.length > 0
+          ? pool.query(
+              `SELECT COUNT(DISTINCT item_id) AS cnt FROM techcard_pack_lines WHERE techcard_id IN (${placeholders})`,
+              tcIds
+            )
+          : Promise.resolve({ rows: [{ cnt: 0 }] }),
+        pool.query(
+          "SELECT COUNT(DISTINCT item_id) AS cnt FROM shift_item_status WHERE shift_date = $1 AND done = 1 AND station_key NOT LIKE '%-pl'",
+          [row.date]
+        ),
       ]);
       return {
         date:         row.date,
         techcardId:   row.techcard_id,
         techcardName: row.techcard_name,
-        totalItems:   Number(total?.cnt || 0),
-        doneItems:    Number(done?.cnt  || 0),
+        totalItems:   Number(totalRes.rows[0]?.cnt || 0),
+        doneItems:    Number(doneRes.rows[0]?.cnt  || 0),
       };
     }));
     res.json({ summary });
