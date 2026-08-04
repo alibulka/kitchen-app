@@ -8104,8 +8104,10 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
           const planQty=p.planQty!=null?(Number(p.planQty)||0)
             :packLine?(Number(packLine.qty)||0)+(Number(packLine.fromWarehouse)||0):0;
           const yFact=p.yesterdayFact!=null?Number(p.yesterdayFact):null;
-          // Показываем только строки с реальной нехваткой (есть причина нехватки)
-          if(p.status!=='skipped'&&p.status!=='partial') return;
+          // Показываем строки с реальной нехваткой: пропуски, частичные,
+          // а также «выполнено вчера, но факт меньше плана» (недофасовка)
+          const isShortDone=p.status==='done'&&yFact!=null&&planQty>0&&yFact<planQty;
+          if(p.status!=='skipped'&&p.status!=='partial'&&!isShortDone) return;
           // Если позиция есть и в сегодняшней техкарте — строка переноса всегда "⏮ Перенос",
           // выполнение сегодня отражается только в строке из основного цикла.
           // Если позиции нет в сегодняшней техкарте — читаем doneFlags (карryover-only item).
