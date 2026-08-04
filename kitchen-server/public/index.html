@@ -7734,11 +7734,10 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
   };
   const carriedItems=allCarriedItems.filter(it=>!isCarryoverDone(it.id));
   const carriedOnlyItems=allCarriedOnlyItems.filter(it=>!isCarryoverDone(it.id));
-  // Не дублируем во «Выполнено»: если позиция уже отмечена done сегодня,
-  // она там и так есть обычной карточкой
-  const doneItemIdSet=new Set(doneItems.map(it=>String(it.id)));
+  // Во «Выполнено» позиция может быть двумя карточками: сегодняшняя (обычная)
+  // и вчерашний закрытый долг (carryover) — это разные задания
   const carriedDoneItems=[
-    ...allCarriedItems.filter(it=>isCarryoverDone(it.id)&&!doneItemIdSet.has(String(it.id))),
+    ...allCarriedItems.filter(it=>isCarryoverDone(it.id)),
     ...allCarriedOnlyItems.filter(it=>isCarryoverDone(it.id)),
   ];
   // Обычные невыполненные — без карryover-позиций (они в "Прошлая смена")
@@ -7792,8 +7791,10 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
   const renderCarriedDone=(item)=>{
     const lineMap=prevItemDataMap[String(item.id)]||{};
     const synPackLines=buildPrevPackLines(lineMap);
-    const hasOverride=synPackLines.length>0&&!todayItemIds.has(String(item.id));
-    return e('div',{key:item.id,className:'item-wrapper'},
+    // Всегда показываем вчерашние строки — это карточка вчерашнего долга,
+    // и key с префиксом, чтобы не конфликтовать с сегодняшней карточкой той же позиции
+    const hasOverride=synPackLines.length>0;
+    return e('div',{key:'prev-'+item.id,className:'item-wrapper'},
       e(ItemCard,{item,stationKey:station.key,shift,onShiftChange,shopEmployees,
         prevLineData:lineMap,overridePackLines:hasOverride?synPackLines:null,keyPrefix:'prev-'}));
   };
