@@ -8097,9 +8097,12 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
           if(seenCarryover.has(ck)) return;
           seenCarryover.add(ck);
           const itemName=station.items.find(it=>String(it.id)===String(p.itemId))?.name||p.itemName||`ID #${p.itemId}`;
+          // Данные строки переноса берём из ВЧЕРАШНЕЙ смены (их присылает сервер в prevSkips);
+          // сегодняшняя техкарта — только запасной вариант, её строки могут отличаться
           const itemPls=(s.itemPackLines||{})[p.itemId];
           const packLine=p.lineIdx!=null&&itemPls?itemPls[p.lineIdx]:null;
-          const planQty=packLine?(Number(packLine.qty)||0)+(Number(packLine.fromWarehouse)||0):(p.planQty||0);
+          const planQty=p.planQty!=null?(Number(p.planQty)||0)
+            :packLine?(Number(packLine.qty)||0)+(Number(packLine.fromWarehouse)||0):0;
           const yFact=p.yesterdayFact!=null?Number(p.yesterdayFact):null;
           // Показываем только строки с реальной нехваткой (есть причина нехватки)
           if(p.status!=='skipped'&&p.status!=='partial') return;
@@ -8125,7 +8128,7 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
             if(cDurationMin>0&&cFactQty>0)cMinPerPack=+(cFactQty/cDurationMin).toFixed(1);
           }
           rows.push({date:dk,shop:shopName,station:station.name,name:itemName,
-            packName:packLine?.packName||'',volume:packLine?.volume||'',
+            packName:p.packName||packLine?.packName||'',volume:p.volume||packLine?.volume||'',
             planQty,effectivePlanQty,yesterdayFact:yFact,factQty:cDone?cFactQty:(yFact??0),
             pct:planQty>0?(cDone?Math.round(cFactQty/planQty*100):(yFact!=null?Math.round(yFact/planQty*100):0)):0,
             done:cDone,employee:cEmpName,
