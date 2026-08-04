@@ -7712,7 +7712,8 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
   const todayItemIds=new Set(items.map(it=>String(it.id)));
   // Items с хотя бы одной skipped/partial строкой (done-only не показываем как перенос)
   const hasCarryoverSkip=(d)=>d&&Object.values(d).some(p=>p.status==='skipped'||p.status==='partial');
-  const allCarriedItems=todoItems.filter(it=>hasCarryoverSkip(prevItemDataMap[String(it.id)]));
+  // Берём из всех позиций дня (не только невыполненных): сегодняшняя галочка не должна скрывать вчерашний долг
+  const allCarriedItems=orderedItems.filter(it=>hasCarryoverSkip(prevItemDataMap[String(it.id)]));
   // Позиции переноса, которых НЕТ в сегодняшней техкарте
   const allCarriedOnlyItems=[];
   const seenCarriedOnly=new Set();
@@ -7733,8 +7734,11 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
   };
   const carriedItems=allCarriedItems.filter(it=>!isCarryoverDone(it.id));
   const carriedOnlyItems=allCarriedOnlyItems.filter(it=>!isCarryoverDone(it.id));
+  // Не дублируем во «Выполнено»: если позиция уже отмечена done сегодня,
+  // она там и так есть обычной карточкой
+  const doneItemIdSet=new Set(doneItems.map(it=>String(it.id)));
   const carriedDoneItems=[
-    ...allCarriedItems.filter(it=>isCarryoverDone(it.id)),
+    ...allCarriedItems.filter(it=>isCarryoverDone(it.id)&&!doneItemIdSet.has(String(it.id))),
     ...allCarriedOnlyItems.filter(it=>isCarryoverDone(it.id)),
   ];
   // Обычные невыполненные — без карryover-позиций (они в "Прошлая смена")
@@ -7756,28 +7760,38 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
       className:'item-wrapper'+(sinking?' sinking':'')+(settled?' settled':'')
     }, e(ItemCard,{item,stationKey:station.key,shift,onShiftChange,shopEmployees,prevLineData}));
   };
+  // Синтетические строки фасовки из вчерашних данных.
+  // ВАЖНО: индекс в массиве должен совпадать с исходным lineIdx (ключи prev-...-pl-<idx>),
+  // поэтому пропуски индексов заполняем пустыми строками, а не уплотняем массив.
+  const buildPrevPackLines=(lineMap)=>{
+    const idxs=Object.keys(lineMap).filter(k=>k!=='__itemLevel').map(Number).filter(n=>!isNaN(n));
+    if(idxs.length===0) return [];
+    const max=Math.max(...idxs);
+    return Array.from({length:max+1},(_,i)=>{
+      const p=lineMap[i];
+      return {volume:p?.volume||'',packName:p?.packName||'',destination:'',fromWarehouse:0,qty:p?.planQty||0};
+    });
+  };
   const renderCarried=(item)=>{
     const lineMap=prevItemDataMap[String(item.id)]||{};
+    // Во вкладке «Прошлая смена» показываем ВЧЕРАШНИЕ строки фасовки (долг),
+    // а не сегодняшние — их состав и количество могут отличаться
+    const synPackLines=buildPrevPackLines(lineMap);
     return e('div',{key:item.id,className:'item-wrapper'},
-      e(ItemCard,{item,stationKey:station.key,shift,onShiftChange,shopEmployees,prevLineData:lineMap,keyPrefix:'prev-'}));
+      e(ItemCard,{item,stationKey:station.key,shift,onShiftChange,shopEmployees,prevLineData:lineMap,
+        overridePackLines:synPackLines.length>0?synPackLines:null,keyPrefix:'prev-'}));
   };
   // Для позиций переноса без сегодняшней техкарты — синтетические packLines из prevSkips
   const renderCarriedOnly=(synItem)=>{
     const lineMap=prevItemDataMap[String(synItem.id)]||{};
-    const synPackLines=Object.entries(lineMap)
-      .filter(([k])=>k!=='__itemLevel')
-      .sort(([a],[b])=>Number(a)-Number(b))
-      .map(([,p])=>({volume:p.volume||'',packName:p.packName||'',destination:'',fromWarehouse:0,qty:p.planQty||0}));
+    const synPackLines=buildPrevPackLines(lineMap);
     return e('div',{key:synItem.id,className:'item-wrapper'},
       e(ItemCard,{item:synItem,stationKey:station.key,shift,onShiftChange,shopEmployees,
         prevLineData:lineMap,overridePackLines:synPackLines.length>0?synPackLines:null,keyPrefix:'prev-'}));
   };
   const renderCarriedDone=(item)=>{
     const lineMap=prevItemDataMap[String(item.id)]||{};
-    const synPackLines=Object.entries(lineMap)
-      .filter(([k])=>k!=='__itemLevel')
-      .sort(([a],[b])=>Number(a)-Number(b))
-      .map(([,p])=>({volume:p.volume||'',packName:p.packName||'',destination:'',fromWarehouse:0,qty:p.planQty||0}));
+    const synPackLines=buildPrevPackLines(lineMap);
     const hasOverride=synPackLines.length>0&&!todayItemIds.has(String(item.id));
     return e('div',{key:item.id,className:'item-wrapper'},
       e(ItemCard,{item,stationKey:station.key,shift,onShiftChange,shopEmployees,
