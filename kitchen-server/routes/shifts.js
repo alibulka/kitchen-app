@@ -34,10 +34,15 @@ async function buildShift(date) {
   // Переносы из предыдущего дня: расширенная логика
   const prevDate = getPrevDate(date);
   let prevSkips = [];
+  let prevTechcardId = null, prevUdTechcardId = null;
   if (prevDate) {
     const { rows: [prevShiftRow] } = await pool.query(
       'SELECT techcard_id, ud_techcard_id FROM shifts WHERE date=$1', [prevDate]
     );
+    if (prevShiftRow) {
+      prevTechcardId = prevShiftRow.techcard_id || null;
+      prevUdTechcardId = prevShiftRow.ud_techcard_id || null;
+    }
 
     const prevTcIds = prevShiftRow ? [prevShiftRow.techcard_id, prevShiftRow.ud_techcard_id].filter(Boolean) : [];
     const planQtyMap = {}; // itemId|lineIdx → qty (for skip-check)
@@ -171,6 +176,7 @@ async function buildShift(date) {
     techcardId: shiftRow.techcard_id || null,
     udTechcardId: shiftRow.ud_techcard_id || null,
     doneFlags, doneTimes, skipReasons, skipTimes, prevSkips,
+    prevTechcardId, prevUdTechcardId,
     doneBy, facts, itemPackLines, stationStartTimes, assignments: {}
   };
 }
