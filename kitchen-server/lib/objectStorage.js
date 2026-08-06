@@ -127,7 +127,16 @@ async function cleanupStaleImports() {
   }
 }
 
+async function downloadObject(filename) {
+  try {
+    const [buf] = await fileFor(filename).download();
+    return buf;
+  } catch {
+    return null;
+  }
+}
+
 module.exports = {
-  putObject, objectExists, deleteObject, streamObject, contentTypeFor,
+  putObject, objectExists, deleteObject, streamObject, contentTypeFor, downloadObject,
   putImportPart, downloadImportPart, cleanupImportParts, cleanupStaleImports,
 };

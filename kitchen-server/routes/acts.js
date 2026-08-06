@@ -9,14 +9,15 @@ const { generateTemplateDOCX, generateActDOCX } = require('../docx-gen');
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOADS_DIR),
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `act-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
-  },
-});
-const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
+// Фото храним в object storage (как в quality.js) — локальный диск на проде
+// стирается при каждой публикации, из-за этого уже теряли фото актов.
+const objectStorage = require('../lib/objectStorage');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+
+function makeActFilename(originalname) {
+  const ext = path.extname(originalname || '') || '.jpg';
+  return `act-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
+}
 
 // ─── Шаблоны ──────────────────────────────────────────────────────────────────
 
@@ -365,6 +366,12 @@ router.get('/acts/:id/docx', async (req, res) => {
       fieldsBySection[f.section_id].push({ ...f, config: JSON.parse(f.config_json || '{}') });
     }
     const template = { name: tmpl?.name || '', sections: sections.map(s => ({ ...s, fields: fieldsBySection[s.id] || [] })) };
+    // Подтягиваем содержимое фото: сперва локальный диск, иначе object storage
+    for (const p of photos) {
+      const fp = path.join(UPLOADS_DIR, p.filename);
+      if (fs.existsSync(fp)) p.buffer = fs.readFileSync(fp);
+      else p.buffer = await objectStorage.downloadObject(p.filename);
+    }
     const fullAct = {
       ...act,
       values: Object.fromEntries(values.map(v => [v.field_id, v.value])),
@@ -403,11 +410,13 @@ router.post('/acts/:id/photos', upload.array('photos', 10), async (req, res) => 
     const fieldId = req.body.field_id || null;
     const saved = [];
     for (const file of (req.files || [])) {
+      const filename = makeActFilename(file.originalname);
+      await objectStorage.putObject(filename, file.buffer);
       await pool.query(
         'INSERT INTO act_photos(act_id,field_id,filename) VALUES($1,$2,$3)',
-        [actId, fieldId, file.filename]
+        [actId, fieldId, filename]
       );
-      saved.push({ filename: file.filename, field_id: fieldId ? Number(fieldId) : null });
+      saved.push({ filename, field_id: fieldId ? Number(fieldId) : null });
     }
     res.json({ ok: true, files: saved });
   } catch (err) {
@@ -420,6 +429,7 @@ router.delete('/acts/photos/:filename', async (req, res) => {
   try {
     const { filename } = req.params;
     await pool.query('DELETE FROM act_photos WHERE filename=$1', [filename]);
+    await objectStorage.deleteObject(filename).catch(() => {});
     const fp = path.join(UPLOADS_DIR, filename);
     if (fs.existsSync(fp)) fs.unlinkSync(fp);
     res.json({ ok: true });
