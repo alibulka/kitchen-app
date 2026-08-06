@@ -103,8 +103,31 @@ router.put('/templates/:id', async (req, res) => {
         "UPDATE act_templates SET name=$1, updated_at=(NOW()::text) WHERE id=$2",
         [name, req.params.id]
       );
+      // ВАЖНО: раньше здесь просто удалялись секции (каскадно удалялись поля,
+      // а вместе с ними — значения и привязки фото в уже заполненных актах).
+      // Теперь перед пересозданием сохраняем значения/фото и переносим их
+      // на новые поля по совпадению «название секции + название поля».
+      const { rows: oldFields } = await client.query(
+        `SELECT f.id, f.label, s.title AS section_title
+         FROM act_fields f JOIN act_sections s ON s.id = f.section_id
+         WHERE s.template_id = $1`, [req.params.id]
+      );
+      const oldFieldIds = oldFields.map(f => f.id);
+      let savedValues = [], savedPhotos = [];
+      if (oldFieldIds.length) {
+        ({ rows: savedValues } = await client.query(
+          'SELECT act_id, field_id, value FROM act_values WHERE field_id = ANY($1)', [oldFieldIds]
+        ));
+        ({ rows: savedPhotos } = await client.query(
+          'SELECT id, field_id FROM act_photos WHERE field_id = ANY($1)', [oldFieldIds]
+        ));
+      }
+      const oldKeyById = {};
+      for (const f of oldFields) oldKeyById[f.id] = f.section_title + '\u0000' + f.label;
+
       // Удаляем старые секции (каскадно удалит поля)
       await client.query('DELETE FROM act_sections WHERE template_id=$1', [req.params.id]);
+      const newIdByKey = {};
       for (let si = 0; si < sections.length; si++) {
         const sec = sections[si];
         const { rows: [section] } = await client.query(
@@ -113,14 +136,31 @@ router.put('/templates/:id', async (req, res) => {
         );
         for (let fi = 0; fi < (sec.fields || []).length; fi++) {
           const f = sec.fields[fi];
-          await client.query(
+          const { rows: [nf] } = await client.query(
             `INSERT INTO act_fields(section_id, label, description, type, required, config_json, sort_order, show_if_field, show_if_value)
-             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
             [section.id, f.label, f.description || null, f.type || 'text',
              f.required ? 1 : 0, JSON.stringify(f.config || {}), fi,
              f.show_if_field || null, f.show_if_value || null]
           );
+          const key = sec.title + '\u0000' + f.label;
+          if (!(key in newIdByKey)) newIdByKey[key] = nf.id;
         }
+      }
+      // Переносим сохранённые значения и фото на новые поля
+      for (const v of savedValues) {
+        const newId = newIdByKey[oldKeyById[v.field_id]];
+        if (newId == null) continue; // поле убрали из шаблона — значение пропадает осознанно
+        await client.query(
+          `INSERT INTO act_values(act_id, field_id, value) VALUES($1,$2,$3)
+           ON CONFLICT (act_id, field_id) DO UPDATE SET value=EXCLUDED.value`,
+          [v.act_id, newId, v.value]
+        );
+      }
+      for (const p of savedPhotos) {
+        const newId = newIdByKey[oldKeyById[p.field_id]];
+        if (newId == null) continue;
+        await client.query('UPDATE act_photos SET field_id=$1 WHERE id=$2', [newId, p.id]);
       }
     });
     res.json({ ok: true });
