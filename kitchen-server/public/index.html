@@ -10907,29 +10907,35 @@ function ActForm({actId, templateId, onBack, onSaved}) {
     color:danger?'var(--danger)':primary?'white':'var(--text)',
     fontWeight:600,fontSize:13,cursor:'pointer'});
 
-  const renderField = (field) => {
+  const renderField = (field, isLast) => {
     if(!isVisible(field)) return null;
     const val = values[field.id];
     const fieldPhotos = photos.filter(p=>p.field_id===field.id);
+    // inline: label left + control right; block: label above control
+    const inlineTypes = new Set(['text','number','date','autodate','comply','yes_no','select','photo']);
+    const isInline = inlineTypes.has(field.type);
+    const rowBorder = isLast?'none':'1px solid var(--border)';
 
-    const label = e('div',{style:{marginBottom:6}},
-      e('span',{style:{fontSize:14,fontWeight:600}}, field.label,
-        !!field.required&&e('span',{style:{color:'var(--danger)',marginLeft:2}},'*')),
-      !!field.description&&e('div',{style:{fontSize:12,color:'var(--muted)',marginTop:2}},field.description),
+    const labelEl = e('div',{style:{flexShrink:0,width:isInline?'38%':'100%',
+      fontSize:13,fontWeight:600,color:'var(--text)',paddingRight:isInline?12:0,
+      marginBottom:isInline?0:6,lineHeight:'1.3'}},
+      field.label,
+      !!field.required&&e('span',{style:{color:'var(--danger)',marginLeft:2}},'*'),
+      !!field.description&&e('div',{style:{fontSize:11,color:'var(--muted)',fontWeight:400,marginTop:2}},field.description),
     );
 
     let control;
     if(field.type==='text') {
-      control=e('input',{value:val||'',onChange:ev=>set(field.id,ev.target.value),style:inputStyle});
+      control=e('input',{value:val||'',onChange:ev=>set(field.id,ev.target.value),style:{...inputStyle,fontSize:13,padding:'5px 8px'}});
     } else if(field.type==='number') {
-      control=e('input',{type:'number',value:val||'',onChange:ev=>set(field.id,ev.target.value),style:inputStyle});
+      control=e('input',{type:'number',value:val||'',onChange:ev=>set(field.id,ev.target.value),style:{...inputStyle,fontSize:13,padding:'5px 8px'}});
     } else if(field.type==='date'||field.type==='autodate') {
-      control=e('input',{type:'date',value:val||'',onChange:ev=>set(field.id,ev.target.value),style:inputStyle});
+      control=e('input',{type:'date',value:val||'',onChange:ev=>set(field.id,ev.target.value),style:{...inputStyle,fontSize:13,padding:'5px 8px'}});
     } else if(field.type==='comply') {
-      control=e('div',{style:{display:'flex',gap:8}},
+      control=e('div',{style:{display:'flex',gap:6}},
         ['соответствует','не соответствует'].map(opt=>
           e('button',{key:opt,onClick:()=>set(field.id,val===opt?null:opt),
-            style:{flex:1,padding:'8px',borderRadius:8,fontWeight:600,fontSize:13,cursor:'pointer',
+            style:{flex:1,padding:'5px 8px',borderRadius:6,fontWeight:600,fontSize:12,cursor:'pointer',
               border:'1.5px solid '+(val===opt?(opt==='соответствует'?'var(--ok)':'var(--danger)'):'var(--border)'),
               background:val===opt?(opt==='соответствует'?'var(--ok-bg)':'#FEF2F2'):'var(--surface)',
               color:val===opt?(opt==='соответствует'?'var(--ok)':'var(--danger)'):'var(--text)'}},
@@ -10937,10 +10943,10 @@ function ActForm({actId, templateId, onBack, onSaved}) {
         )
       );
     } else if(field.type==='yes_no') {
-      control=e('div',{style:{display:'flex',gap:8}},
+      control=e('div',{style:{display:'flex',gap:6}},
         ['да','нет'].map(opt=>
           e('button',{key:opt,onClick:()=>set(field.id,val===opt?null:opt),
-            style:{flex:1,padding:'8px',borderRadius:8,fontWeight:600,fontSize:13,cursor:'pointer',
+            style:{flex:1,padding:'5px 8px',borderRadius:6,fontWeight:600,fontSize:12,cursor:'pointer',
               border:'1.5px solid '+(val===opt?'var(--accent)':'var(--border)'),
               background:val===opt?'var(--accent-light, #FEF2F0)':'var(--surface)',
               color:val===opt?'var(--accent)':'var(--text)'}},
@@ -10949,9 +10955,9 @@ function ActForm({actId, templateId, onBack, onSaved}) {
       );
     } else if(field.type==='select') {
       const opts = field.config?.options||[];
-      control=e('div',{style:{display:'flex',flexWrap:'wrap',gap:6}},
+      control=e('div',{style:{display:'flex',flexWrap:'wrap',gap:5}},
         opts.map(opt=>e('button',{key:opt,onClick:()=>set(field.id,val===opt?null:opt),
-          style:{padding:'6px 12px',borderRadius:20,fontSize:13,cursor:'pointer',
+          style:{padding:'4px 10px',borderRadius:20,fontSize:12,cursor:'pointer',
             border:'1.5px solid '+(val===opt?'var(--accent)':'var(--border)'),
             background:val===opt?'var(--accent-light, #FEF2F0)':'var(--surface)',
             color:val===opt?'var(--accent)':'var(--text)',fontWeight:val===opt?600:400}},
@@ -10964,9 +10970,9 @@ function ActForm({actId, templateId, onBack, onSaved}) {
         const next = selected.includes(opt)?selected.filter(x=>x!==opt):[...selected,opt];
         set(field.id, next.join('|'));
       };
-      control=e('div',{style:{display:'flex',flexWrap:'wrap',gap:6}},
+      control=e('div',{style:{display:'flex',flexWrap:'wrap',gap:5}},
         opts.map(opt=>e('button',{key:opt,onClick:()=>toggle(opt),
-          style:{padding:'6px 12px',borderRadius:20,fontSize:13,cursor:'pointer',
+          style:{padding:'4px 10px',borderRadius:20,fontSize:12,cursor:'pointer',
             border:'1.5px solid '+(selected.includes(opt)?'var(--accent)':'var(--border)'),
             background:selected.includes(opt)?'var(--accent-light, #FEF2F0)':'var(--surface)',
             color:selected.includes(opt)?'var(--accent)':'var(--text)',fontWeight:selected.includes(opt)?600:400}},
@@ -10974,14 +10980,14 @@ function ActForm({actId, templateId, onBack, onSaved}) {
       );
     } else if(field.type==='comment') {
       control=e('textarea',{value:val||'',onChange:ev=>set(field.id,ev.target.value),
-        rows:3,style:{...inputStyle,resize:'vertical'}});
+        rows:3,style:{...inputStyle,fontSize:13,padding:'6px 8px',resize:'vertical'}});
     } else if(field.type==='photo') {
-      control=e('div',null,
-        fieldPhotos.length>0&&e('div',{style:{display:'flex',flexWrap:'wrap',gap:8,marginBottom:8}},
+      control=e('div',{style:{display:'flex',flexDirection:'column',alignItems:'flex-end'}},
+        fieldPhotos.length>0&&e('div',{style:{display:'flex',flexWrap:'wrap',justifyContent:'flex-end',gap:6,marginBottom:6}},
           fieldPhotos.map(p=>e('div',{key:p.filename,style:{position:'relative'}},
-            e('img',{src:`/uploads/${p.filename}`,style:{width:80,height:80,objectFit:'cover',borderRadius:8,border:'1px solid var(--border)'}}),
+            e('img',{src:`/uploads/${p.filename}`,style:{width:72,height:72,objectFit:'cover',borderRadius:8,border:'1px solid var(--border)'}}),
             e('button',{onClick:()=>deletePhoto(p.filename),
-              style:{position:'absolute',top:-6,right:-6,width:20,height:20,borderRadius:'50%',border:'none',
+              style:{position:'absolute',top:-5,right:-5,width:18,height:18,borderRadius:'50%',border:'none',
                 background:'var(--danger)',color:'white',fontSize:10,cursor:'pointer',
                 display:'flex',alignItems:'center',justifyContent:'center'}},'✕')
           ))
@@ -10992,10 +10998,16 @@ function ActForm({actId, templateId, onBack, onSaved}) {
           label:'+ Фото'}),
       );
     } else {
-      control=e('input',{value:val||'',onChange:ev=>set(field.id,ev.target.value),style:inputStyle});
+      control=e('input',{value:val||'',onChange:ev=>set(field.id,ev.target.value),style:{...inputStyle,fontSize:13,padding:'5px 8px'}});
     }
 
-    return e('div',{key:field.id,style:{marginBottom:16}}, label, control);
+    return e('div',{key:field.id,style:{
+      display:'flex',flexDirection:isInline?'row':'column',
+      alignItems:isInline?'center':'flex-start',
+      padding:'8px 14px',borderBottom:rowBorder,gap:isInline?0:6}},
+      labelEl,
+      isInline ? e('div',{style:{flex:1}}, control) : control
+    );
   };
 
   return e('div',{style:{maxWidth:720,margin:'0 auto',padding:'0 16px 40px'}},
@@ -11006,57 +11018,52 @@ function ActForm({actId, templateId, onBack, onSaved}) {
     ),
 
     // Шапка акта
-    e('div',{style:{background:'var(--surface)',borderRadius:12,border:'1.5px solid var(--border)',padding:16,marginBottom:20}},
-      e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:12}},
-        e('div',null,
-          e('label',{style:{fontSize:13,fontWeight:600,display:'block',marginBottom:6}},'Наименование сырья'),
-          e('input',{value:values._raw_material||'',onChange:ev=>setValues(p=>({...p,_raw_material:ev.target.value})),
-            placeholder:template.name,style:inputStyle}),
-        ),
-        e('div',null,
-          e('label',{style:{fontSize:13,fontWeight:600,display:'block',marginBottom:6}},'Дата проработки'),
-          e('input',{type:'date',value:values._date||'',onChange:ev=>setValues(p=>({...p,_date:ev.target.value})),
-            style:inputStyle}),
-        ),
-      ),
-      e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}},
-        e('div',null,
-          e('label',{style:{fontSize:13,fontWeight:600,display:'block',marginBottom:6}},'Наименование (как на этикетке)'),
-          e('input',{value:values._product_name||'',onChange:ev=>setValues(p=>({...p,_product_name:ev.target.value})),
-            placeholder:'Как указано на этикетке',style:inputStyle}),
-        ),
-        e('div',null,
-          e('label',{style:{fontSize:13,fontWeight:600,display:'block',marginBottom:6}},'Производитель (как на этикетке)'),
-          e('input',{value:values._manufacturer||'',onChange:ev=>setValues(p=>({...p,_manufacturer:ev.target.value})),
-            placeholder:'Как указано на этикетке',style:inputStyle}),
-        ),
-      ),
-    ),
+    (()=>{
+      const hRowStyle={display:'flex',alignItems:'center',padding:'8px 14px',borderBottom:'1px solid var(--border)'};
+      const hLabelStyle={flexShrink:0,width:'38%',fontSize:13,fontWeight:600,paddingRight:12};
+      const hInputStyle={...inputStyle,fontSize:13,padding:'5px 8px',flex:1};
+      const hRows=[
+        {label:'Наименование сырья',key:'_raw_material',placeholder:template.name},
+        {label:'Дата проработки',key:'_date',type:'date'},
+        {label:'Наименование (как на этикетке)',key:'_product_name',placeholder:'Как указано на этикетке'},
+        {label:'Производитель (как на этикетке)',key:'_manufacturer',placeholder:'Как указано на этикетке'},
+      ];
+      return e('div',{style:{background:'var(--surface)',borderRadius:12,border:'1.5px solid var(--border)',marginBottom:14}},
+        hRows.map((r,i)=>e('div',{key:r.key,style:{...hRowStyle,borderBottom:i<hRows.length-1?hRowStyle.borderBottom:'none'}},
+          e('span',{style:hLabelStyle},r.label),
+          e('input',{type:r.type||'text',value:values[r.key]||'',
+            onChange:ev=>setValues(p=>({...p,[r.key]:ev.target.value})),
+            placeholder:r.placeholder||'',style:hInputStyle})
+        ))
+      );
+    })(),
 
     // Секции с полями
-    (template.sections||[]).map(sec=>
-      e('div',{key:sec.id,style:{marginBottom:20,background:'var(--surface)',borderRadius:14,
-        border:'1.5px solid var(--border)',overflow:'hidden'}},
-        e('div',{style:{padding:'12px 16px',background:'var(--bg)',borderBottom:'1.5px solid var(--border)',
-          fontWeight:700,fontSize:15}}, sec.title),
-        e('div',{style:{padding:'16px'}},
-          (sec.fields||[]).map(f=>renderField(f))
-        ),
-      )
-    ),
+    (template.sections||[]).map(sec=>{
+      const visibleFields=(sec.fields||[]).filter(f=>isVisible(f));
+      if(!visibleFields.length) return null;
+      return e('div',{key:sec.id,style:{marginBottom:14,background:'var(--surface)',borderRadius:12,
+        border:'1.5px solid var(--border)'}},
+        e('div',{style:{padding:'8px 14px',background:'var(--bg)',borderBottom:'1.5px solid var(--border)',
+          fontWeight:700,fontSize:14}}, sec.title),
+        visibleFields.map((f,i)=>renderField(f,i===visibleFields.length-1))
+      );
+    }),
 
     // Общий вывод — всегда в конце
-    e('div',{style:{background:'var(--surface)',borderRadius:12,border:'1.5px solid var(--border)',padding:16,marginBottom:20}},
-      e('div',{style:{fontSize:14,fontWeight:700,marginBottom:10}},'Общий вывод'),
-      e('div',{style:{display:'flex',gap:8}},
-        ['соответствует','не соответствует'].map(opt=>
-          e('button',{key:opt,onClick:()=>setValues(p=>({...p,_conclusion:values._conclusion===opt?null:opt})),
-            style:{flex:1,padding:'10px',borderRadius:8,fontWeight:600,fontSize:14,cursor:'pointer',
-              border:'1.5px solid '+(values._conclusion===opt?(opt==='соответствует'?'var(--ok)':'var(--danger)'):'var(--border)'),
-              background:values._conclusion===opt?(opt==='соответствует'?'var(--ok-bg)':'#FEF2F2'):'var(--surface)',
-              color:values._conclusion===opt?(opt==='соответствует'?'var(--ok)':'var(--danger)'):'var(--text)'}},
-            opt==='соответствует'?'✓ Соответствует':'✗ Не соответствует')
-        )
+    e('div',{style:{background:'var(--surface)',borderRadius:12,border:'1.5px solid var(--border)',marginBottom:14}},
+      e('div',{style:{display:'flex',alignItems:'center',padding:'8px 14px',gap:8}},
+        e('span',{style:{flexShrink:0,width:'38%',fontSize:13,fontWeight:600,paddingRight:12}},'Общий вывод'),
+        e('div',{style:{display:'flex',gap:6,flex:1}},
+          ['соответствует','не соответствует'].map(opt=>
+            e('button',{key:opt,onClick:()=>setValues(p=>({...p,_conclusion:values._conclusion===opt?null:opt})),
+              style:{flex:1,padding:'5px 8px',borderRadius:6,fontWeight:600,fontSize:12,cursor:'pointer',
+                border:'1.5px solid '+(values._conclusion===opt?(opt==='соответствует'?'var(--ok)':'var(--danger)'):'var(--border)'),
+                background:values._conclusion===opt?(opt==='соответствует'?'var(--ok-bg)':'#FEF2F2'):'var(--surface)',
+                color:values._conclusion===opt?(opt==='соответствует'?'var(--ok)':'var(--danger)'):'var(--text)'}},
+              opt==='соответствует'?'✓ Соответствует':'✗ Не соответствует')
+          )
+        ),
       ),
     ),
 

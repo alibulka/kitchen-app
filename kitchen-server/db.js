@@ -409,6 +409,19 @@ if (process.env.DATABASE_URL) {
   pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: false },
+    // Не зависать на мёртвых соединениях: быстро понять, что соединение
+    // не устанавливается / запрос завис, и пересоздать его.
+    connectionTimeoutMillis: 10000, // ждать новое соединение не дольше 10с
+    idleTimeoutMillis: 30000,       // закрывать простаивающие соединения (у БД свой таймаут)
+    keepAlive: true,                // TCP keep-alive, чтобы обрывы замечались быстрее
+    query_timeout: 20000,           // запрос не может висеть дольше 20с
+    maxUses: 7500,
+  });
+
+  // Обрыв простаивающего соединения не должен ронять весь сервер:
+  // pool сам создаст новое соединение при следующем запросе.
+  pool.on('error', (err) => {
+    console.error('PostgreSQL pool error (соединение будет пересоздано):', err.message);
   });
 
   // pg не имеет withTransaction — добавляем

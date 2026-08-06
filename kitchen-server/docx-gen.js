@@ -242,9 +242,12 @@ async function generateActDOCX(act, template) {
 
       if (fieldPhotos.length > 0) {
         for (const p of fieldPhotos) {
-          const fp = path.join(UPLOADS_DIR, p.filename);
-          if (!fs.existsSync(fp)) continue;
-          const data = fs.readFileSync(fp);
+          let data = p.buffer || null;
+          if (!data) {
+            const fp = path.join(UPLOADS_DIR, p.filename);
+            if (!fs.existsSync(fp)) continue;
+            data = fs.readFileSync(fp);
+          }
           const ext = path.extname(p.filename).toLowerCase().replace('.', '');
           const type = ext === 'jpg' ? 'jpeg' : (ext === 'png' ? 'png' : ext === 'gif' ? 'gif' : 'jpeg');
           try {

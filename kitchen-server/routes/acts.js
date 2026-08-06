@@ -9,14 +9,15 @@ const { generateTemplateDOCX, generateActDOCX } = require('../docx-gen');
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOADS_DIR),
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `act-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
-  },
-});
-const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
+// Фото храним в object storage (как в quality.js) — локальный диск на проде
+// стирается при каждой публикации, из-за этого уже теряли фото актов.
+const objectStorage = require('../lib/objectStorage');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+
+function makeActFilename(originalname) {
+  const ext = path.extname(originalname || '') || '.jpg';
+  return `act-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
+}
 
 // ─── Шаблоны ──────────────────────────────────────────────────────────────────
 
@@ -103,8 +104,31 @@ router.put('/templates/:id', async (req, res) => {
         "UPDATE act_templates SET name=$1, updated_at=(NOW()::text) WHERE id=$2",
         [name, req.params.id]
       );
+      // ВАЖНО: раньше здесь просто удалялись секции (каскадно удалялись поля,
+      // а вместе с ними — значения и привязки фото в уже заполненных актах).
+      // Теперь перед пересозданием сохраняем значения/фото и переносим их
+      // на новые поля по совпадению «название секции + название поля».
+      const { rows: oldFields } = await client.query(
+        `SELECT f.id, f.label, s.title AS section_title
+         FROM act_fields f JOIN act_sections s ON s.id = f.section_id
+         WHERE s.template_id = $1`, [req.params.id]
+      );
+      const oldFieldIds = oldFields.map(f => f.id);
+      let savedValues = [], savedPhotos = [];
+      if (oldFieldIds.length) {
+        ({ rows: savedValues } = await client.query(
+          'SELECT act_id, field_id, value FROM act_values WHERE field_id = ANY($1)', [oldFieldIds]
+        ));
+        ({ rows: savedPhotos } = await client.query(
+          'SELECT id, field_id FROM act_photos WHERE field_id = ANY($1)', [oldFieldIds]
+        ));
+      }
+      const oldKeyById = {};
+      for (const f of oldFields) oldKeyById[f.id] = f.section_title + '\u0000' + f.label;
+
       // Удаляем старые секции (каскадно удалит поля)
       await client.query('DELETE FROM act_sections WHERE template_id=$1', [req.params.id]);
+      const newIdByKey = {};
       for (let si = 0; si < sections.length; si++) {
         const sec = sections[si];
         const { rows: [section] } = await client.query(
@@ -113,14 +137,31 @@ router.put('/templates/:id', async (req, res) => {
         );
         for (let fi = 0; fi < (sec.fields || []).length; fi++) {
           const f = sec.fields[fi];
-          await client.query(
+          const { rows: [nf] } = await client.query(
             `INSERT INTO act_fields(section_id, label, description, type, required, config_json, sort_order, show_if_field, show_if_value)
-             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
             [section.id, f.label, f.description || null, f.type || 'text',
              f.required ? 1 : 0, JSON.stringify(f.config || {}), fi,
              f.show_if_field || null, f.show_if_value || null]
           );
+          const key = sec.title + '\u0000' + f.label;
+          if (!(key in newIdByKey)) newIdByKey[key] = nf.id;
         }
+      }
+      // Переносим сохранённые значения и фото на новые поля
+      for (const v of savedValues) {
+        const newId = newIdByKey[oldKeyById[v.field_id]];
+        if (newId == null) continue; // поле убрали из шаблона — значение пропадает осознанно
+        await client.query(
+          `INSERT INTO act_values(act_id, field_id, value) VALUES($1,$2,$3)
+           ON CONFLICT (act_id, field_id) DO UPDATE SET value=EXCLUDED.value`,
+          [v.act_id, newId, v.value]
+        );
+      }
+      for (const p of savedPhotos) {
+        const newId = newIdByKey[oldKeyById[p.field_id]];
+        if (newId == null) continue;
+        await client.query('UPDATE act_photos SET field_id=$1 WHERE id=$2', [newId, p.id]);
       }
     });
     res.json({ ok: true });
@@ -325,6 +366,12 @@ router.get('/acts/:id/docx', async (req, res) => {
       fieldsBySection[f.section_id].push({ ...f, config: JSON.parse(f.config_json || '{}') });
     }
     const template = { name: tmpl?.name || '', sections: sections.map(s => ({ ...s, fields: fieldsBySection[s.id] || [] })) };
+    // Подтягиваем содержимое фото: сперва локальный диск, иначе object storage
+    for (const p of photos) {
+      const fp = path.join(UPLOADS_DIR, p.filename);
+      if (fs.existsSync(fp)) p.buffer = fs.readFileSync(fp);
+      else p.buffer = await objectStorage.downloadObject(p.filename);
+    }
     const fullAct = {
       ...act,
       values: Object.fromEntries(values.map(v => [v.field_id, v.value])),
@@ -363,11 +410,13 @@ router.post('/acts/:id/photos', upload.array('photos', 10), async (req, res) => 
     const fieldId = req.body.field_id || null;
     const saved = [];
     for (const file of (req.files || [])) {
+      const filename = makeActFilename(file.originalname);
+      await objectStorage.putObject(filename, file.buffer);
       await pool.query(
         'INSERT INTO act_photos(act_id,field_id,filename) VALUES($1,$2,$3)',
-        [actId, fieldId, file.filename]
+        [actId, fieldId, filename]
       );
-      saved.push({ filename: file.filename, field_id: fieldId ? Number(fieldId) : null });
+      saved.push({ filename, field_id: fieldId ? Number(fieldId) : null });
     }
     res.json({ ok: true, files: saved });
   } catch (err) {
@@ -380,6 +429,7 @@ router.delete('/acts/photos/:filename', async (req, res) => {
   try {
     const { filename } = req.params;
     await pool.query('DELETE FROM act_photos WHERE filename=$1', [filename]);
+    await objectStorage.deleteObject(filename).catch(() => {});
     const fp = path.join(UPLOADS_DIR, filename);
     if (fs.existsSync(fp)) fs.unlinkSync(fp);
     res.json({ ok: true });
