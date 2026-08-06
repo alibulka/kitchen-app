@@ -176,6 +176,16 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS quality_standard_photos (
   }
 }
 
+// Миграция: новые колонки актов проработки
+{
+  const cols = sqlite.prepare('PRAGMA table_info(acts)').all().map(c => c.name);
+  if (cols.length > 0) {
+    if (!cols.includes('product_name')) sqlite.exec("ALTER TABLE acts ADD COLUMN product_name TEXT NOT NULL DEFAULT ''");
+    if (!cols.includes('manufacturer'))  sqlite.exec("ALTER TABLE acts ADD COLUMN manufacturer TEXT NOT NULL DEFAULT ''");
+    if (!cols.includes('conclusion'))    sqlite.exec("ALTER TABLE acts ADD COLUMN conclusion TEXT NOT NULL DEFAULT ''");
+  }
+}
+
 // ─── SQL: pg → SQLite ────────────────────────────────────────────────────────
 
 // Конвертируем подмножество pg-синтаксиса в SQLite.

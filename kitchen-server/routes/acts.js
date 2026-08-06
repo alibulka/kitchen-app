@@ -218,8 +218,9 @@ router.delete('/templates/:id', async (req, res) => {
 router.get('/acts', async (req, res) => {
   try {
     const { rows } = await pool.query(`
-      SELECT a.id, a.template_id, a.date, a.raw_material, a.status, a.created_at,
-             t.name AS template_name
+      SELECT a.id, a.template_id, a.date, a.raw_material,
+             a.product_name, a.manufacturer, a.conclusion,
+             a.status, a.created_at, t.name AS template_name
       FROM acts a JOIN act_templates t ON t.id = a.template_id
       ORDER BY a.date DESC, a.id DESC
     `);
@@ -260,11 +261,11 @@ router.get('/acts/:id', async (req, res) => {
 // Создать акт
 router.post('/acts', async (req, res) => {
   try {
-    const { template_id, date, raw_material } = req.body;
+    const { template_id, date, raw_material, product_name, manufacturer } = req.body;
     if (!template_id || !date) return res.status(400).json({ error: 'template_id and date required' });
     const { rows: [act] } = await pool.query(
-      'INSERT INTO acts(template_id,date,raw_material) VALUES($1,$2,$3) RETURNING *',
-      [template_id, date, raw_material || '']
+      'INSERT INTO acts(template_id,date,raw_material,product_name,manufacturer) VALUES($1,$2,$3,$4,$5) RETURNING *',
+      [template_id, date, raw_material || '', product_name || '', manufacturer || '']
     );
     res.json({ ok: true, id: act.id });
   } catch (err) {
@@ -275,13 +276,16 @@ router.post('/acts', async (req, res) => {
 // Сохранить значения акта
 router.put('/acts/:id', async (req, res) => {
   try {
-    const { values = {}, status, raw_material } = req.body;
+    const { values = {}, status, raw_material, product_name, manufacturer, conclusion } = req.body;
     await pool.withTransaction(async (client) => {
-      if (status || raw_material !== undefined) {
-        const sets = [];
-        const params = [];
-        if (status) { sets.push(`status=$${params.length+1}`); params.push(status); }
-        if (raw_material !== undefined) { sets.push(`raw_material=$${params.length+1}`); params.push(raw_material); }
+      const sets = [];
+      const params = [];
+      if (status) { sets.push(`status=$${params.length+1}`); params.push(status); }
+      if (raw_material !== undefined) { sets.push(`raw_material=$${params.length+1}`); params.push(raw_material); }
+      if (product_name !== undefined) { sets.push(`product_name=$${params.length+1}`); params.push(product_name); }
+      if (manufacturer !== undefined) { sets.push(`manufacturer=$${params.length+1}`); params.push(manufacturer); }
+      if (conclusion !== undefined) { sets.push(`conclusion=$${params.length+1}`); params.push(conclusion); }
+      if (sets.length > 0) {
         sets.push(`updated_at=(NOW()::text)`);
         params.push(req.params.id);
         await client.query(`UPDATE acts SET ${sets.join(',')} WHERE id=$${params.length}`, params);

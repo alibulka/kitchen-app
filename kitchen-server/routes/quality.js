@@ -326,6 +326,73 @@ router.post('/standards/import-file', uploadLarge.single('file'), async (req, re
 
 // ─── Задания ──────────────────────────────────────────────────────────────────
 
+// Незавершённые задания предыдущих дней (перенос)
+router.get('/tasks/carryover', async (req, res) => {
+  try {
+    const { date } = req.query; // вчерашняя дата
+    const { rows } = await pool.query(`
+      SELECT qt.*, qs.name, qs.company, qs.appearance, qs.color, qs.taste_smell, qs.consistency,
+             qs.item_id, qs.always_check
+      FROM quality_tasks qt
+      JOIN quality_standards qs ON qs.id = qt.standard_id
+      WHERE qt.date = $1 AND qt.status IN ('pending','overdue')
+      ORDER BY qt.id
+    `, [date]);
+
+    const taskIds = rows.map(r => r.id);
+    let results = [], photos = [], fields = [];
+
+    if (taskIds.length > 0) {
+      const stdIds = [...new Set(rows.map(r => r.standard_id))];
+      const [r, p, f, sp] = await Promise.all([
+        pool.query(`SELECT * FROM quality_task_results WHERE task_id IN (${inClause(taskIds)})`, taskIds),
+        pool.query(`SELECT * FROM quality_photos WHERE task_id IN (${inClause(taskIds)})`, taskIds),
+        pool.query(`SELECT qcf.* FROM quality_check_fields qcf
+                    JOIN quality_tasks qt ON qt.standard_id = qcf.standard_id
+                    WHERE qt.id IN (${inClause(taskIds)}) ORDER BY qcf.sort_order`, taskIds),
+        stdIds.length > 0
+          ? pool.query(`SELECT * FROM quality_standard_photos WHERE standard_id IN (${inClause(stdIds)})`, stdIds)
+          : Promise.resolve({ rows: [] }),
+      ]);
+      results = r.rows; photos = p.rows; fields = f.rows;
+      const refByStd = {};
+      for (const ph of sp.rows) {
+        if (!refByStd[ph.standard_id]) refByStd[ph.standard_id] = [];
+        refByStd[ph.standard_id].push(ph);
+      }
+      for (const row of rows) row._ref_photos = refByStd[row.standard_id] || [];
+    }
+
+    const resultsByTask = {}, photosByTask = {}, fieldsByTask = {};
+    for (const r of results) {
+      if (!resultsByTask[r.task_id]) resultsByTask[r.task_id] = [];
+      resultsByTask[r.task_id].push(r);
+    }
+    for (const p of photos) {
+      if (!photosByTask[p.task_id]) photosByTask[p.task_id] = [];
+      photosByTask[p.task_id].push(p);
+    }
+    for (const f of fields) {
+      if (!fieldsByTask[f.standard_id]) fieldsByTask[f.standard_id] = [];
+      const already = fieldsByTask[f.standard_id].some(x => (x.name||x) === f.field_name);
+      if (!already)
+        fieldsByTask[f.standard_id].push({ name: f.field_name, description: f.field_description || '' });
+    }
+
+    res.json({
+      tasks: rows.map(r => ({
+        ...r,
+        results: resultsByTask[r.id] || [],
+        photos: photosByTask[r.id] || [],
+        extra_fields: fieldsByTask[r.standard_id] || [],
+        ref_photos: r._ref_photos || [],
+      }))
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/tasks', async (req, res) => {
   try {
     const { date } = req.query;

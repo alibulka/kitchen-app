@@ -291,15 +291,21 @@ async function initDb(pool) {
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS acts (
-      id          SERIAL PRIMARY KEY,
-      template_id INTEGER NOT NULL REFERENCES act_templates(id),
-      date        TEXT NOT NULL,
-      raw_material TEXT NOT NULL DEFAULT '',
-      status      TEXT NOT NULL DEFAULT 'draft',
-      created_at  TEXT NOT NULL DEFAULT (NOW()::text),
-      updated_at  TEXT NOT NULL DEFAULT (NOW()::text)
+      id            SERIAL PRIMARY KEY,
+      template_id   INTEGER NOT NULL REFERENCES act_templates(id),
+      date          TEXT NOT NULL,
+      raw_material  TEXT NOT NULL DEFAULT '',
+      product_name  TEXT NOT NULL DEFAULT '',
+      manufacturer  TEXT NOT NULL DEFAULT '',
+      conclusion    TEXT NOT NULL DEFAULT '',
+      status        TEXT NOT NULL DEFAULT 'draft',
+      created_at    TEXT NOT NULL DEFAULT (NOW()::text),
+      updated_at    TEXT NOT NULL DEFAULT (NOW()::text)
     )
   `);
+  await q('ALTER TABLE acts ADD COLUMN IF NOT EXISTS product_name TEXT NOT NULL DEFAULT \'\'');
+  await q('ALTER TABLE acts ADD COLUMN IF NOT EXISTS manufacturer TEXT NOT NULL DEFAULT \'\'');
+  await q('ALTER TABLE acts ADD COLUMN IF NOT EXISTS conclusion TEXT NOT NULL DEFAULT \'\'');
   await pool.query(`
     CREATE TABLE IF NOT EXISTS act_values (
       id       SERIAL PRIMARY KEY,
