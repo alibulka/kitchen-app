@@ -393,6 +393,7 @@ router.delete('/acts/:id', async (req, res) => {
   try {
     const { rows: photos } = await pool.query('SELECT filename FROM act_photos WHERE act_id=$1', [req.params.id]);
     for (const p of photos) {
+      await objectStorage.deleteObject(p.filename).catch(() => {});
       const fp = path.join(UPLOADS_DIR, p.filename);
       if (fs.existsSync(fp)) fs.unlinkSync(fp);
     }
