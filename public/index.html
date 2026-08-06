@@ -7710,9 +7710,39 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
     }
   }
   const todayItemIds=new Set(items.map(it=>String(it.id)));
+
+  // Вчерашняя техкарта — для карточек переноса берём из неё ингредиенты/подзаготовки
+  // (сегодняшние количества могут сильно отличаться от вчерашнего долга)
+  const [prevCatalogItems,setPrevCatalogItems]=useState(null);
+  useEffect(()=>{
+    let alive=true;
+    (async()=>{
+      if(!shift.prevTechcardId&&!shift.prevUdTechcardId){ if(alive) setPrevCatalogItems(null); return; }
+      const [ee,ud]=await Promise.all([
+        shift.prevTechcardId?loadTechCard(shift.prevTechcardId):Promise.resolve(null),
+        shift.prevUdTechcardId?loadTechCard(shift.prevUdTechcardId):Promise.resolve(null),
+      ]);
+      if(!alive) return;
+      const cat=getCatalogForDate('prev',ee,ud);
+      const map={};
+      for(const st of cat){
+        if(st.key!==station.key) continue;
+        for(const it of st.items) map[String(it.id)]=it;
+      }
+      setPrevCatalogItems(map);
+    })();
+    return ()=>{alive=false;};
+  },[shift.prevTechcardId,shift.prevUdTechcardId,station.key]);
+  const prevItemFor=(id)=>(prevCatalogItems||{})[String(id)]||null;
+  // Карточка переноса: подменяем ингредиенты/подзаготовки на вчерашние (если нашли)
+  const carryItem=(item)=>{
+    const pi=prevItemFor(item.id);
+    return pi?{...item,ingredients:pi.ingredients,subPreps:pi.subPreps,yieldAmount:pi.yieldAmount,yieldUnit:pi.yieldUnit}:item;
+  };
   // Items с хотя бы одной skipped/partial строкой (done-only не показываем как перенос)
   const hasCarryoverSkip=(d)=>d&&Object.values(d).some(p=>p.status==='skipped'||p.status==='partial');
-  const allCarriedItems=todoItems.filter(it=>hasCarryoverSkip(prevItemDataMap[String(it.id)]));
+  // Берём из всех позиций дня (не только невыполненных): сегодняшняя галочка не должна скрывать вчерашний долг
+  const allCarriedItems=orderedItems.filter(it=>hasCarryoverSkip(prevItemDataMap[String(it.id)]));
   // Позиции переноса, которых НЕТ в сегодняшней техкарте
   const allCarriedOnlyItems=[];
   const seenCarriedOnly=new Set();
@@ -7733,6 +7763,8 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
   };
   const carriedItems=allCarriedItems.filter(it=>!isCarryoverDone(it.id));
   const carriedOnlyItems=allCarriedOnlyItems.filter(it=>!isCarryoverDone(it.id));
+  // Во «Выполнено» позиция может быть двумя карточками: сегодняшняя (обычная)
+  // и вчерашний закрытый долг (carryover) — это разные задания
   const carriedDoneItems=[
     ...allCarriedItems.filter(it=>isCarryoverDone(it.id)),
     ...allCarriedOnlyItems.filter(it=>isCarryoverDone(it.id)),
@@ -7756,31 +7788,44 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
       className:'item-wrapper'+(sinking?' sinking':'')+(settled?' settled':'')
     }, e(ItemCard,{item,stationKey:station.key,shift,onShiftChange,shopEmployees,prevLineData}));
   };
+  // Синтетические строки фасовки из вчерашних данных.
+  // ВАЖНО: индекс в массиве должен совпадать с исходным lineIdx (ключи prev-...-pl-<idx>),
+  // поэтому пропуски индексов заполняем пустыми строками, а не уплотняем массив.
+  const buildPrevPackLines=(lineMap)=>{
+    const idxs=Object.keys(lineMap).filter(k=>k!=='__itemLevel').map(Number).filter(n=>!isNaN(n));
+    if(idxs.length===0) return [];
+    const max=Math.max(...idxs);
+    return Array.from({length:max+1},(_,i)=>{
+      const p=lineMap[i];
+      return {volume:p?.volume||'',packName:p?.packName||'',destination:'',fromWarehouse:0,qty:p?.planQty||0};
+    });
+  };
   const renderCarried=(item)=>{
     const lineMap=prevItemDataMap[String(item.id)]||{};
+    // Во вкладке «Прошлая смена» показываем ВЧЕРАШНИЕ строки фасовки (долг),
+    // а не сегодняшние — их состав и количество могут отличаться
+    const synPackLines=buildPrevPackLines(lineMap);
     return e('div',{key:item.id,className:'item-wrapper'},
-      e(ItemCard,{item,stationKey:station.key,shift,onShiftChange,shopEmployees,prevLineData:lineMap,keyPrefix:'prev-'}));
+      e(ItemCard,{item:carryItem(item),stationKey:station.key,shift,onShiftChange,shopEmployees,prevLineData:lineMap,
+        overridePackLines:synPackLines.length>0?synPackLines:null,keyPrefix:'prev-'}));
   };
   // Для позиций переноса без сегодняшней техкарты — синтетические packLines из prevSkips
   const renderCarriedOnly=(synItem)=>{
     const lineMap=prevItemDataMap[String(synItem.id)]||{};
-    const synPackLines=Object.entries(lineMap)
-      .filter(([k])=>k!=='__itemLevel')
-      .sort(([a],[b])=>Number(a)-Number(b))
-      .map(([,p])=>({volume:p.volume||'',packName:p.packName||'',destination:'',fromWarehouse:0,qty:p.planQty||0}));
+    const synPackLines=buildPrevPackLines(lineMap);
+    const fullPrev=prevItemFor(synItem.id);
     return e('div',{key:synItem.id,className:'item-wrapper'},
-      e(ItemCard,{item:synItem,stationKey:station.key,shift,onShiftChange,shopEmployees,
+      e(ItemCard,{item:fullPrev||synItem,stationKey:station.key,shift,onShiftChange,shopEmployees,
         prevLineData:lineMap,overridePackLines:synPackLines.length>0?synPackLines:null,keyPrefix:'prev-'}));
   };
   const renderCarriedDone=(item)=>{
     const lineMap=prevItemDataMap[String(item.id)]||{};
-    const synPackLines=Object.entries(lineMap)
-      .filter(([k])=>k!=='__itemLevel')
-      .sort(([a],[b])=>Number(a)-Number(b))
-      .map(([,p])=>({volume:p.volume||'',packName:p.packName||'',destination:'',fromWarehouse:0,qty:p.planQty||0}));
-    const hasOverride=synPackLines.length>0&&!todayItemIds.has(String(item.id));
-    return e('div',{key:item.id,className:'item-wrapper'},
-      e(ItemCard,{item,stationKey:station.key,shift,onShiftChange,shopEmployees,
+    const synPackLines=buildPrevPackLines(lineMap);
+    // Всегда показываем вчерашние строки — это карточка вчерашнего долга,
+    // и key с префиксом, чтобы не конфликтовать с сегодняшней карточкой той же позиции
+    const hasOverride=synPackLines.length>0;
+    return e('div',{key:'prev-'+item.id,className:'item-wrapper'},
+      e(ItemCard,{item:carryItem(item),stationKey:station.key,shift,onShiftChange,shopEmployees,
         prevLineData:lineMap,overridePackLines:hasOverride?synPackLines:null,keyPrefix:'prev-'}));
   };
   const renderRegular=(item)=>renderItem(item,null);
@@ -8082,12 +8127,17 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
           if(seenCarryover.has(ck)) return;
           seenCarryover.add(ck);
           const itemName=station.items.find(it=>String(it.id)===String(p.itemId))?.name||p.itemName||`ID #${p.itemId}`;
+          // Данные строки переноса берём из ВЧЕРАШНЕЙ смены (их присылает сервер в prevSkips);
+          // сегодняшняя техкарта — только запасной вариант, её строки могут отличаться
           const itemPls=(s.itemPackLines||{})[p.itemId];
           const packLine=p.lineIdx!=null&&itemPls?itemPls[p.lineIdx]:null;
-          const planQty=packLine?(Number(packLine.qty)||0)+(Number(packLine.fromWarehouse)||0):(p.planQty||0);
+          const planQty=p.planQty!=null?(Number(p.planQty)||0)
+            :packLine?(Number(packLine.qty)||0)+(Number(packLine.fromWarehouse)||0):0;
           const yFact=p.yesterdayFact!=null?Number(p.yesterdayFact):null;
-          // Показываем только строки с реальной нехваткой (есть причина нехватки)
-          if(p.status!=='skipped'&&p.status!=='partial') return;
+          // Показываем строки с реальной нехваткой: пропуски, частичные,
+          // а также «выполнено вчера, но факт меньше плана» (недофасовка)
+          const isShortDone=p.status==='done'&&yFact!=null&&planQty>0&&yFact<planQty;
+          if(p.status!=='skipped'&&p.status!=='partial'&&!isShortDone) return;
           // Если позиция есть и в сегодняшней техкарте — строка переноса всегда "⏮ Перенос",
           // выполнение сегодня отражается только в строке из основного цикла.
           // Если позиции нет в сегодняшней техкарте — читаем doneFlags (карryover-only item).
@@ -8110,7 +8160,7 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
             if(cDurationMin>0&&cFactQty>0)cMinPerPack=+(cFactQty/cDurationMin).toFixed(1);
           }
           rows.push({date:dk,shop:shopName,station:station.name,name:itemName,
-            packName:packLine?.packName||'',volume:packLine?.volume||'',
+            packName:p.packName||packLine?.packName||'',volume:p.volume||packLine?.volume||'',
             planQty,effectivePlanQty,yesterdayFact:yFact,factQty:cDone?cFactQty:(yFact??0),
             pct:planQty>0?(cDone?Math.round(cFactQty/planQty*100):(yFact!=null?Math.round(yFact/planQty*100):0)):0,
             done:cDone,employee:cEmpName,

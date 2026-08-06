@@ -9094,7 +9094,7 @@ function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesCh
     tab==='upload' && e(TechcardsTab,{shift,allTechcards,activeTcEE,activeTcUD,onApplyTechcard,onDeactivate,onRefreshTechcards}),
     tab==='technologist' && e(TechnologistPage,null),
     tab==='product' && e(ProductJournalPage,null),
-    tab==='acts' && e(ActsPage,null)
+    tab==='acts' && e(ActsPage,{isManager:true})
   );
 }
 
@@ -9994,6 +9994,7 @@ function TechnologistPage() {
   const [tab,setTab]=useState('tasks');
   const [date,setDate]=useState(todayISO);
   const [tasks,setTasks]=useState([]);
+  const [carryoverTasks,setCarryoverTasks]=useState([]);
   const [standards,setStandards]=useState([]);
   const [technologists,setTechnologists]=useState([]);
   const technologistsRef=React.useRef([]);
@@ -10010,13 +10011,16 @@ function TechnologistPage() {
 
   const loadData=async(d)=>{
     setLoading(true);
-    const [tr,sr,shiftR,empR]=await Promise.all([
+    const isToday = d === todayISO();
+    const [tr,sr,shiftR,empR,coR]=await Promise.all([
       fetch(`/api/quality/tasks?date=${d}`).then(r=>r.json()),
       fetch('/api/quality/standards').then(r=>r.json()),
       fetch(`/api/shifts/${d}`).then(r=>r.json()).catch(()=>({shift:null})),
       fetch('/api/employees').then(r=>r.json()).catch(()=>({employees:[]})),
+      isToday ? fetch(`/api/quality/tasks/carryover?date=${new Date(new Date(d).getTime()-864e5).toISOString().slice(0,10)}`).then(r=>r.json()) : Promise.resolve({tasks:[]}),
     ]);
     setTasks(tr.tasks||[]);
+    setCarryoverTasks(coR.tasks||[]);
     setStandards(sr.standards||[]);
     const techs=(empR.employees||[]).filter(e=>e.shop==='Технолог'||e.shop==='Главный технолог');
     setTechnologists(techs);
@@ -10076,8 +10080,10 @@ function TechnologistPage() {
     setTasks(prev=>prev.map(t=>t.id===taskId?{...t,status,results,...(photos!=null?{photos}:{})}:t));
   };
 
+  const todayStandardIds=new Set(tasks.map(t=>t.standard_id));
   const pending=tasks.filter(t=>t.status==='pending'||t.status==='overdue');
   const done=tasks.filter(t=>t.status==='done');
+  const filteredCarryover=carryoverTasks.filter(t=>!todayStandardIds.has(t.standard_id));
 
   const reloadStandards=async()=>{
     const sr=await fetch('/api/quality/standards').then(r=>r.json());
@@ -10105,6 +10111,27 @@ function TechnologistPage() {
       ),
 
       loading?e('div',{className:'empty-state'},'Загрузка…'):e(React.Fragment,null,
+        filteredCarryover.length>0&&e('div',{style:{marginBottom:20,background:'#FFF9EC',border:'1.5px solid #F59E0B',borderRadius:12,padding:16}},
+          e('div',{style:{fontWeight:700,fontSize:14,color:'#92400E',marginBottom:10}},
+            `⏩ Перенесено с предыдущих дней (${filteredCarryover.length})`),
+          e('div',{style:{display:'flex',flexDirection:'column',gap:8}},
+            filteredCarryover.map(t=>
+              e('div',{key:t.id,style:{background:'white',borderRadius:10,border:'1px solid #FDE68A',overflow:'hidden'}},
+                e('div',{style:{padding:'4px 12px',background:'#FEF3C7',fontSize:11,color:'#92400E',fontWeight:600}},
+                  `Не завершено за ${new Date(t.date+'T00:00:00').toLocaleDateString('ru-RU',{day:'numeric',month:'long'})}`),
+                e(QualityTaskCard,{key:t.id,task:t,
+                  isOpen:openTaskId===t.id,
+                  onToggle:()=>setOpenTaskId(v=>v===t.id?null:t.id),
+                  onDelete:deleteTask,onSave,
+                  technologists,onAssign:async(taskId,empId)=>{
+                    await fetch(`/api/quality/tasks/${taskId}/assign`,{method:'PATCH',
+                      headers:{'Content-Type':'application/json'},body:JSON.stringify({assigned_to:empId||null})});
+                    await loadData(date);
+                  }})
+              )
+            )
+          )
+        ),
         e('div',{style:{marginBottom:24}},
           e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}},
             e('div',{style:{fontWeight:700,fontSize:16}},`К проверке (${pending.length})`),
@@ -10166,6 +10193,8 @@ function ActsViewer({readOnly}) {
   const [filterTemplate,setFilterTemplate]=useState('');
   const [filterStatus,setFilterStatus]=useState('');
   const [filterRaw,setFilterRaw]=useState('');
+  const [filterManufacturer,setFilterManufacturer]=useState('');
+  const [filterConclusion,setFilterConclusion]=useState('');
   const [from,setFrom]=useState(()=>{const d=new Date();d.setDate(d.getDate()-30);return d.toISOString().slice(0,10);});
   const [to,setTo]=useState(todayISO);
   const [openAct,setOpenAct]=useState(null); // полный акт с данными
@@ -10198,6 +10227,8 @@ function ActsViewer({readOnly}) {
     if(filterTemplate&&a.template_id!==Number(filterTemplate)) return false;
     if(filterStatus&&a.status!==filterStatus) return false;
     if(filterRaw&&!(a.raw_material||'').toLowerCase().includes(filterRaw.toLowerCase())) return false;
+    if(filterManufacturer&&!(a.manufacturer||'').toLowerCase().includes(filterManufacturer.toLowerCase())) return false;
+    if(filterConclusion&&a.conclusion!==filterConclusion) return false;
     if(a.date<from||a.date>to) return false;
     return true;
   });
@@ -10206,8 +10237,12 @@ function ActsViewer({readOnly}) {
   if(openAct&&template) {
     const values=openAct.values||{};
     const photos=openAct.photos||[];
+    const rowStyle={display:'flex',alignItems:'baseline',justifyContent:'space-between',
+      gap:12,padding:'5px 0',borderBottom:'1px solid var(--border)',fontSize:13};
+    const labelStyle={color:'var(--muted)',fontWeight:500,flexShrink:0};
+    const valStyle=(color)=>({fontWeight:600,textAlign:'right',color:color||'var(--text)'});
     return e('div',{style:{maxWidth:720,margin:'0 auto',padding:'0 16px 40px'}},
-      e('div',{style:{display:'flex',alignItems:'center',gap:12,margin:'16px 0 20px'}},
+      e('div',{style:{display:'flex',alignItems:'center',gap:12,margin:'16px 0 16px'}},
         e('button',{onClick:()=>{setOpenAct(null);setTemplate(null);},
           style:{padding:'6px 14px',borderRadius:8,border:'1.5px solid var(--border)',
             background:'transparent',color:'var(--text)',fontWeight:600,fontSize:13,cursor:'pointer'}},'← Назад'),
@@ -10227,38 +10262,71 @@ function ActsViewer({readOnly}) {
       ),
       lightbox&&e(Lightbox,{photos:lightbox.photos,startIndex:lightbox.index,onClose:()=>setLightbox(null)}),
 
-      (template.sections||[]).map(sec=>
-        e('div',{key:sec.id,style:{marginBottom:16,background:'var(--surface)',borderRadius:14,
+      // Шапка акта
+      (()=>{
+        const headerRows=[
+          {label:'Наименование сырья',val:openAct.raw_material||'—'},
+          {label:'Дата проработки',val:new Date(openAct.date).toLocaleDateString('ru-RU')},
+          openAct.product_name&&{label:'Наименование (как на этикетке)',val:openAct.product_name},
+          openAct.manufacturer&&{label:'Производитель (как на этикетке)',val:openAct.manufacturer},
+        ].filter(Boolean);
+        return e('div',{style:{background:'var(--surface)',borderRadius:12,border:'1.5px solid var(--border)',
+          padding:'8px 14px',marginBottom:12}},
+          headerRows.map((r,i)=>e('div',{key:r.label,style:{...rowStyle,borderBottom:i<headerRows.length-1?rowStyle.borderBottom:'none'}},
+            e('span',{style:labelStyle},r.label),e('span',{style:valStyle()},r.val)))
+        );
+      })(),
+
+      (template.sections||[]).map(sec=>{
+        const visibleFields=(sec.fields||[]).filter(f=>{
+          const val=values[f.id];
+          const fieldPhotos=photos.filter(p=>p.field_id===f.id);
+          return val||fieldPhotos.length>0;
+        });
+        if(!visibleFields.length) return null;
+        return e('div',{key:sec.id,style:{marginBottom:12,background:'var(--surface)',borderRadius:12,
           border:'1.5px solid var(--border)',overflow:'hidden'}},
-          e('div',{style:{padding:'12px 16px',background:'var(--bg)',
-            borderBottom:'1.5px solid var(--border)',fontWeight:700,fontSize:15}},sec.title),
-          e('div',{style:{padding:'16px'}},
-            (sec.fields||[]).map(f=>{
+          e('div',{style:{padding:'8px 14px',background:'var(--bg)',
+            borderBottom:'1.5px solid var(--border)',fontWeight:700,fontSize:14}},sec.title),
+          e('div',{style:{padding:'4px 14px'}},
+            visibleFields.map((f,i)=>{
               const val=values[f.id];
               const fieldPhotos=photos.filter(p=>p.field_id===f.id);
-              if(!val&&!fieldPhotos.length) return null;
-              return e('div',{key:f.id,style:{marginBottom:14,paddingBottom:14,
-                borderBottom:'1px solid var(--border)'}},
-                e('div',{style:{fontSize:12,color:'var(--muted)',marginBottom:4,fontWeight:600}},
+              const isLast=i===visibleFields.length-1;
+              const valueColor=f.type==='comply'?(val==='соответствует'?'var(--ok)':'var(--danger)'):
+                f.type==='yes_no'?(val==='да'?'var(--ok)':'var(--danger)'):null;
+              const displayVal=f.type==='multiselect'?(val||'').split('|').filter(Boolean).join(', '):val;
+              const hasOnlyPhotos=!val&&fieldPhotos.length>0;
+              return e('div',{key:f.id,style:{...rowStyle,alignItems:hasOnlyPhotos?'flex-start':rowStyle.alignItems,borderBottom:isLast?'none':rowStyle.borderBottom}},
+                e('span',{style:{...labelStyle,maxWidth:'55%'}},
                   f.label,
-                  f.description&&e('span',{style:{fontWeight:400,marginLeft:6}},`(${f.description})`)),
-                // Значение
-                val&&e('div',{style:{fontSize:14,fontWeight:500,color:
-                  f.type==='comply'?(val==='соответствует'?'var(--ok)':'var(--danger)'):
-                  f.type==='yes_no'?(val==='да'?'var(--ok)':'var(--danger)'):'var(--text)'}},
-                  f.type==='multiselect'?(val||'').split('|').filter(Boolean).join(', '):val),
-                // Фото
-                fieldPhotos.length>0&&e('div',{style:{display:'flex',flexWrap:'wrap',gap:8,marginTop:8}},
-                  fieldPhotos.map((p,i)=>e('img',{key:p.filename,
-                    src:`/uploads/${p.filename}`,
-                    onClick:()=>setLightbox({photos:fieldPhotos,index:i}),
-                    style:{width:80,height:80,objectFit:'cover',borderRadius:8,
-                      border:'1px solid var(--border)',cursor:'pointer'}}))
+                  f.description&&e('span',{style:{fontWeight:400,marginLeft:4,fontSize:12}},`(${f.description})`)),
+                e('div',{style:{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}},
+                  val&&e('span',{style:valStyle(valueColor)},displayVal),
+                  fieldPhotos.length>0&&e('div',{style:{display:'flex',flexWrap:'wrap',gap:4,justifyContent:'flex-end'}},
+                    fieldPhotos.map((p,i)=>e('img',{key:p.filename,
+                      src:`/uploads/${p.filename}`,
+                      onClick:()=>setLightbox({photos:fieldPhotos,index:i}),
+                      style:{width:56,height:56,objectFit:'cover',borderRadius:6,
+                        border:'1px solid var(--border)',cursor:'pointer'}}))
+                  ),
                 ),
               );
             })
           ),
-        )
+        );
+      }),
+
+      // Общий вывод
+      openAct.conclusion&&e('div',{style:{background:'var(--surface)',borderRadius:12,
+        border:'2px solid '+(openAct.conclusion==='соответствует'?'var(--ok)':'var(--danger)'),
+        padding:'10px 14px',marginTop:4}},
+        e('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between'}},
+          e('span',{style:{fontSize:13,fontWeight:600,color:'var(--muted)'}},'Общий вывод'),
+          e('span',{style:{fontSize:15,fontWeight:700,
+            color:openAct.conclusion==='соответствует'?'var(--ok)':'var(--danger)'}},
+            openAct.conclusion==='соответствует'?'✓ Соответствует':'✗ Не соответствует'),
+        ),
       ),
     );
   }
@@ -10275,13 +10343,19 @@ function ActsViewer({readOnly}) {
       readOnly
         ? e('select',{className:'filter-input',value:filterStatus,onChange:ev=>setFilterStatus(ev.target.value)},
             e('option',{value:'done'},'Только завершённые'),
-            e('option',{value:''},'Все'))
+            e('option',{value:''},'Все статусы'))
         : e('select',{className:'filter-input',value:filterStatus,onChange:ev=>setFilterStatus(ev.target.value)},
-            e('option',{value:''},'Все'),
+            e('option',{value:''},'Все статусы'),
             e('option',{value:'done'},'Завершённые'),
             e('option',{value:'draft'},'Черновики')),
+      e('select',{className:'filter-input',value:filterConclusion,onChange:ev=>setFilterConclusion(ev.target.value)},
+        e('option',{value:''},'Все выводы'),
+        e('option',{value:'соответствует'},'✓ Соответствует'),
+        e('option',{value:'не соответствует'},'✗ Не соответствует')),
       e('input',{className:'filter-input',value:filterRaw,onChange:ev=>setFilterRaw(ev.target.value),
-        placeholder:'Поиск по сырью…',style:{minWidth:160}}),
+        placeholder:'Поиск по сырью…',style:{minWidth:140}}),
+      e('input',{className:'filter-input',value:filterManufacturer,onChange:ev=>setFilterManufacturer(ev.target.value),
+        placeholder:'Производитель…',style:{minWidth:140}}),
     ),
 
     filtered.length===0
@@ -10289,7 +10363,7 @@ function ActsViewer({readOnly}) {
       : e('div',{style:{background:'var(--surface)',borderRadius:14,border:'1.5px solid var(--border)',overflow:'hidden'}},
           e('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:14}},
             e('thead',null,e('tr',null,
-              ['Дата','Сырьё','Шаблон','Статус',''].map(h=>
+              ['Дата','Сырьё','Наименование (этикетка)','Производитель','Шаблон','Вывод','Статус',''].map(h=>
                 e('th',{key:h,style:{padding:'10px 14px',textAlign:'left',
                   borderBottom:'2px solid var(--border)',fontSize:12,color:'var(--muted)',
                   fontWeight:700,textTransform:'uppercase',letterSpacing:'0.04em'}},h))
@@ -10299,7 +10373,15 @@ function ActsViewer({readOnly}) {
                 onClick:()=>openActDetail(a)},
                 e('td',{style:{padding:'11px 14px'}},new Date(a.date).toLocaleDateString('ru-RU')),
                 e('td',{style:{padding:'11px 14px',fontWeight:600}},a.raw_material||'—'),
+                e('td',{style:{padding:'11px 14px'}},a.product_name||'—'),
+                e('td',{style:{padding:'11px 14px'}},a.manufacturer||'—'),
                 e('td',{style:{padding:'11px 14px',color:'var(--muted)',fontSize:13}},a.template_name),
+                e('td',{style:{padding:'11px 14px'}},
+                  a.conclusion
+                    ? e('span',{style:{fontWeight:600,fontSize:12,
+                        color:a.conclusion==='соответствует'?'var(--ok)':'var(--danger)'}},
+                        a.conclusion==='соответствует'?'✓ Соотв.':'✗ Не соотв.')
+                    : e('span',{style:{color:'var(--muted)'}}, '—')),
                 e('td',{style:{padding:'11px 14px'}},
                   e('span',{style:{fontWeight:600,fontSize:13,color:statusColor(a.status)}},
                     statusLabel(a.status))),
@@ -10546,6 +10628,16 @@ function ActTemplateEditor({template, onSave, onBack}) {
       ...s, fields: s.fields.filter((_,j) => j!==fi)
     }));
 
+  const moveSection = (si, dir) => {
+    setSections(prev => {
+      const arr=[...prev];
+      const ni=si+dir;
+      if(ni<0||ni>=arr.length) return arr;
+      [arr[si],arr[ni]]=[arr[ni],arr[si]];
+      return arr;
+    });
+  };
+
   const moveField = (si, fi, dir) => {
     setSections(prev => prev.map((s,i) => {
       if(i!==si) return s;
@@ -10606,9 +10698,17 @@ function ActTemplateEditor({template, onSave, onBack}) {
           e('input',{value:sec.title,onChange:ev=>updateSection(si,'title',ev.target.value),
             placeholder:'Название раздела',
             style:{...inputStyle,fontWeight:700,fontSize:15,border:'none',background:'transparent',padding:'2px 6px'}}),
-          e('button',{onClick:()=>removeSection(si),
-            style:{marginLeft:'auto',padding:'4px 10px',borderRadius:6,border:'1px solid var(--danger)',
-              background:'transparent',color:'var(--danger)',fontSize:12,cursor:'pointer'}},'✕ Удалить раздел'),
+          e('div',{style:{display:'flex',gap:4,marginLeft:'auto',alignItems:'center'}},
+            e('button',{onClick:()=>moveSection(si,-1),disabled:si===0,
+              style:{padding:'3px 8px',borderRadius:6,border:'1px solid var(--border)',background:'transparent',
+                color:si===0?'var(--muted)':'var(--text)',fontSize:13,cursor:si===0?'default':'pointer'}},'▲'),
+            e('button',{onClick:()=>moveSection(si,1),disabled:si===sections.length-1,
+              style:{padding:'3px 8px',borderRadius:6,border:'1px solid var(--border)',background:'transparent',
+                color:si===sections.length-1?'var(--muted)':'var(--text)',fontSize:13,cursor:si===sections.length-1?'default':'pointer'}},'▼'),
+            e('button',{onClick:()=>removeSection(si),
+              style:{padding:'4px 10px',borderRadius:6,border:'1px solid var(--danger)',
+                background:'transparent',color:'var(--danger)',fontSize:12,cursor:'pointer'}},'✕ Удалить раздел'),
+          ),
         ),
 
         // Поля секции
@@ -10686,7 +10786,14 @@ function ActForm({actId, templateId, onBack, onSaved}) {
       fetch(`/api/acts/acts/${actId}`).then(r=>r.json()).then(d=>{
         if(d.act) {
           setAct(d.act);
-          setValues(d.act.values||{});
+          setValues({
+            ...d.act.values||{},
+            _raw_material: d.act.raw_material||'',
+            _date: d.act.date||new Date().toISOString().slice(0,10),
+            _product_name: d.act.product_name||'',
+            _manufacturer: d.act.manufacturer||'',
+            _conclusion: d.act.conclusion||'',
+          });
           setPhotos(d.act.photos||[]);
           fetch(`/api/acts/templates/${d.act.template_id}`).then(r=>r.json()).then(td=>{
             if(td.template) setTemplate(td.template);
@@ -10762,13 +10869,18 @@ function ActForm({actId, templateId, onBack, onSaved}) {
       let aid = act?.id || actId;
       const date = values._date || new Date().toISOString().slice(0,10);
       const rawMaterial = values._raw_material || template?.name || '';
+      const productName = values._product_name || '';
+      const manufacturer = values._manufacturer || '';
+      const conclusion = values._conclusion || '';
       const saveValues = {...values};
       delete saveValues._date; delete saveValues._raw_material;
+      delete saveValues._product_name; delete saveValues._manufacturer; delete saveValues._conclusion;
 
       if(!aid) {
         const cr = await fetch('/api/acts/acts',{method:'POST',
           headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({template_id:templateId||act?.template_id, date, raw_material:rawMaterial})});
+          body:JSON.stringify({template_id:templateId||act?.template_id, date,
+            raw_material:rawMaterial, product_name:productName, manufacturer})});
         const cd = await cr.json();
         if(cd.error) return alert('Ошибка: '+cd.error);
         aid = cd.id;
@@ -10776,7 +10888,8 @@ function ActForm({actId, templateId, onBack, onSaved}) {
       }
       const r = await fetch(`/api/acts/acts/${aid}`,{method:'PUT',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({values:saveValues, status, raw_material:rawMaterial})});
+        body:JSON.stringify({values:saveValues, status, raw_material:rawMaterial,
+          product_name:productName, manufacturer, conclusion})});
       const d = await r.json();
       if(d.error) return alert('Ошибка: '+d.error);
       if(onSaved) onSaved(aid, status);
@@ -10892,18 +11005,31 @@ function ActForm({actId, templateId, onBack, onSaved}) {
       e('h2',{style:{margin:0,fontSize:20,fontWeight:700}},template.name),
     ),
 
-    // Название сырья и дата
-    e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:20,
-      background:'var(--surface)',borderRadius:12,border:'1.5px solid var(--border)',padding:16}},
-      e('div',null,
-        e('label',{style:{fontSize:13,fontWeight:600,display:'block',marginBottom:6}},'Наименование сырья'),
-        e('input',{value:values._raw_material||'',onChange:ev=>setValues(p=>({...p,_raw_material:ev.target.value})),
-          placeholder:template.name,style:inputStyle}),
+    // Шапка акта
+    e('div',{style:{background:'var(--surface)',borderRadius:12,border:'1.5px solid var(--border)',padding:16,marginBottom:20}},
+      e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:12}},
+        e('div',null,
+          e('label',{style:{fontSize:13,fontWeight:600,display:'block',marginBottom:6}},'Наименование сырья'),
+          e('input',{value:values._raw_material||'',onChange:ev=>setValues(p=>({...p,_raw_material:ev.target.value})),
+            placeholder:template.name,style:inputStyle}),
+        ),
+        e('div',null,
+          e('label',{style:{fontSize:13,fontWeight:600,display:'block',marginBottom:6}},'Дата проработки'),
+          e('input',{type:'date',value:values._date||'',onChange:ev=>setValues(p=>({...p,_date:ev.target.value})),
+            style:inputStyle}),
+        ),
       ),
-      e('div',null,
-        e('label',{style:{fontSize:13,fontWeight:600,display:'block',marginBottom:6}},'Дата проработки'),
-        e('input',{type:'date',value:values._date||'',onChange:ev=>setValues(p=>({...p,_date:ev.target.value})),
-          style:inputStyle}),
+      e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}},
+        e('div',null,
+          e('label',{style:{fontSize:13,fontWeight:600,display:'block',marginBottom:6}},'Наименование (как на этикетке)'),
+          e('input',{value:values._product_name||'',onChange:ev=>setValues(p=>({...p,_product_name:ev.target.value})),
+            placeholder:'Как указано на этикетке',style:inputStyle}),
+        ),
+        e('div',null,
+          e('label',{style:{fontSize:13,fontWeight:600,display:'block',marginBottom:6}},'Производитель (как на этикетке)'),
+          e('input',{value:values._manufacturer||'',onChange:ev=>setValues(p=>({...p,_manufacturer:ev.target.value})),
+            placeholder:'Как указано на этикетке',style:inputStyle}),
+        ),
       ),
     ),
 
@@ -10919,6 +11045,21 @@ function ActForm({actId, templateId, onBack, onSaved}) {
       )
     ),
 
+    // Общий вывод — всегда в конце
+    e('div',{style:{background:'var(--surface)',borderRadius:12,border:'1.5px solid var(--border)',padding:16,marginBottom:20}},
+      e('div',{style:{fontSize:14,fontWeight:700,marginBottom:10}},'Общий вывод'),
+      e('div',{style:{display:'flex',gap:8}},
+        ['соответствует','не соответствует'].map(opt=>
+          e('button',{key:opt,onClick:()=>setValues(p=>({...p,_conclusion:values._conclusion===opt?null:opt})),
+            style:{flex:1,padding:'10px',borderRadius:8,fontWeight:600,fontSize:14,cursor:'pointer',
+              border:'1.5px solid '+(values._conclusion===opt?(opt==='соответствует'?'var(--ok)':'var(--danger)'):'var(--border)'),
+              background:values._conclusion===opt?(opt==='соответствует'?'var(--ok-bg)':'#FEF2F2'):'var(--surface)',
+              color:values._conclusion===opt?(opt==='соответствует'?'var(--ok)':'var(--danger)'):'var(--text)'}},
+            opt==='соответствует'?'✓ Соответствует':'✗ Не соответствует')
+        )
+      ),
+    ),
+
     e('div',{style:{display:'flex',gap:10,justifyContent:'flex-end'}},
       e('button',{onClick:()=>handleSave('draft'),disabled:saving,
         style:btnStyle(false)}, saving?'…':'Сохранить черновик'),
@@ -10929,7 +11070,7 @@ function ActForm({actId, templateId, onBack, onSaved}) {
 }
 
 // ── Главная страница Актов ────────────────────────────────────────────────────
-function ActsPage() {
+function ActsPage({isManager=false}) {
   const [view, setView] = useState('list'); // 'list'|'templates'|'new-template'|'edit-template'|'new-act'|'fill-act'
   const [templates, setTemplates] = useState([]);
   const [acts, setActs] = useState([]);
@@ -10940,12 +11081,24 @@ function ActsPage() {
   const [listFilterRaw, setListFilterRaw] = useState('');
   const [listFilterTemplate, setListFilterTemplate] = useState('');
   const [listFilterStatus, setListFilterStatus] = useState('');
+  const [listFilterManufacturer, setListFilterManufacturer] = useState('');
+  const [listFilterConclusion, setListFilterConclusion] = useState('');
   const [filteredActs, setFilteredActs] = useState(null);
 
   const loadTemplates = () =>
     fetch('/api/acts/templates').then(r=>r.json()).then(d=>setTemplates(d.templates||[]));
+  const applyFilters = (list, raw, tmpl, status, mfr, conc) => {
+    const f = list.filter(a=>
+      (!raw||(a.raw_material||'').toLowerCase().includes(raw.toLowerCase()))&&
+      (!tmpl||a.template_id===Number(tmpl))&&
+      (!status||a.status===status)&&
+      (!mfr||(a.manufacturer||'').toLowerCase().includes(mfr.toLowerCase()))&&
+      (!conc||a.conclusion===conc)
+    );
+    setFilteredActs(f);
+  };
   const loadActs = () =>
-    fetch('/api/acts/acts').then(r=>r.json()).then(d=>{setActs(d.acts||[]);setFilteredActs(null);setListFilterRaw('');setListFilterTemplate('');setListFilterStatus('');});
+    fetch('/api/acts/acts').then(r=>r.json()).then(d=>{setActs(d.acts||[]);setFilteredActs(null);setListFilterRaw('');setListFilterTemplate('');setListFilterStatus('');setListFilterManufacturer('');setListFilterConclusion('');});
 
   useEffect(()=>{ loadTemplates(); loadActs(); },[]);
 
@@ -11063,45 +11216,31 @@ function ActsPage() {
           style:{...btnStyle(false),fontSize:12,padding:'6px 12px'}},t.name)),
       ),
       e('div',{style:{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}},
-        e('input',{className:'filter-input',value:listFilterRaw,placeholder:'Поиск по сырью…',style:{minWidth:160},
-          onChange:ev=>{
-            const v=ev.target.value; setListFilterRaw(v);
-            setFilteredActs(acts.filter(a=>
-              (!v||(a.raw_material||'').toLowerCase().includes(v.toLowerCase()))&&
-              (!listFilterTemplate||a.template_id===Number(listFilterTemplate))&&
-              (!listFilterStatus||a.status===listFilterStatus)
-            ));
-          }}),
         e('select',{className:'filter-input',value:listFilterTemplate,
-          onChange:ev=>{
-            const v=ev.target.value; setListFilterTemplate(v);
-            setFilteredActs(acts.filter(a=>
-              (!listFilterRaw||(a.raw_material||'').toLowerCase().includes(listFilterRaw.toLowerCase()))&&
-              (!v||a.template_id===Number(v))&&
-              (!listFilterStatus||a.status===listFilterStatus)
-            ));
-          }},
+          onChange:ev=>{const v=ev.target.value;setListFilterTemplate(v);applyFilters(acts,listFilterRaw,v,listFilterStatus,listFilterManufacturer,listFilterConclusion);}},
           e('option',{value:''},'Все шаблоны'),
           templates.map(t=>e('option',{key:t.id,value:t.id},t.name))),
         e('select',{className:'filter-input',value:listFilterStatus,
-          onChange:ev=>{
-            const v=ev.target.value; setListFilterStatus(v);
-            setFilteredActs(acts.filter(a=>
-              (!listFilterRaw||(a.raw_material||'').toLowerCase().includes(listFilterRaw.toLowerCase()))&&
-              (!listFilterTemplate||a.template_id===Number(listFilterTemplate))&&
-              (!v||a.status===v)
-            ));
-          }},
-          e('option',{value:''},'Все'),
+          onChange:ev=>{const v=ev.target.value;setListFilterStatus(v);applyFilters(acts,listFilterRaw,listFilterTemplate,v,listFilterManufacturer,listFilterConclusion);}},
+          e('option',{value:''},'Все статусы'),
           e('option',{value:'done'},'Завершённые'),
           e('option',{value:'draft'},'Черновики')),
+        e('select',{className:'filter-input',value:listFilterConclusion,
+          onChange:ev=>{const v=ev.target.value;setListFilterConclusion(v);applyFilters(acts,listFilterRaw,listFilterTemplate,listFilterStatus,listFilterManufacturer,v);}},
+          e('option',{value:''},'Все выводы'),
+          e('option',{value:'соответствует'},'✓ Соответствует'),
+          e('option',{value:'не соответствует'},'✗ Не соответствует')),
+        e('input',{className:'filter-input',value:listFilterRaw,placeholder:'Поиск по сырью…',style:{minWidth:140},
+          onChange:ev=>{const v=ev.target.value;setListFilterRaw(v);applyFilters(acts,v,listFilterTemplate,listFilterStatus,listFilterManufacturer,listFilterConclusion);}}),
+        e('input',{className:'filter-input',value:listFilterManufacturer,placeholder:'Производитель…',style:{minWidth:140},
+          onChange:ev=>{const v=ev.target.value;setListFilterManufacturer(v);applyFilters(acts,listFilterRaw,listFilterTemplate,listFilterStatus,v,listFilterConclusion);}}),
       ),
       (filteredActs||acts).length===0
         ? e('div',{style:{textAlign:'center',color:'var(--muted)',padding:32}},'Нет актов.')
         : e('div',{style:{overflowX:'auto'}},
           e('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:14}},
             e('thead',null,e('tr',null,
-              ['Дата','Сырьё','Шаблон','Статус',''].map(h=>
+              ['Дата','Сырьё','Наименование (этикетка)','Производитель','Шаблон','Вывод','Статус',''].map(h=>
                 e('th',{key:h,style:{padding:'8px 12px',textAlign:'left',
                   borderBottom:'2px solid var(--border)',fontSize:13,color:'var(--muted)',fontWeight:600}},h))
             )),
@@ -11109,18 +11248,26 @@ function ActsPage() {
               e('tr',{key:a.id,style:{borderBottom:'1px solid var(--border)'}},
                 e('td',{style:{padding:'10px 12px'}},new Date(a.date).toLocaleDateString('ru-RU')),
                 e('td',{style:{padding:'10px 12px',fontWeight:600}},a.raw_material||'—'),
+                e('td',{style:{padding:'10px 12px'}},a.product_name||'—'),
+                e('td',{style:{padding:'10px 12px'}},a.manufacturer||'—'),
                 e('td',{style:{padding:'10px 12px',color:'var(--muted)',fontSize:13}},a.template_name),
                 e('td',{style:{padding:'10px 12px'}},
-                  e('span',{style:{fontSize:12,fontWeight:600,color:statusColor(a.status)}},statusLabel(a.status))),
+                  a.conclusion
+                    ? e('span',{style:{fontWeight:600,fontSize:12,
+                        color:a.conclusion==='соответствует'?'var(--ok)':'var(--danger)'}},
+                        a.conclusion==='соответствует'?'✓ Соотв.':'✗ Не соотв.')
+                    : e('span',{style:{color:'var(--muted)'}},'—')),
                 e('td',{style:{padding:'10px 12px'}},
-                  e('div',{style:{display:'flex',gap:6}},
+                  e('span',{style:{fontSize:12,fontWeight:600,color:statusColor(a.status)}},statusLabel(a.status))),
+                e('td',{style:{padding:'10px 12px',textAlign:'right'}},
+                  e('div',{style:{display:'flex',gap:6,justifyContent:'flex-end'}},
                     e('button',{onClick:()=>{setSelectedActId(a.id);setView('fill-act');},
                       style:{...btnStyle(false),padding:'5px 10px',fontSize:12}},
                       a.status==='done'?'Просмотр':'Продолжить'),
                     e('a',{href:`/api/acts/acts/${a.id}/docx`,download:true,
                       style:{...btnStyle(false),padding:'5px 8px',fontSize:12,textDecoration:'none',display:'inline-flex',alignItems:'center'}},
                       '⬇'),
-                    e('button',{onClick:()=>deleteAct(a.id),
+                    (isManager||a.status!=='done')&&e('button',{onClick:()=>deleteAct(a.id),
                       style:{...btnStyle(false),padding:'5px 8px',fontSize:12,
                         borderColor:'var(--danger)',color:'var(--danger)'}},'✕'),
                   )

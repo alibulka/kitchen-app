@@ -1,8 +1,11 @@
 const {
   Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
   HeadingLevel, AlignmentType, WidthType, BorderStyle, ShadingType,
-  VerticalAlign, PageOrientation,
+  VerticalAlign, PageOrientation, ImageRun,
 } = require('docx');
+const fs = require('fs');
+const path = require('path');
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
 
 const FIELD_TYPE_LABELS = {
   text: 'Текстовое поле',
@@ -238,7 +241,19 @@ async function generateActDOCX(act, template) {
       }
 
       if (fieldPhotos.length > 0) {
-        children.push(para(`[ ${fieldPhotos.length} фото ]`, { color: '888888', size: 18, spaceAfter: 40 }));
+        for (const p of fieldPhotos) {
+          const fp = path.join(UPLOADS_DIR, p.filename);
+          if (!fs.existsSync(fp)) continue;
+          const data = fs.readFileSync(fp);
+          const ext = path.extname(p.filename).toLowerCase().replace('.', '');
+          const type = ext === 'jpg' ? 'jpeg' : (ext === 'png' ? 'png' : ext === 'gif' ? 'gif' : 'jpeg');
+          try {
+            children.push(new Paragraph({
+              spacing: { before: 60, after: 60 },
+              children: [new ImageRun({ data, transformation: { width: 300, height: 200 }, type })],
+            }));
+          } catch {}
+        }
       }
 
       children.push(para('', { spaceAfter: 40 }));
