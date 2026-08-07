@@ -267,6 +267,7 @@ async function initDb(pool) {
       updated_at TEXT NOT NULL DEFAULT (NOW()::text)
     )
   `);
+  await q(`ALTER TABLE act_templates ADD COLUMN IF NOT EXISTS archived INTEGER NOT NULL DEFAULT 0`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS act_sections (
       id          SERIAL PRIMARY KEY,
