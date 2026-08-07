@@ -7607,8 +7607,139 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, prevLi
 // ============================================================
 const SINK_DELAY = 900; // ms before item moves to bottom
 
-function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
+// ── Precut: Ручная нарезка ↔ Робокоп ────────────────────────────────────────
+const RUCHNAYA_KEY = 'ovoshchnoj_tseh_ruchnaja_narezka';
+const ROBOKOP_KEY  = 'ovoshchnoj_tseh_robokop';
+
+function PrecutItemCard({item, shift, onShiftChange, shopEmployees}) {
+  const pk = `precut-${item.id}`;
+  const isDone = !!shift.doneFlags[pk];
+  const selEmps = shift.doneBy[pk] || [];
+
+  const toggleEmp = (empId) => onShiftChange(prev => {
+    const cur = prev.doneBy[pk] || [];
+    const isSel = cur.includes(empId);
+    const nextEmps = isSel ? cur.filter(e=>e!==empId) : [...cur, empId];
+    const nextFacts = isSel
+      ? Object.fromEntries(Object.entries(prev.facts).filter(([k])=>k!==`${pk}-${empId}`))
+      : prev.facts;
+    return {...prev, doneBy:{...prev.doneBy,[pk]:nextEmps}, facts:nextFacts};
+  });
+
+  const setWeight = (empId, val) => onShiftChange(prev => ({
+    ...prev, facts:{...prev.facts, [`${pk}-${empId}`]: val}
+  }));
+
+  const toggleDone = () => onShiftChange(prev => ({
+    ...prev, doneFlags:{...prev.doneFlags, [pk]: !prev.doneFlags[pk]}
+  }));
+
+  // дедупликация ингредиентов по названию
+  const ingMap = {};
+  for (const ing of item.ingredients||[]) {
+    if (!ingMap[ing.name]) ingMap[ing.name] = {...ing};
+    else ingMap[ing.name].planAmount += ing.planAmount;
+  }
+  const ings = Object.values(ingMap);
+
+  return e('div',{style:{
+    background: isDone?'#F0FDF4':'var(--surface)',
+    border:`1.5px solid ${isDone?'var(--ok)':'var(--border)'}`,
+    borderRadius:14, marginBottom:10, overflow:'hidden', transition:'border-color 0.2s'
+  }},
+    e('div',{style:{display:'flex',alignItems:'center',padding:'10px 14px',gap:10}},
+      e('div',{style:{flex:1}},
+        e('div',{style:{fontWeight:700,fontSize:15}}, item.name),
+        item.totalYield && e('div',{style:{fontSize:12,color:'var(--muted)',marginTop:2}},
+          `Итого выход: ${item.totalYield} ${item.yieldUnit||'г'}`)
+      ),
+      e('button',{
+        onClick:toggleDone,
+        title: isDone?'Снять отметку':'Отметить готовым к Робокопу',
+        style:{
+          width:38,height:38,borderRadius:10,border:'none',cursor:'pointer',
+          background:isDone?'var(--ok)':'var(--border)',
+          color:'white',fontSize:18,fontWeight:700,
+          display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0
+        }
+      }, isDone?'✓':'○')
+    ),
+    ings.length>0 && e('div',{style:{padding:'0 14px 10px'}},
+      e('div',{style:{fontSize:11,color:'var(--muted)',fontWeight:700,letterSpacing:'0.5px',marginBottom:4}},
+        'ИНГРЕДИЕНТЫ'),
+      ings.map(ing=>e('div',{key:ing.id,style:{
+        fontSize:13,display:'flex',justifyContent:'space-between',padding:'2px 0',
+        borderBottom:'1px solid var(--border)'
+      }},
+        e('span',null,ing.name),
+        e('span',{style:{color:'var(--muted)',flexShrink:0,marginLeft:8}},
+          `${ing.planAmount} ${ing.unit||'г'}`)
+      ))
+    ),
+    e('div',{style:{padding:'8px 14px 12px',borderTop:'1px solid var(--border)'}},
+      e('div',{style:{fontSize:11,color:'var(--muted)',fontWeight:700,letterSpacing:'0.5px',marginBottom:6}},
+        'ИСПОЛНИТЕЛИ'),
+      e('div',{style:{display:'flex',flexWrap:'wrap',gap:6}},
+        shopEmployees.map(emp=>{
+          const sel=selEmps.includes(emp.id);
+          return e('button',{key:emp.id,onClick:()=>toggleEmp(emp.id),
+            style:{
+              padding:'5px 10px',borderRadius:20,fontSize:12,cursor:'pointer',
+              border:`1.5px solid ${sel?'var(--accent)':'var(--border)'}`,
+              background:sel?'var(--accent-light,#FEF2F0)':'var(--surface)',
+              color:sel?'var(--accent)':'var(--text)',fontWeight:sel?600:400
+            }}, emp.name);
+        })
+      ),
+      selEmps.length>0 && e('div',{style:{marginTop:8,display:'flex',flexDirection:'column',gap:6}},
+        selEmps.map(empId=>{
+          const emp=shopEmployees.find(e=>e.id===empId);
+          if(!emp) return null;
+          return e('div',{key:empId,style:{display:'flex',alignItems:'center',gap:8}},
+            e('span',{style:{fontSize:13,color:'var(--muted)',flexShrink:0,minWidth:90}},emp.name+':'),
+            e('input',{
+              type:'number',
+              value:shift.facts[`${pk}-${empId}`]||'',
+              onChange:ev=>setWeight(empId,ev.target.value),
+              placeholder:'Вес, г',
+              style:{
+                width:90,padding:'5px 8px',borderRadius:8,
+                border:'1.5px solid var(--border)',background:'var(--surface)',
+                color:'var(--text)',fontSize:13
+              }
+            }),
+            e('span',{style:{fontSize:13,color:'var(--muted)'}},'г')
+          );
+        })
+      )
+    )
+  );
+}
+
+function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robokopItems=[]}) {
+  const isRuchnaya = station.key === RUCHNAYA_KEY;
+  const isRobokop  = station.key === ROBOKOP_KEY;
+
   const items=station.items||[];
+
+  // Уникальные заготовки Робокопа для вкладки Ручной нарезки (дедуп по id, сумма yieldAmount)
+  const precutItems = useMemo(()=>{
+    if(!isRuchnaya) return [];
+    const seen={};
+    for(const it of robokopItems){
+      if(!seen[it.id]) seen[it.id]={...it,totalYield:it.yieldAmount};
+      else seen[it.id].totalYield=(seen[it.id].totalYield||0)+it.yieldAmount;
+    }
+    return Object.values(seen);
+  },[isRuchnaya,robokopItems]);
+
+  const precutDoneCount = precutItems.filter(it=>!!shift.doneFlags[`precut-${it.id}`]).length;
+
+  // Для Робокопа: id заготовок, уже обработанных в Ручной нарезке
+  const precutReadyIds = useMemo(()=>{
+    if(!isRobokop) return new Set();
+    return new Set(items.filter(it=>shift.doneFlags[`precut-${it.id}`]).map(it=>it.id));
+  },[isRobokop,items,shift.doneFlags]);
   const doneCount=items.filter(it=>shift.doneFlags[`${station.key}-${it.id}`]).length;
   const pct=items.length>0?Math.round(doneCount/items.length*100):0;
   const pillColor=doneCount===items.length?'var(--ok)':'var(--warn)';
@@ -7854,6 +7985,11 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
     ),
     // Status tabs
     e('div',{className:'station-tabs',style:{marginBottom:4}},
+      isRuchnaya && precutItems.length>0 && e('button',{
+        className:'station-tab'+(statusTab==='precut'?' active':''),
+        onClick:()=>setStatusTab('precut'),
+        style:{color:statusTab==='precut'?'var(--ok)':'',background:statusTab==='precut'?'var(--ok-bg)':''}
+      },`✂ Для Робокопа (${precutDoneCount}/${precutItems.length})`),
       totalCarried+carriedDoneItems.length>0 && e('button',{
         className:'station-tab'+(statusTab==='prev'?' active':''),
         onClick:()=>setStatusTab('prev'),
@@ -7870,14 +8006,35 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
         style:{color:statusTab==='done'?'var(--ok)':''}
       },`Выполнено (${doneItems.length+carriedDoneItems.length})`)
     ),
-    items.length===0&&totalCarried===0
+    items.length===0&&totalCarried===0&&!isRuchnaya
       ? e('div',{className:'empty-state'},'Нет заданий для этой станции')
       : e(React.Fragment,null,
+          // Вкладка Для Робокопа (только в Ручной нарезке)
+          statusTab==='precut' && e('div',null,
+            precutItems.length===0
+              ? e('div',{className:'empty-state',style:{marginTop:40}},'Нет заготовок для Робокопа')
+              : precutItems.map(it=>e(PrecutItemCard,{key:it.id,item:it,shift,onShiftChange,shopEmployees}))
+          ),
           // Надо выполнить — только сегодняшние позиции
           statusTab==='todo' && e('div',null,
-            filterItems(todoRegular).length===0
-              ? e('div',{className:'empty-state',style:{marginTop:40}},'Все заготовки выполнены ✓')
-              : e('div',null,...filterItems(todoRegular).map(renderRegular))
+            // Для Робокопа: готовые к обработке (precut done) — сверху, с зелёной подсветкой
+            isRobokop && precutReadyIds.size>0 && e('div',{style:{marginBottom:8}},
+              e('div',{style:{fontSize:12,fontWeight:700,color:'var(--ok)',padding:'4px 2px 6px',
+                letterSpacing:'0.5px'}},'✓ ГОТОВО К ОБРАБОТКЕ'),
+              filterItems(todoRegular.filter(it=>precutReadyIds.has(it.id))).map(it=>
+                e('div',{key:it.id,style:{
+                  borderRadius:14,overflow:'hidden',
+                  outline:'2px solid var(--ok)',marginBottom:8,background:'#F0FDF4'
+                }}, renderItem(it))
+              )
+            ),
+            // Остальные заготовки
+            (()=>{
+              const rest = isRobokop ? todoRegular.filter(it=>!precutReadyIds.has(it.id)) : todoRegular;
+              return filterItems(rest).length===0 && (!isRobokop||precutReadyIds.size===0)
+                ? e('div',{className:'empty-state',style:{marginTop:40}},'Все заготовки выполнены ✓')
+                : e('div',null,...filterItems(rest).map(renderRegular));
+            })()
           ),
           // Прошлая смена — карryover-позиции (невыполненные)
           statusTab==='prev' && e('div',null,
@@ -7909,6 +8066,11 @@ function KitchenShopPage({shopGroup, shift, onShiftChange, allEmployees, onBack,
   const [stationIdx,setStationIdx]=useState(0);
   const station=stations[stationIdx]||stations[0];
   const shopEmployees=useMemo(()=>getShopEmployees(shopGroup.shop,allEmployees),[shopGroup.shop,allEmployees]);
+  // Заготовки Робокопа передаём в Ручную нарезку
+  const robokopItems=useMemo(()=>{
+    const st=stations.find(s=>s.key===ROBOKOP_KEY);
+    return st?st.items||[]:[];
+  },[stations]);
 
   // Reset station index when switching shops
   useEffect(()=>{setStationIdx(0);},[shopGroup.shop]);
@@ -7950,7 +8112,8 @@ function KitchenShopPage({shopGroup, shift, onShiftChange, allEmployees, onBack,
       })
     ),
     station && e(KitchenStationPage,{
-      key:station.key, station, shift, onShiftChange, shopEmployees
+      key:station.key, station, shift, onShiftChange, shopEmployees,
+      robokopItems: station.key===RUCHNAYA_KEY ? robokopItems : []
     })
   );
 }
