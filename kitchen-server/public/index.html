@@ -11111,13 +11111,21 @@ function ActsPage({isManager=false}) {
 
   const deleteTemplate = async(id) => {
     if(!confirm('Удалить шаблон? Все акты по этому шаблону останутся.')) return;
-    await fetch(`/api/acts/templates/${id}`,{method:'DELETE'});
+    try{
+      const r = await fetch(`/api/acts/templates/${id}`,{method:'DELETE'});
+      const d = await r.json().catch(()=>({}));
+      if(!r.ok || d.error) alert('Не удалось удалить шаблон: '+(d.error||r.status));
+    }catch(err){ alert('Не удалось удалить шаблон: '+err.message); }
     loadTemplates();
   };
 
   const deleteAct = async(id) => {
     if(!confirm('Удалить акт?')) return;
-    await fetch(`/api/acts/acts/${id}`,{method:'DELETE'});
+    try{
+      const r = await fetch(`/api/acts/acts/${id}`,{method:'DELETE'});
+      const d = await r.json().catch(()=>({}));
+      if(!r.ok || d.error) alert('Не удалось удалить акт: '+(d.error||r.status));
+    }catch(err){ alert('Не удалось удалить акт: '+err.message); }
     loadActs();
   };
 
