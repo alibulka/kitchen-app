@@ -7634,9 +7634,18 @@ function PrecutItemCard({item, shift, onShiftChange, shopEmployees}) {
     ...prev, doneFlags:{...prev.doneFlags, [pk]: !prev.doneFlags[pk]}
   }));
 
-  // дедупликация ингредиентов по названию
+  // Ингредиенты: прямые; если пусто — берём сырьё из subPreps (дедуп по названию)
   const ingMap = {};
-  for (const ing of item.ingredients||[]) {
+  const directIngs = item.ingredients||[];
+  const sourceIngs = directIngs.length > 0
+    ? directIngs
+    : (item.subPreps||[]).map(sp => ({
+        id: sp.id,
+        name: sp.name,
+        planAmount: sp.usageAmount || 0,
+        unit: 'г',
+      }));
+  for (const ing of sourceIngs) {
     if (!ingMap[ing.name]) ingMap[ing.name] = {...ing};
     else ingMap[ing.name].planAmount += ing.planAmount;
   }
