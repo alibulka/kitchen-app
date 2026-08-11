@@ -1,8 +1,9 @@
-const { Storage } = require('@google-cloud/storage');
+let Storage;
+try { Storage = require('@google-cloud/storage').Storage; } catch { Storage = null; }
 
 const REPLIT_SIDECAR_ENDPOINT = 'http://127.0.0.1:1106';
 
-const storageClient = new Storage({
+const storageClient = Storage ? new Storage({
   credentials: {
     audience: 'replit',
     subject_token_type: 'access_token',
@@ -15,11 +16,11 @@ const storageClient = new Storage({
     universe_domain: 'googleapis.com',
   },
   projectId: '',
-});
+}) : null;
 
 function getBase() {
   const dir = process.env.PRIVATE_OBJECT_DIR || '';
-  if (!dir) throw new Error('PRIVATE_OBJECT_DIR not set — object storage is not configured');
+  if (!dir || !storageClient) throw new Error('Object storage not available (no @google-cloud/storage or PRIVATE_OBJECT_DIR)');
   const clean = dir.startsWith('/') ? dir.slice(1) : dir;
   const [bucketName, ...rest] = clean.split('/');
   return { bucketName, prefix: rest.join('/') };

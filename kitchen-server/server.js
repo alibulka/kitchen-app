@@ -24,6 +24,7 @@ app.use('/api/shifts',    require('./routes/shifts'));
 app.use('/api/employees', require('./routes/employees'));
 app.use('/api/techcards', require('./routes/techcards'));
 app.use('/api/config',    require('./routes/config'));
+app.use('/api/precut',    require('./routes/precut'));
 app.use('/api/quality',  require('./routes/quality'));
 app.use('/api/acts',     require('./routes/acts'));
 const objectStorage = require('./lib/objectStorage');
