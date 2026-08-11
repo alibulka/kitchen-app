@@ -10533,31 +10533,41 @@ function ActsViewer({readOnly}) {
     filtered.length===0
       ? e('div',{className:'empty-state'},'Нет актов за выбранный период')
       : e('div',{style:{background:'var(--surface)',borderRadius:14,border:'1.5px solid var(--border)',overflow:'hidden'}},
-          e('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:14}},
+          e('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:14,tableLayout:'fixed'}},
+            e('colgroup',null,
+              e('col',{style:{width:'9%'}}),   // Дата
+              e('col',{style:{width:'18%'}}),  // Сырьё
+              e('col',{style:{width:'20%'}}),  // Наименование
+              e('col',{style:{width:'17%'}}),  // Производитель
+              e('col',{style:{width:'15%'}}),  // Шаблон
+              e('col',{style:{width:'9%'}}),   // Вывод
+              e('col',{style:{width:'9%'}}),   // Статус
+              e('col',{style:{width:'3%'}}),   // ›
+            ),
             e('thead',null,e('tr',null,
               ['Дата','Сырьё','Наименование (этикетка)','Производитель','Шаблон','Вывод','Статус',''].map(h=>
-                e('th',{key:h,style:{padding:'10px 14px',textAlign:'left',
+                e('th',{key:h,style:{padding:'10px 10px',textAlign:'left',
                   borderBottom:'2px solid var(--border)',fontSize:12,color:'var(--muted)',
-                  fontWeight:700,textTransform:'uppercase',letterSpacing:'0.04em'}},h))
+                  fontWeight:700,textTransform:'uppercase',letterSpacing:'0.04em',overflowWrap:'break-word'}},h))
             )),
             e('tbody',null,filtered.map(a=>
               e('tr',{key:a.id,style:{borderBottom:'1px solid var(--border)',cursor:'pointer'},
                 onClick:()=>openActDetail(a)},
-                e('td',{style:{padding:'11px 14px'}},new Date(a.date).toLocaleDateString('ru-RU')),
-                e('td',{style:{padding:'11px 14px',fontWeight:600}},a.raw_material||'—'),
-                e('td',{style:{padding:'11px 14px'}},a.product_name||'—'),
-                e('td',{style:{padding:'11px 14px'}},a.manufacturer||'—'),
-                e('td',{style:{padding:'11px 14px',color:'var(--muted)',fontSize:13}},a.template_name),
-                e('td',{style:{padding:'11px 14px'}},
+                e('td',{style:{padding:'11px 10px',overflowWrap:'break-word'}},new Date(a.date).toLocaleDateString('ru-RU')),
+                e('td',{style:{padding:'11px 10px',fontWeight:600,overflowWrap:'break-word'}},a.raw_material||'—'),
+                e('td',{style:{padding:'11px 10px',overflowWrap:'break-word'}},a.product_name||'—'),
+                e('td',{style:{padding:'11px 10px',overflowWrap:'break-word'}},a.manufacturer||'—'),
+                e('td',{style:{padding:'11px 10px',color:'var(--muted)',fontSize:13,overflowWrap:'break-word'}},a.template_name),
+                e('td',{style:{padding:'11px 10px'}},
                   a.conclusion
                     ? e('span',{style:{fontWeight:600,fontSize:12,
                         color:a.conclusion==='соответствует'?'var(--ok)':'var(--danger)'}},
                         a.conclusion==='соответствует'?'✓ Соотв.':'✗ Не соотв.')
                     : e('span',{style:{color:'var(--muted)'}}, '—')),
-                e('td',{style:{padding:'11px 14px'}},
+                e('td',{style:{padding:'11px 10px'}},
                   e('span',{style:{fontWeight:600,fontSize:13,color:statusColor(a.status)}},
                     statusLabel(a.status))),
-                e('td',{style:{padding:'11px 14px'}},
+                e('td',{style:{padding:'11px 6px'}},
                   e('span',{style:{color:'var(--muted)',fontSize:18}},'›')),
               )
             )),
@@ -11283,13 +11293,21 @@ function ActsPage({isManager=false}) {
 
   const deleteTemplate = async(id) => {
     if(!confirm('Удалить шаблон? Все акты по этому шаблону останутся.')) return;
-    await fetch(`/api/acts/templates/${id}`,{method:'DELETE'});
+    try{
+      const r = await fetch(`/api/acts/templates/${id}`,{method:'DELETE'});
+      const d = await r.json().catch(()=>({}));
+      if(!r.ok || d.error) alert('Не удалось удалить шаблон: '+(d.error||r.status));
+    }catch(err){ alert('Не удалось удалить шаблон: '+err.message); }
     loadTemplates();
   };
 
   const deleteAct = async(id) => {
     if(!confirm('Удалить акт?')) return;
-    await fetch(`/api/acts/acts/${id}`,{method:'DELETE'});
+    try{
+      const r = await fetch(`/api/acts/acts/${id}`,{method:'DELETE'});
+      const d = await r.json().catch(()=>({}));
+      if(!r.ok || d.error) alert('Не удалось удалить акт: '+(d.error||r.status));
+    }catch(err){ alert('Не удалось удалить акт: '+err.message); }
     loadActs();
   };
 
@@ -11417,29 +11435,39 @@ function ActsPage({isManager=false}) {
       (filteredActs||acts).length===0
         ? e('div',{style:{textAlign:'center',color:'var(--muted)',padding:32}},'Нет актов.')
         : e('div',{style:{overflowX:'auto'}},
-          e('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:14}},
+          e('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:14,tableLayout:'fixed'}},
+            e('colgroup',null,
+              e('col',{style:{width:'8%'}}),   // Дата
+              e('col',{style:{width:'16%'}}),  // Сырьё
+              e('col',{style:{width:'18%'}}),  // Наименование
+              e('col',{style:{width:'14%'}}),  // Производитель
+              e('col',{style:{width:'13%'}}),  // Шаблон
+              e('col',{style:{width:'8%'}}),   // Вывод
+              e('col',{style:{width:'9%'}}),   // Статус
+              e('col',{style:{width:'14%'}}),  // Кнопки
+            ),
             e('thead',null,e('tr',null,
               ['Дата','Сырьё','Наименование (этикетка)','Производитель','Шаблон','Вывод','Статус',''].map(h=>
-                e('th',{key:h,style:{padding:'8px 12px',textAlign:'left',
-                  borderBottom:'2px solid var(--border)',fontSize:13,color:'var(--muted)',fontWeight:600}},h))
+                e('th',{key:h,style:{padding:'8px 10px',textAlign:'left',
+                  borderBottom:'2px solid var(--border)',fontSize:13,color:'var(--muted)',fontWeight:600,overflowWrap:'break-word'}},h))
             )),
             e('tbody',null,(filteredActs||acts).map(a=>
               e('tr',{key:a.id,style:{borderBottom:'1px solid var(--border)'}},
-                e('td',{style:{padding:'10px 12px'}},new Date(a.date).toLocaleDateString('ru-RU')),
-                e('td',{style:{padding:'10px 12px',fontWeight:600}},a.raw_material||'—'),
-                e('td',{style:{padding:'10px 12px'}},a.product_name||'—'),
-                e('td',{style:{padding:'10px 12px'}},a.manufacturer||'—'),
-                e('td',{style:{padding:'10px 12px',color:'var(--muted)',fontSize:13}},a.template_name),
-                e('td',{style:{padding:'10px 12px'}},
+                e('td',{style:{padding:'10px 10px',overflowWrap:'break-word'}},new Date(a.date).toLocaleDateString('ru-RU')),
+                e('td',{style:{padding:'10px 10px',fontWeight:600,overflowWrap:'break-word'}},a.raw_material||'—'),
+                e('td',{style:{padding:'10px 10px',overflowWrap:'break-word'}},a.product_name||'—'),
+                e('td',{style:{padding:'10px 10px',overflowWrap:'break-word'}},a.manufacturer||'—'),
+                e('td',{style:{padding:'10px 10px',color:'var(--muted)',fontSize:13,overflowWrap:'break-word'}},a.template_name),
+                e('td',{style:{padding:'10px 10px'}},
                   a.conclusion
                     ? e('span',{style:{fontWeight:600,fontSize:12,
                         color:a.conclusion==='соответствует'?'var(--ok)':'var(--danger)'}},
                         a.conclusion==='соответствует'?'✓ Соотв.':'✗ Не соотв.')
                     : e('span',{style:{color:'var(--muted)'}},'—')),
-                e('td',{style:{padding:'10px 12px'}},
+                e('td',{style:{padding:'10px 10px'}},
                   e('span',{style:{fontSize:12,fontWeight:600,color:statusColor(a.status)}},statusLabel(a.status))),
-                e('td',{style:{padding:'10px 12px',textAlign:'right'}},
-                  e('div',{style:{display:'flex',gap:6,justifyContent:'flex-end'}},
+                e('td',{style:{padding:'10px 8px',textAlign:'right'}},
+                  e('div',{style:{display:'flex',gap:6,justifyContent:'flex-end',flexWrap:'wrap'}},
                     e('button',{onClick:()=>{setSelectedActId(a.id);setView('fill-act');},
                       style:{...btnStyle(false),padding:'5px 10px',fontSize:12}},
                       a.status==='done'?'Просмотр':'Продолжить'),

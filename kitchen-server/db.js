@@ -267,6 +267,7 @@ async function initDb(pool) {
       updated_at TEXT NOT NULL DEFAULT (NOW()::text)
     )
   `);
+  await q(`ALTER TABLE act_templates ADD COLUMN IF NOT EXISTS archived INTEGER NOT NULL DEFAULT 0`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS act_sections (
       id          SERIAL PRIMARY KEY,
@@ -414,7 +415,6 @@ if (process.env.DATABASE_URL) {
     connectionTimeoutMillis: 10000, // ждать новое соединение не дольше 10с
     idleTimeoutMillis: 30000,       // закрывать простаивающие соединения (у БД свой таймаут)
     keepAlive: true,                // TCP keep-alive, чтобы обрывы замечались быстрее
-    query_timeout: 20000,           // запрос не может висеть дольше 20с
     maxUses: 7500,
   });
 

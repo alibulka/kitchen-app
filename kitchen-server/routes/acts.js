@@ -24,7 +24,7 @@ function makeActFilename(originalname) {
 // Список шаблонов
 router.get('/templates', async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT id, name, created_at FROM act_templates ORDER BY id DESC');
+    const { rows } = await pool.query('SELECT id, name, created_at FROM act_templates WHERE archived=0 ORDER BY id DESC');
     res.json({ templates: rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -246,7 +246,16 @@ router.get('/templates/:id/docx', async (req, res) => {
 // Удалить шаблон
 router.delete('/templates/:id', async (req, res) => {
   try {
-    await pool.query('DELETE FROM act_templates WHERE id=$1', [req.params.id]);
+    // Если по шаблону есть акты — не удаляем физически (иначе акты сломаются),
+    // а прячем шаблон из списка (архив). Акты продолжают открываться и скачиваться.
+    const { rows: [{ count }] } = await pool.query(
+      'SELECT count(*)::int AS count FROM acts WHERE template_id=$1', [req.params.id]
+    );
+    if (count > 0) {
+      await pool.query('UPDATE act_templates SET archived=1 WHERE id=$1', [req.params.id]);
+    } else {
+      await pool.query('DELETE FROM act_templates WHERE id=$1', [req.params.id]);
+    }
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -393,6 +402,7 @@ router.delete('/acts/:id', async (req, res) => {
   try {
     const { rows: photos } = await pool.query('SELECT filename FROM act_photos WHERE act_id=$1', [req.params.id]);
     for (const p of photos) {
+      await objectStorage.deleteObject(p.filename).catch(() => {});
       const fp = path.join(UPLOADS_DIR, p.filename);
       if (fs.existsSync(fp)) fs.unlinkSync(fp);
     }
