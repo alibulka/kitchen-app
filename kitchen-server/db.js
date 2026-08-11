@@ -175,6 +175,11 @@ async function initDb(pool) {
     )
   `);
   await q(`ALTER TABLE techcard_pack_lines ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'EE'`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS precut_item_ids (
+      item_id INTEGER PRIMARY KEY
+    )
+  `);
 
   for (const sql of [
     'CREATE INDEX IF NOT EXISTS idx_shifts_date   ON shifts(date)',
@@ -399,6 +404,7 @@ async function initDb(pool) {
 
   // Добавляем "Главный технолог" в shops если нет
   await q("INSERT INTO shops(name,sort_order) VALUES('Главный технолог',98) ON CONFLICT(name) DO NOTHING");
+  await q("ALTER TABLE employees ADD COLUMN shops TEXT");
 
   console.log(`DB ready (${process.env.DATABASE_URL ? 'PostgreSQL' : 'SQLite'})`);
 }

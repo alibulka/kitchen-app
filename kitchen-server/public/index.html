@@ -6919,7 +6919,10 @@ const INITIAL_EMPLOYEES = [
 const SAUCE_MILK_SHOPS = ['Соусный цех', 'Молочный цех'];
 
 function getShopEmployees(shopName, allEmployees) {
-  return allEmployees.filter(e => e.shop === shopName);
+  return allEmployees.filter(e => {
+    const s = Array.isArray(e.shops) && e.shops.length > 0 ? e.shops : (e.shop ? [e.shop] : []);
+    return s.includes(shopName);
+  });
 }
 
 // ============================================================
@@ -6991,6 +6994,15 @@ async function addEmployeeToServer(emp) {
 async function removeEmployeeFromServer(id) {
   try {
     await fetch('/api/employees/'+id, { method: 'DELETE' });
+  } catch(e) {}
+}
+async function updateEmployeeOnServer(id, name, shops) {
+  try {
+    await fetch('/api/employees/'+id, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name, shops})
+    });
   } catch(e) {}
 }
 async function loadShopsFromServer() {
@@ -7347,10 +7359,11 @@ function EmployeeToggles({employees, selectedIds, onToggle, warn}) {
 // ============================================================
 const SKIP_LABELS={'no_material':'Нет сырья','no_time':'Не успели'};
 
-function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, prevLineData, overridePackLines, keyPrefix}) {
+function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, prevLineData, overridePackLines, keyPrefix, autoFillWeight, hideSkip}) {
   const itemKey=`${keyPrefix||''}${stationKey}-${item.id}`;
   const [noEmpWarn,setNoEmpWarn]=useState(false);
   const [showSkipPicker,setShowSkipPicker]=useState(false);
+  const [localWeights,setLocalWeights]=useState({});
   // Item-level skip (only for items without pack lines)
   const itemSkipReason=(shift.skipReasons||{})[itemKey];
   const itemSkipAt=(shift.skipTimes||{})[itemKey];
@@ -7435,10 +7448,29 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, prevLi
   // Old single-toggle (only for items without pack lines)
   const selectedEmpIds=shift.doneBy[itemKey]||[];
   const toggleEmp=(empId)=>{
-    const isRemoving=(shift.doneBy[itemKey]||[]).includes(empId);
-    const next=isRemoving?[]:[empId];
+    const cur=shift.doneBy[itemKey]||[];
+    const isRemoving=cur.includes(empId);
     const nowIso=new Date().toISOString();
     onShiftChange(prev=>{
+      const prevCur=prev.doneBy[itemKey]||[];
+      if(autoFillWeight){
+        // Мультивыбор без автопометки done; каждый сотрудник — свой вес
+        const nextEmps=isRemoving?prevCur.filter(e=>e!==empId):[...prevCur,empId];
+        const newFacts={...prev.facts};
+        const newDoneTimes={...(prev.doneTimes||{})};
+        if(!isRemoving){
+          if(item.yieldAmount&&!(prev.facts[`${itemKey}-emp-${empId}`]))
+            newFacts[`${itemKey}-emp-${empId}`]=String(item.yieldAmount);
+          if(!newDoneTimes[`${itemKey}-emp-${empId}`])
+            newDoneTimes[`${itemKey}-emp-${empId}`]=nowIso;
+        } else {
+          delete newFacts[`${itemKey}-emp-${empId}`];
+          delete newDoneTimes[`${itemKey}-emp-${empId}`];
+        }
+        return {...prev,doneBy:{...prev.doneBy,[itemKey]:nextEmps},facts:newFacts,doneTimes:newDoneTimes};
+      }
+      // Стандартный режим: один сотрудник, отметка = выполнено
+      const next=isRemoving?[]:[empId];
       const wasItemDone=!!prev.doneFlags[itemKey];
       const newDone=next.length===0&&wasItemDone
         ? {...prev.doneFlags,[itemKey]:false}
@@ -7505,14 +7537,14 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, prevLi
       ),
       isDone && e('div',{className:'done-badge'},'✓ Готово'),
       // Skip button only for items without pack lines
-      packLines.length===0 && !isDone && !skipReason && e('button',{
+      packLines.length===0 && !hideSkip && !isDone && !skipReason && e('button',{
         onClick:ev=>{ev.stopPropagation();setShowSkipPicker(v=>!v);},
         title:'Отметить причину невыполнения',
         style:{padding:'6px 10px',borderRadius:8,border:'1.5px solid var(--border)',
           background:'transparent',color:'var(--muted)',fontSize:13,fontWeight:700,
           cursor:'pointer',flexShrink:0,lineHeight:1}
       },'⚠'),
-      packLines.length===0 && skipReason && e('button',{
+      packLines.length===0 && !hideSkip && skipReason && e('button',{
         onClick:ev=>{ev.stopPropagation();clearSkip();},
         title:'Снять отметку',
         style:{padding:'6px 10px',borderRadius:8,border:'1.5px solid var(--border)',
@@ -7592,7 +7624,47 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, prevLi
         noEmpWarn && e('span',{style:{marginLeft:10,color:'var(--danger)',fontWeight:700,fontSize:14}},
           '← выберите сотрудника')),
       e(EmployeeToggles,{employees:shopEmployees,selectedIds:selectedEmpIds,onToggle:toggleEmp,warn:noEmpWarn}),
-      selectedEmpIds.length>0 && e('div',{
+      autoFillWeight && selectedEmpIds.length>0 && e('div',{style:{marginTop:10,display:'flex',flexDirection:'column',gap:8}},
+        selectedEmpIds.map(empId=>{
+          const emp=shopEmployees.find(x=>x.id===empId);
+          const factKey=`${itemKey}-emp-${empId}`;
+          const savedVal=shift.facts[factKey]||'';
+          const localVal=localWeights[empId]!==undefined?localWeights[empId]:savedVal;
+          const isDirty=localVal!==savedVal;
+          const saveWeight=()=>{
+            const nowIso=new Date().toISOString();
+            onShiftChange(prev=>({
+              ...prev,
+              facts:{...prev.facts,[factKey]:localVal},
+              doneTimes:{...(prev.doneTimes||{}),[factKey]:prev.doneTimes?.[factKey]||nowIso}
+            }));
+            setLocalWeights(prev=>({...prev,[empId]:undefined}));
+          };
+          return e('div',{key:empId,style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}},
+            e('span',{style:{fontSize:13,color:'var(--muted)',flexShrink:0,minWidth:80}},(emp?emp.name:empId)+':'),
+            e('input',{
+              type:'number',
+              value:localVal,
+              onChange:ev=>setLocalWeights(prev=>({...prev,[empId]:ev.target.value})),
+              onKeyDown:ev=>{if(ev.key==='Enter')saveWeight();},
+              style:{width:90,padding:'5px 8px',borderRadius:8,
+                border:'1.5px solid '+(isDirty?'var(--warn, #f59e0b)':'var(--border)'),
+                fontSize:14,fontWeight:700,color:'var(--text)',background:'var(--surface)'}
+            }),
+            e('span',{style:{fontSize:13,color:'var(--muted)'}},'г'),
+            e('button',{
+              onClick:saveWeight,
+              disabled:!isDirty,
+              style:{padding:'5px 12px',borderRadius:8,border:'none',cursor:isDirty?'pointer':'default',
+                fontSize:13,fontWeight:600,
+                background:isDirty?'var(--ok)':'var(--border)',
+                color:isDirty?'#fff':'var(--muted)',
+                transition:'background 0.15s,color 0.15s'}
+            }, savedVal&&!isDirty?'✓ Сохранено':'Сохранить')
+          );
+        })
+      ),
+      !autoFillWeight && selectedEmpIds.length>0 && e('div',{
         style:{marginTop:10,fontSize:15,color:'var(--ok)',fontWeight:700}
       },'Выполнил(а): '+selectedEmpIds.map(id=>{
         const emp=shopEmployees.find(x=>x.id===id);
@@ -7607,8 +7679,56 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, prevLi
 // ============================================================
 const SINK_DELAY = 900; // ms before item moves to bottom
 
-function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
+// ── Precut: Ручная нарезка ↔ Робокоп ────────────────────────────────────────
+const RUCHNAYA_KEY = 'ovoshchnoj_tseh_ruchnaja_narezka';
+const ROBOKOP_KEY  = 'ovoshchnoj_tseh_robokop';
+// ── Замесы: Ручная фасовка (сухой цех) ────────────────────────────────────
+const SUHOJ_FASOVKA_KEY = 'suhoj_tseh_ruchnaja_fasovka';
+const OVOSHCH_FASOVKA_KEY = 'ovoshchnoj_tseh_fasovka';
+
+
+function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robokopItems=[], precutConfig=new Set(), onPrecutConfigChange, shopParam}) {
+  const isRuchnaya = station.key === RUCHNAYA_KEY;
+  const isRobokop  = station.key === ROBOKOP_KEY;
+  const isZamesStation = station.key.startsWith('suhoj_tseh_') || station.key === OVOSHCH_FASOVKA_KEY;
+
   const items=station.items||[];
+
+  // Замесы: позиции с несколькими ингредиентами
+  const zamesItems = useMemo(()=>{
+    if(!isZamesStation) return [];
+    return items.filter(it=>(it.ingredients||[]).length>1);
+  },[isZamesStation,items]);
+
+  const zamesKey=(id)=>`zames-${station.key}-${id}`;
+  const zamesDoneCount = zamesItems.filter(it=>!!shift.doneFlags[zamesKey(it.id)]).length;
+
+  // Уникальные заготовки Робокопа для вкладки Ручной нарезки (только отмеченные в конфиге)
+  const precutItems = useMemo(()=>{
+    if(!isRuchnaya) return [];
+    const seen={};
+    for(const it of robokopItems){
+      if(!precutConfig.has(it.id)) continue;
+      if(!seen[it.id]) seen[it.id]={...it,totalYield:it.yieldAmount};
+      else seen[it.id].totalYield=(seen[it.id].totalYield||0)+it.yieldAmount;
+    }
+    return Object.values(seen);
+  },[isRuchnaya,robokopItems,precutConfig]);
+
+  const precutKey=(id)=>`precut-${ROBOKOP_KEY}-${id}`;
+  const precutDoneCount = precutItems.filter(it=>!!shift.doneFlags[precutKey(it.id)]).length;
+
+  // Для Робокопа: id заготовок, уже обработанных в Ручной нарезке
+  const precutReadyIds = useMemo(()=>{
+    if(!isRobokop) return new Set();
+    return new Set(items.filter(it=>shift.doneFlags[precutKey(it.id)]).map(it=>it.id));
+  },[isRobokop,items,shift.doneFlags]);
+
+  // Замесы готовые к фасовке (замес отмечен done, но сама позиция ещё не выполнена)
+  const zamesReadyIds = useMemo(()=>{
+    if(!isZamesStation) return new Set();
+    return new Set(zamesItems.filter(it=>shift.doneFlags[zamesKey(it.id)]&&!shift.doneFlags[`${station.key}-${it.id}`]).map(it=>it.id));
+  },[isZamesStation,zamesItems,shift.doneFlags,station.key]);
   const doneCount=items.filter(it=>shift.doneFlags[`${station.key}-${it.id}`]).length;
   const pct=items.length>0?Math.round(doneCount/items.length*100):0;
   const pillColor=doneCount===items.length?'var(--ok)':'var(--warn)';
@@ -7788,6 +7908,49 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
       className:'item-wrapper'+(sinking?' sinking':'')+(settled?' settled':'')
     }, e(ItemCard,{item,stationKey:station.key,shift,onShiftChange,shopEmployees,prevLineData}));
   };
+
+  const togglePrecut=(itemId)=>{
+    if(!onPrecutConfigChange) return;
+    const next=new Set(precutConfig);
+    if(next.has(itemId)) next.delete(itemId); else next.add(itemId);
+    onPrecutConfigChange(next);
+  };
+
+  // Рендер карточки Робокопа с кнопкой предобработки (только в обычном режиме)
+  const renderRobokopItem=(item,prevLineData=null,opts={})=>{
+    const sinking=sinkingIds.has(item.id);
+    const settled=settledIds.has(item.id);
+    const inPrecut=precutConfig.has(item.id);
+    const showToggle=isRobokop && !shopParam && onPrecutConfigChange;
+    const card=e(ItemCard,{item,stationKey:station.key,shift,onShiftChange,shopEmployees,prevLineData});
+    if(!showToggle) return e('div',{key:item.id,className:'item-wrapper'+(sinking?' sinking':'')+(settled?' settled':'')},card);
+    return e('div',{key:item.id,className:'item-wrapper'+(sinking?' sinking':'')+(settled?' settled':''),style:{position:'relative'}},
+      card,
+      e('div',{style:{position:'absolute',top:20,right:12,zIndex:10},
+        onMouseEnter:ev=>{const t=ev.currentTarget.querySelector('.precut-tip');if(t)t.style.display='block';},
+        onMouseLeave:ev=>{const t=ev.currentTarget.querySelector('.precut-tip');if(t)t.style.display='none';}},
+        e('button',{
+          onClick:ev=>{ev.stopPropagation();togglePrecut(item.id);},
+          style:{
+            width:32,height:32,borderRadius:8,border:'none',cursor:'pointer',
+            fontSize:17,lineHeight:'32px',textAlign:'center',padding:0,display:'block',
+            background:inPrecut?'var(--ok)':'rgba(0,0,0,0.18)',
+            color:'#fff',
+            boxShadow:'0 1px 4px rgba(0,0,0,0.25)',
+            transition:'background 0.15s',
+          }
+        }, '✂'),
+        e('div',{className:'precut-tip',style:{
+          display:'none',position:'absolute',right:0,top:36,
+          background:'rgba(30,30,30,0.92)',color:'#fff',
+          fontSize:12,fontWeight:500,whiteSpace:'nowrap',
+          padding:'5px 10px',borderRadius:7,
+          boxShadow:'0 2px 8px rgba(0,0,0,0.25)',
+          pointerEvents:'none',
+        }}, inPrecut?'Убрать из ручной нарезки':'В ручную нарезку')
+      )
+    );
+  };
   // Синтетические строки фасовки из вчерашних данных.
   // ВАЖНО: индекс в массиве должен совпадать с исходным lineIdx (ключи prev-...-pl-<idx>),
   // поэтому пропуски индексов заполняем пустыми строками, а не уплотняем массив.
@@ -7854,6 +8017,16 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
     ),
     // Status tabs
     e('div',{className:'station-tabs',style:{marginBottom:4}},
+      isRuchnaya && precutItems.length>0 && e('button',{
+        className:'station-tab'+(statusTab==='precut'?' active':''),
+        onClick:()=>setStatusTab('precut'),
+        style:{color:statusTab==='precut'?'var(--ok)':'',background:statusTab==='precut'?'var(--ok-bg)':''}
+      },`✂ Для Робокопа (${precutDoneCount}/${precutItems.length})`),
+      isZamesStation && zamesItems.length>0 && e('button',{
+        className:'station-tab'+(statusTab==='zames'?' active':''),
+        onClick:()=>setStatusTab('zames'),
+        style:{color:statusTab==='zames'?'var(--ok)':'',background:statusTab==='zames'?'var(--ok-bg)':''}
+      },`🥣 Замесы (${zamesDoneCount}/${zamesItems.length})`),
       totalCarried+carriedDoneItems.length>0 && e('button',{
         className:'station-tab'+(statusTab==='prev'?' active':''),
         onClick:()=>setStatusTab('prev'),
@@ -7870,14 +8043,59 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
         style:{color:statusTab==='done'?'var(--ok)':''}
       },`Выполнено (${doneItems.length+carriedDoneItems.length})`)
     ),
-    items.length===0&&totalCarried===0
+    items.length===0&&totalCarried===0&&!isRuchnaya&&!isZamesStation
       ? e('div',{className:'empty-state'},'Нет заданий для этой станции')
       : e(React.Fragment,null,
+          // Вкладка Для Робокопа (только в Ручной нарезке)
+          statusTab==='precut' && e('div',null,
+            precutItems.length===0
+              ? e('div',{className:'empty-state',style:{marginTop:40}},'Нет заготовок для Робокопа')
+              : precutItems.map(it=>e(ItemCard,{key:it.id,item:it,stationKey:ROBOKOP_KEY,
+                  shift,onShiftChange,shopEmployees,
+                  overridePackLines:[],keyPrefix:'precut-',autoFillWeight:true,hideSkip:true}))
+          ),
+          // Вкладка Замесы (только в Ручной фасовке сухого цеха)
+          statusTab==='zames' && e('div',null,
+            zamesItems.length===0
+              ? e('div',{className:'empty-state',style:{marginTop:40}},'Нет замесов')
+              : zamesItems.map(it=>e(ItemCard,{key:it.id,item:it,stationKey:station.key,
+                  shift,onShiftChange,shopEmployees,
+                  overridePackLines:[],keyPrefix:'zames-',hideSkip:true}))
+          ),
           // Надо выполнить — только сегодняшние позиции
           statusTab==='todo' && e('div',null,
-            filterItems(todoRegular).length===0
-              ? e('div',{className:'empty-state',style:{marginTop:40}},'Все заготовки выполнены ✓')
-              : e('div',null,...filterItems(todoRegular).map(renderRegular))
+            // Для Робокопа: готовые к обработке (precut done) — сверху, с зелёной подсветкой
+            isRobokop && precutReadyIds.size>0 && e('div',{style:{marginBottom:8}},
+              e('div',{style:{fontSize:12,fontWeight:700,color:'var(--ok)',padding:'4px 2px 6px',
+                letterSpacing:'0.5px'}},'✓ ГОТОВО К ОБРАБОТКЕ'),
+              filterItems(todoRegular.filter(it=>precutReadyIds.has(it.id))).map(it=>
+                e('div',{key:it.id,style:{
+                  borderRadius:14,overflow:'hidden',
+                  outline:'2px solid var(--ok)',marginBottom:8,background:'#F0FDF4'
+                }}, renderRobokopItem(it))
+              )
+            ),
+            // Ручная фасовка: замесы готовы — сверху, с зелёной подсветкой
+            isZamesStation && zamesReadyIds.size>0 && e('div',{style:{marginBottom:8}},
+              e('div',{style:{fontSize:12,fontWeight:700,color:'var(--ok)',padding:'4px 2px 6px',
+                letterSpacing:'0.5px'}},'🥣 ЗАМЕС ГОТОВ'),
+              filterItems(todoRegular.filter(it=>zamesReadyIds.has(it.id))).map(it=>
+                e('div',{key:it.id,style:{
+                  borderRadius:14,overflow:'hidden',
+                  outline:'2px solid var(--ok)',marginBottom:8,background:'#F0FDF4'
+                }}, renderItem(it))
+              )
+            ),
+            // Остальные заготовки
+            (()=>{
+              const rest = isRobokop ? todoRegular.filter(it=>!precutReadyIds.has(it.id))
+                : isZamesStation ? todoRegular.filter(it=>!zamesReadyIds.has(it.id))
+                : todoRegular;
+              const renderFn = isRobokop ? renderRobokopItem : renderRegular;
+              return filterItems(rest).length===0 && (!isRobokop||precutReadyIds.size===0) && (!isZamesStation||zamesReadyIds.size===0)
+                ? e('div',{className:'empty-state',style:{marginTop:40}},'Все заготовки выполнены ✓')
+                : e('div',null,...filterItems(rest).map(renderFn));
+            })()
           ),
           // Прошлая смена — карryover-позиции (невыполненные)
           statusTab==='prev' && e('div',null,
@@ -7904,11 +8122,16 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees}) {
 // ============================================================
 // KITCHEN SHOP PAGE (вкладки по станциям)
 // ============================================================
-function KitchenShopPage({shopGroup, shift, onShiftChange, allEmployees, onBack, shopGroups, isManager}) {
+function KitchenShopPage({shopGroup, shift, onShiftChange, allEmployees, onBack, shopGroups, isManager, precutConfig, onPrecutConfigChange}) {
   const stations=shopGroup.stations||[];
   const [stationIdx,setStationIdx]=useState(0);
   const station=stations[stationIdx]||stations[0];
   const shopEmployees=useMemo(()=>getShopEmployees(shopGroup.shop,allEmployees),[shopGroup.shop,allEmployees]);
+  // Заготовки Робокопа передаём в Ручную нарезку
+  const robokopItems=useMemo(()=>{
+    const st=stations.find(s=>s.key===ROBOKOP_KEY);
+    return st?st.items||[]:[];
+  },[stations]);
 
   // Reset station index when switching shops
   useEffect(()=>{setStationIdx(0);},[shopGroup.shop]);
@@ -7950,7 +8173,11 @@ function KitchenShopPage({shopGroup, shift, onShiftChange, allEmployees, onBack,
       })
     ),
     station && e(KitchenStationPage,{
-      key:station.key, station, shift, onShiftChange, shopEmployees
+      key:station.key, station, shift, onShiftChange, shopEmployees,
+      robokopItems: station.key===RUCHNAYA_KEY ? robokopItems : [],
+      precutConfig: precutConfig||new Set(),
+      onPrecutConfigChange,
+      shopParam: !isManager
     })
   );
 }
@@ -7991,7 +8218,7 @@ function WorkshopSelector({shopGroups, shift, onSelect}) {
 // ============================================================
 // MANAGER — DASHBOARD TAB
 // ============================================================
-function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, activeTcUD, globalStationConfig, shopGroups}) {
+function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, activeTcUD, globalStationConfig, shopGroups, precutConfig}) {
   const catalog=useMemo(()=>getCatalogForDate(dateKey,activeTcEE,activeTcUD),[dateKey,activeTcEE,activeTcUD]);
   // periodMode: 'today' | 'date' | 'period'
   const [periodMode,setPeriodMode]=useState('today');
@@ -8039,30 +8266,42 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
     const process=(dk,s,cat)=>{
       const shopConfig=s.stationStartTimes||globalStationConfig||{};
 
+      // Глобальный таймлайн: все отметки сотрудника по всем станциям смены (включая замесы и precut)
+      const globalEmpTimeline={};
+      const addToTimeline=(eid,dat)=>{if(eid&&dat){if(!globalEmpTimeline[eid])globalEmpTimeline[eid]=[];globalEmpTimeline[eid].push(dat);}};
       cat.forEach(station=>{
-        const shopName=stationToShop[station.key]||station.shop||'';
-        const startHHMM=shopConfig[shopName]||shopConfig[station.key]||'09:00';
-        const startDate=startTimeToDate(dk,startHHMM);
-
-        // Таймлайн по сотрудникам: empId → отсортированные done_at всех их упаковок на станции
-        const empTimeline={};
+        const isZames=station.key.startsWith('suhoj_tseh_')||station.key===OVOSHCH_FASOVKA_KEY;
+        const isRobokopSt=station.key===ROBOKOP_KEY;
         station.items.forEach(item=>{
           const ik=`${station.key}-${item.id}`;
           const pls=(s.itemPackLines||{})[item.id]||(s.techcardId||s.udTechcardId?null:EXCEL_PACK_LINES[item.id])||null;
           if(pls&&pls.length>0){
             pls.forEach((_,li)=>{
               const lk=`${ik}-pl-${li}`;
-              const eid=(s.doneBy[lk]||[])[0];
-              const dat=(s.doneTimes||{})[lk];
-              if(eid&&dat){if(!empTimeline[eid])empTimeline[eid]=[];empTimeline[eid].push(dat);}
+              addToTimeline((s.doneBy[lk]||[])[0],(s.doneTimes||{})[lk]);
             });
           } else {
-            const eid=(s.doneBy[ik]||[])[0];
-            const dat=(s.doneTimes||{})[ik];
-            if(eid&&dat){if(!empTimeline[eid])empTimeline[eid]=[];empTimeline[eid].push(dat);}
+            addToTimeline((s.doneBy[ik]||[])[0],(s.doneTimes||{})[ik]);
+          }
+          // замес
+          if(isZames&&(item.ingredients||[]).length>1){
+            const zk=`zames-${station.key}-${item.id}`;
+            addToTimeline((s.doneBy[zk]||[])[0],(s.doneTimes||{})[zk]);
+          }
+          // precut
+          if(isRobokopSt&&precutConfig instanceof Set&&precutConfig.has(item.id)){
+            const pk=`precut-${ROBOKOP_KEY}-${item.id}`;
+            addToTimeline((s.doneBy[pk]||[])[0],(s.doneTimes||{})[pk]);
           }
         });
-        Object.values(empTimeline).forEach(arr=>arr.sort());
+      });
+      Object.values(globalEmpTimeline).forEach(arr=>arr.sort());
+
+      cat.forEach(station=>{
+        const shopName=stationToShop[station.key]||station.shop||'';
+        const startHHMM=shopConfig[shopName]||shopConfig[station.key]||'09:00';
+        const startDate=startTimeToDate(dk,startHHMM);
+        const empTimeline=globalEmpTimeline;
 
         station.items.forEach(item=>{
           const ik=`${station.key}-${item.id}`;
@@ -8092,7 +8331,7 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
               // Строка текущей смены
               rows.push({date:dk,shop:shopName,station:station.name,name:item.name,
                 packName:l.packName||'',volume:l.volume||'',planQty:qty,factQty,pct:qty>0?Math.round(factQty/qty*100):0,
-                done:isDone,employee:empName,durationMin,minPerPack,doneAt,skipReason,skipAt,isCarriedOver:false});
+                done:isDone,employee:empName,durationMin,minPerPack,doneAt,skipReason,skipAt,isCarriedOver:false,rowType:'regular'});
             });
           } else {
             const isDone=!!(s.doneFlags||{})[ik];
@@ -8115,7 +8354,7 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
             const skipAt=skipReason?(s.skipTimes||{})[ik]||null:null;
             rows.push({date:dk,shop:shopName,station:station.name,name:item.name,
               packName:'',volume:'',planQty:qty,factQty,pct:qty>0?Math.round(factQty/qty*100):0,
-              done:isDone,employee:empName,durationMin,minPerPack,doneAt,skipReason,skipAt,isCarriedOver:false});
+              done:isDone,employee:empName,durationMin,minPerPack,doneAt,skipReason,skipAt,isCarriedOver:false,rowType:'regular'});
           }
         });
 
@@ -8165,8 +8404,73 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
             pct:planQty>0?(cDone?Math.round(cFactQty/planQty*100):(yFact!=null?Math.round(yFact/planQty*100):0)):0,
             done:cDone,employee:cEmpName,
             durationMin:cDurationMin,minPerPack:cMinPerPack,doneAt:cDat,
-            skipReason:p.skipReason,skipAt:p.skipAt,isCarriedOver:true});
+            skipReason:p.skipReason,skipAt:p.skipAt,isCarriedOver:true,rowType:'regular'});
         });
+
+        // --- Замесы ---
+        const isZamesStation=station.key.startsWith('suhoj_tseh_')||station.key===OVOSHCH_FASOVKA_KEY;
+        if(isZamesStation){
+          station.items.filter(it=>(it.ingredients||[]).length>1).forEach(item=>{
+            const zk=`zames-${station.key}-${item.id}`;
+            const isDone=!!(s.doneFlags||{})[zk];
+            const eid=(s.doneBy[zk]||[])[0];
+            const empName=eid?(allEmployees.find(x=>x.id===eid)?.name||eid):'—';
+            const weightG=(item.ingredients||[]).reduce((sum,ing)=>sum+(ing.planAmount||0),0)+(item.subPreps||[]).reduce((sum,sp)=>sum+(sp.usageAmount||0),0);
+            let durationMin=null,gramPerMin=null,doneAt=null;
+            const dat=(s.doneTimes||{})[zk];
+            if(isDone&&dat&&eid){
+              doneAt=dat;
+              const doneMs=new Date(dat).getTime();
+              const prev=(globalEmpTimeline[eid]||[]).filter(t=>t<dat);
+              const prevMs=prev.length>0?new Date(prev[prev.length-1]).getTime():startDate.getTime();
+              durationMin=Math.round((doneMs-prevMs)/60000);
+              if(durationMin>0&&weightG>0) gramPerMin=+(weightG/durationMin).toFixed(1);
+            }
+            rows.push({date:dk,shop:shopName,station:station.name,name:item.name,
+              rowType:'zames',packName:'',volume:weightG?Math.round(weightG)+'г':'—',planQty:null,factQty:null,
+              done:isDone,employee:empName,durationMin,minPerPack:gramPerMin,productivityUnit:'г/мин',doneAt,
+              skipReason:null,skipAt:null,isCarriedOver:false});
+          });
+        }
+
+        // --- Для Робокопа (precut) ---
+        if(station.key===ROBOKOP_KEY&&precutConfig instanceof Set){
+          station.items.filter(it=>precutConfig.has(Number(it.id))||precutConfig.has(it.id)).forEach(item=>{
+            const pk=`precut-${ROBOKOP_KEY}-${item.id}`;
+            const isDone=!!(s.doneFlags||{})[pk];
+            const weightG=(item.ingredients||[]).reduce((sum,ing)=>sum+(ing.planAmount||0),0)+(item.subPreps||[]).reduce((sum,sp)=>sum+(sp.usageAmount||0),0);
+            const empIds=s.doneBy[pk]||[];
+            const dat=(s.doneTimes||{})[pk];
+            if(empIds.length===0){
+              rows.push({date:dk,shop:shopName,station:station.name,name:item.name,
+                rowType:'precut',packName:'',volume:weightG?Math.round(weightG)+'г':'—',
+                planQty:null,factQty:null,
+                done:isDone,employee:'—',durationMin:null,minPerPack:null,productivityUnit:'г/мин',doneAt:dat||null,
+                skipReason:null,skipAt:null,isCarriedOver:false});
+            } else {
+              empIds.forEach(eid=>{
+                const empName=allEmployees.find(x=>x.id===eid)?.name||eid;
+                const empFactFv=parseFloat((s.facts||{})[`${pk}-emp-${eid}`]);
+                const empFactWeight=!isNaN(empFactFv)?empFactFv:null;
+                const empDat=(s.doneTimes||{})[`${pk}-emp-${eid}`]||dat;
+                let durationMin=null,gramPerMin=null;
+                if(empDat){
+                  const doneMs=new Date(empDat).getTime();
+                  const prev=(globalEmpTimeline[eid]||[]).filter(t=>t<empDat);
+                  const prevMs=prev.length>0?new Date(prev[prev.length-1]).getTime():startDate.getTime();
+                  durationMin=Math.round((doneMs-prevMs)/60000);
+                  if(durationMin>0&&empFactWeight) gramPerMin=+(empFactWeight/durationMin).toFixed(1);
+                }
+                rows.push({date:dk,shop:shopName,station:station.name,name:item.name,
+                  rowType:'precut',packName:'',
+                  volume:weightG?Math.round(weightG)+'г':'—',
+                  planQty:null,factQty:empFactWeight,
+                  done:isDone,employee:empName,durationMin,minPerPack:gramPerMin,productivityUnit:'г/мин',doneAt:dat||null,
+                  skipReason:null,skipAt:null,isCarriedOver:false});
+              });
+            }
+          });
+        }
       });
     };
     if(periodMode==='today'){process(dateKey,shift,catalog);}
@@ -8182,9 +8486,11 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
     if(filterShop) rows=rows.filter(r=>r.shop===filterShop);
     if(filterText) rows=rows.filter(r=>r.name.toLowerCase().includes(filterText.toLowerCase())||r.station.toLowerCase().includes(filterText.toLowerCase()));
     if(filterStation) rows=rows.filter(r=>r.station===filterStation);
-    if(filterStatus==='done') rows=rows.filter(r=>r.done);
-    if(filterStatus==='todo') rows=rows.filter(r=>!r.done&&!r.skipReason);
-    if(filterStatus==='delay') rows=rows.filter(r=>!!r.skipReason&&!r.done);
+    if(filterStatus==='done') rows=rows.filter(r=>r.done&&r.rowType==='regular');
+    if(filterStatus==='todo') rows=rows.filter(r=>!r.done&&!r.skipReason&&r.rowType==='regular');
+    if(filterStatus==='delay') rows=rows.filter(r=>!!r.skipReason&&!r.done&&r.rowType==='regular');
+    if(filterStatus==='zames') rows=rows.filter(r=>r.rowType==='zames');
+    if(filterStatus==='precut') rows=rows.filter(r=>r.rowType==='precut');
     if(filterEmployee) rows=rows.filter(r=>r.employee.includes(filterEmployee));
     if(sortCol){
       rows.sort((a,b)=>{
@@ -8204,6 +8510,7 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
   const stationSummary=useMemo(()=>{
     const map={};
     allRows.forEach(r=>{
+      if(r.rowType==='zames'||r.rowType==='precut') return;
       if(!map[r.station]) map[r.station]={name:r.station,plan:0,fact:0};
       map[r.station].plan+=r.planQty;
       map[r.station].fact+=r.factQty;
@@ -8300,13 +8607,14 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
       })
     ),
     // Filters + table
-    e('div',{className:'card'},
-      e('div',{style:{display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:10,marginBottom:14}},
-        e('p',{style:{fontWeight:700,fontSize:15,margin:0}},'Детализация ('+filtered.length+' позиций)'),
-        e('button',{className:'btn-secondary',onClick:exportXlsx,style:{display:'flex',alignItems:'center',gap:8}},
-          e(SvgDownload,{size:16}),' Excel')
-      ),
-      e('div',{className:'filter-row'},
+    e('div',{className:'card',style:{padding:0}},
+      e('div',{style:{position:'sticky',top:54,zIndex:20,background:'var(--card)',borderRadius:'12px 12px 0 0',padding:'14px 16px 10px',borderBottom:'1px solid var(--border)'}},
+        e('div',{style:{display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:10,marginBottom:10}},
+          e('p',{style:{fontWeight:700,fontSize:15,margin:0}},'Детализация ('+filtered.length+' позиций)'),
+          e('button',{className:'btn-secondary',onClick:exportXlsx,style:{display:'flex',alignItems:'center',gap:8}},
+            e(SvgDownload,{size:16}),' Excel')
+        ),
+        e('div',{className:'filter-row',style:{marginBottom:0}},
         e('input',{className:'filter-input',placeholder:'Поиск по названию...',
           value:filterText,onChange:ev=>setFilterText(ev.target.value)}),
         e('select',{className:'filter-select',value:filterShop,onChange:ev=>setFilterShop(ev.target.value)},
@@ -8321,7 +8629,9 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
           e('option',{value:''},'Все статусы'),
           e('option',{value:'done'},'✓ Готово'),
           e('option',{value:'todo'},'В работе'),
-          e('option',{value:'delay'},'⚠ Задержка')
+          e('option',{value:'delay'},'⚠ Задержка'),
+          e('option',{value:'zames'},'🥣 Замесы'),
+          e('option',{value:'precut'},'✂ Для Робокопа')
         ),
         e('select',{className:'filter-select',value:filterEmployee,onChange:ev=>setFilterEmployee(ev.target.value)},
           e('option',{value:''},'Все сотрудники'),
@@ -8330,7 +8640,9 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
         (filterText||filterShop||filterStation||filterStatus||filterEmployee) && e('button',{className:'btn-secondary',
           onClick:()=>{setFilterText('');setFilterShop('');setFilterStation('');setFilterStatus('');setFilterEmployee('');}},
           '✕ Сбросить')
+        )
       ),
+      e('div',{style:{padding:'0 16px 16px'}},
       // Заготовки прошлой смены — вверху
       (()=>{
         const carriedRows=allRows.filter(r=>r.isCarriedOver);
@@ -8392,39 +8704,51 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
             thSort('planQty','Кол-во'),
             thSort('done','Статус'),
             thSort('durationMin','Время'),
-            thSort('minPerPack','Уп/мин'),
+            thSort('minPerPack','Произв.'),
             thSort('employee','Сотрудник')
           )),
           e('tbody',null,
             filtered.map((r,idx)=>{
+              const isSpecial=r.rowType==='zames'||r.rowType==='precut';
               const bc=r.done?'badge-ok':'badge-danger';
               const rowBg=r.skipReason&&!r.done?'var(--danger-bg)':'';
-              const statusCell=r.skipReason&&!r.done
-                ? e('div',null,
-                    e('span',{className:'badge badge-danger'},'⚠ Нехватка'),
-                    e('div',{style:{fontSize:11,color:'var(--danger)',marginTop:2}},
-                      SKIP_LABELS[r.skipReason]+(r.skipAt?' · '+new Date(r.skipAt).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):''))
-                  )
-                : e('span',{className:'badge '+bc},r.done?'✓ Готово':'Не готово');
+              let statusCell;
+              if(r.rowType==='zames'){
+                statusCell=e('span',{className:'badge '+(r.done?'badge-ok':''),
+                  style:r.done?{}:{background:'var(--surface)',color:'var(--muted)'}},
+                  r.done?'✓ Замес готов':'🥣 Замес');
+              } else if(r.rowType==='precut'){
+                statusCell=e('span',{className:'badge '+(r.done?'badge-ok':''),
+                  style:r.done?{}:{background:'var(--surface)',color:'var(--muted)'}},
+                  r.done?'✓ Выполнено':'✂ Для Робокопа');
+              } else if(r.skipReason&&!r.done){
+                statusCell=e('div',null,
+                  e('span',{className:'badge badge-danger'},'⚠ Нехватка'),
+                  e('div',{style:{fontSize:11,color:'var(--danger)',marginTop:2}},
+                    SKIP_LABELS[r.skipReason]+(r.skipAt?' · '+new Date(r.skipAt).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'')));
+              } else {
+                statusCell=e('span',{className:'badge '+bc},r.done?'✓ Готово':'Не готово');
+              }
               return e('tr',{key:idx,style:{background:rowBg}},
                 periodMode!=='today'&&e('td',null,formatDateRu(r.date)),
                 e('td',null,r.shop),
                 e('td',null,r.station.replace(r.shop+' / ','')),
                 e('td',null,r.name),
                 e('td',null,r.volume||'—'),
-                e('td',null,r.packName||'—'),
-                e('td',{className:'num'},r.done&&r.factQty!=null?r.factQty:(r.planQty||'—')),
+                e('td',null,isSpecial?'—':r.packName||'—'),
+                e('td',{className:'num'},isSpecial?(r.factQty!=null?r.factQty+'г':'—'):(r.done&&r.factQty!=null?r.factQty:(r.planQty||'—'))),
                 e('td',null,statusCell),
                 e('td',{className:'num',style:{whiteSpace:'nowrap'}},
                   r.durationMin!=null?r.durationMin+' мин':'—'),
                 e('td',{className:'num'},
-                  r.minPerPack!=null?r.minPerPack+' уп/мин':'—'),
+                  r.minPerPack!=null?r.minPerPack+' '+(r.productivityUnit||'уп/мин'):'—'),
                 e('td',null,r.employee)
               );
             })
           )
         )
       )
+      ) // end padding wrapper
     )
   );
 }
@@ -8432,25 +8756,57 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
 // ============================================================
 // MANAGER — EMPLOYEES TAB
 // ============================================================
+function ShopsCheckboxes({shops, selected, onChange}) {
+  return e('div',{style:{display:'flex',flexWrap:'wrap',gap:'6px 10px',marginTop:6}},
+    shops.map(s=>{
+      const checked=selected.includes(s);
+      return e('label',{key:s,style:{display:'flex',alignItems:'center',gap:4,cursor:'pointer',fontSize:13}},
+        e('input',{type:'checkbox',checked,onChange:()=>{
+          onChange(checked ? selected.filter(x=>x!==s) : [...selected,s]);
+        }}),
+        s
+      );
+    })
+  );
+}
+
 function EmployeesTab({employees, onSave}) {
   const [list, setList]=useState(()=>[...employees]);
   const [newName, setNewName]=useState('');
-  const [newShop, setNewShop]=useState('Горячий цех');
-  const [shops, setShops]=useState(['Горячий цех','Сухой цех','Рыбный цех','Молочный цех','Мясной цех','Соусный цех','Овощной цех','Готовая еда','Технолог','Главный технолог']);
+  const [newShops, setNewShops]=useState([]);
+  const [shops, setShops]=useState([]);
+  const [editingId, setEditingId]=useState(null);
+  const [editName, setEditName]=useState('');
+  const [editShops, setEditShops]=useState([]);
 
   useEffect(()=>{
-    loadShopsFromServer().then(s=>{setShops(s);if(s.length>0)setNewShop(s[0]);});
+    loadShopsFromServer().then(s=>{ setShops(s); });
   },[]);
-  useEffect(()=>{setList([...employees]);},[employees]);
+  useEffect(()=>{ setList([...employees]); },[employees]);
 
   const add=async()=>{
-    if(!newName.trim()) return;
-    const emp={id:'e_'+uid(),name:newName.trim(),shop:newShop};
+    if(!newName.trim()||newShops.length===0) return;
+    const emp={id:'e_'+uid(),name:newName.trim(),shops:newShops,shop:newShops[0]};
     const next=[...list,emp];
-    setList(next); setNewName('');
+    setList(next); setNewName(''); setNewShops([]);
     await addEmployeeToServer(emp);
     onSave(next);
   };
+
+  const startEdit=(emp)=>{
+    setEditingId(emp.id);
+    setEditName(emp.name);
+    setEditShops(Array.isArray(emp.shops)&&emp.shops.length>0 ? emp.shops : (emp.shop?[emp.shop]:[]));
+  };
+
+  const saveEdit=async()=>{
+    if(!editName.trim()||editShops.length===0) return;
+    const next=list.map(x=>x.id===editingId?{...x,name:editName.trim(),shops:editShops,shop:editShops[0]}:x);
+    setList(next); setEditingId(null);
+    await updateEmployeeOnServer(editingId, editName.trim(), editShops);
+    onSave(next);
+  };
+
   const remove=async(id)=>{
     const next=list.filter(x=>x.id!==id);
     setList(next);
@@ -8458,40 +8814,66 @@ function EmployeesTab({employees, onSave}) {
     onSave(next);
   };
 
-  // Group by shop
+  // Group by shop; employee appears in each of their shops
   const grouped={};
-  shops.forEach(s=>grouped[s]=[]);
+  shops.forEach(s=>{grouped[s]=[];});
   list.forEach(emp=>{
-    if(!grouped[emp.shop]) grouped[emp.shop]=[];
-    grouped[emp.shop].push(emp);
+    const empShops=Array.isArray(emp.shops)&&emp.shops.length>0?emp.shops:(emp.shop?[emp.shop]:[]);
+    empShops.forEach(s=>{ if(!grouped[s]) grouped[s]=[]; grouped[s].push(emp); });
   });
+  shops.forEach(s=>{ grouped[s].sort((a,b)=>a.name.localeCompare(b.name,'ru')); });
+
+  const renderEmpRow=(emp)=>{
+    const empShops=Array.isArray(emp.shops)&&emp.shops.length>0?emp.shops:(emp.shop?[emp.shop]:[]);
+    const isEditing=editingId===emp.id;
+    return e('div',{key:emp.id,className:'emp-item',style:{flexDirection:'column',alignItems:'stretch',gap:8,marginBottom:4}},
+      isEditing
+        ? e('div',null,
+            e('input',{className:'add-emp-input',style:{width:'100%',boxSizing:'border-box',marginBottom:6},
+              value:editName,onChange:ev=>setEditName(ev.target.value),autoFocus:true}),
+            shops.length>0 && e(ShopsCheckboxes,{shops,selected:editShops,onChange:setEditShops}),
+            e('div',{style:{display:'flex',gap:8,marginTop:8}},
+              e('button',{className:'btn-primary',onClick:saveEdit,
+                style:{opacity:(!editName.trim()||editShops.length===0)?0.5:1}},'Сохранить'),
+              e('button',{className:'btn-secondary',onClick:()=>setEditingId(null)},'Отмена')
+            )
+          )
+        : e('div',{style:{display:'flex',alignItems:'center',gap:8}},
+            e('div',{style:{flex:1}},
+              e('div',{className:'emp-item-name'},emp.name),
+              empShops.length>1 && e('div',{style:{fontSize:11,color:'var(--muted)'}},empShops.join(' · '))
+            ),
+            e('button',{className:'btn-secondary',onClick:()=>startEdit(emp),
+              style:{display:'flex',alignItems:'center',gap:4,padding:'4px 10px'}},'✏ Изменить'),
+            e('button',{className:'btn-danger',onClick:()=>remove(emp.id),
+              style:{display:'flex',alignItems:'center',gap:4}},
+              e(SvgTrash,{size:14}),' Удалить')
+          )
+    );
+  };
 
   return e('div',null,
     e('h2',{className:'page-title',style:{marginBottom:4}},'Сотрудники'),
-    e('p',{className:'page-sub'},'Список сотрудников по цехам'),
-    e('div',{className:'add-emp-row'},
-      e('input',{className:'add-emp-input',placeholder:'Имя сотрудника',
+    e('p',{className:'page-sub'},'Сотрудник может работать в нескольких цехах'),
+
+    // Add form
+    e('div',{style:{background:'var(--surface)',borderRadius:12,padding:16,marginBottom:20}},
+      e('div',{style:{fontWeight:700,marginBottom:8}},'Новый сотрудник'),
+      e('input',{className:'add-emp-input',placeholder:'Имя',style:{width:'100%',boxSizing:'border-box',marginBottom:8},
         value:newName,onChange:ev=>setNewName(ev.target.value),
         onKeyDown:ev=>ev.key==='Enter'&&add()}),
-      e('select',{className:'add-emp-select',value:newShop,onChange:ev=>setNewShop(ev.target.value)},
-        shops.map(s=>e('option',{key:s,value:s},s))
-      ),
-      e('button',{className:'btn-primary',onClick:add,style:{display:'flex',alignItems:'center',gap:8}},
+      shops.length>0 && e(ShopsCheckboxes,{shops,selected:newShops,onChange:setNewShops}),
+      e('button',{className:'btn-primary',onClick:add,
+        style:{marginTop:10,display:'flex',alignItems:'center',gap:8,opacity:(!newName.trim()||newShops.length===0)?0.5:1}},
         e(SvgPlus,{size:18}),' Добавить')
     ),
-    e('div',{style:{marginTop:20}},
+
+    // Grouped by shop
+    e('div',null,
       shops.filter(s=>grouped[s]&&grouped[s].length>0).map(shop=>
         e('div',{key:shop},
           e('div',{className:'shop-group-header'},shop+` (${grouped[shop].length})`),
-          e('div',{className:'emp-list'},
-            grouped[shop].map(emp=>e('div',{key:emp.id,className:'emp-item'},
-              e('div',{className:'emp-item-name'},emp.name),
-              e('div',{className:'emp-item-shop'},emp.shop),
-              e('button',{className:'btn-danger',onClick:()=>remove(emp.id),
-                style:{display:'flex',alignItems:'center',gap:4}},
-                e(SvgTrash,{size:14}),' Удалить')
-            ))
-          )
+          e('div',{className:'emp-list'}, grouped[shop].map(emp=>renderEmpRow(emp)))
         )
       )
     )
@@ -9049,7 +9431,7 @@ function TechcardsTab({shift, allTechcards, activeTcEE, activeTcUD, onApplyTechc
 // ============================================================
 // MANAGER PAGE
 // ============================================================
-function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesChange, archiveIndex, onOpenArchiveDate, allTechcards, activeTcEE, activeTcUD, onApplyTechcard, onDeactivate, onRefreshTechcards, shopGroups, globalStationConfig, onStationConfigChange}) {
+function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesChange, archiveIndex, onOpenArchiveDate, allTechcards, activeTcEE, activeTcUD, onApplyTechcard, onDeactivate, onRefreshTechcards, shopGroups, globalStationConfig, onStationConfigChange, precutConfig, onPrecutConfigChange}) {
   const activeTechcard = activeTcEE || activeTcUD; // для обратной совместимости
   const [tab,setTab]=useState('dashboard');
   const [selectedShop,setSelectedShop]=useState(null);
@@ -9076,12 +9458,13 @@ function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesCh
       e('button',{className:'mgr-tab'+(tab==='acts'?' active':''),onClick:()=>switchTab('acts')},
         '🧪 Акты проработки'),
     ),
-    tab==='dashboard' && e(DashboardTab,{dateKey,shift,allEmployees,archiveIndex,activeTcEE,activeTcUD,globalStationConfig,shopGroups}),
+    tab==='dashboard' && e(DashboardTab,{dateKey,shift,allEmployees,archiveIndex,activeTcEE,activeTcUD,globalStationConfig,shopGroups,precutConfig}),
     tab==='kitchen' && (
       selectedShop
         ? e(KitchenShopPage,{
             shopGroup:selectedShop, shift, onShiftChange, allEmployees,
             isManager:true, shopGroups,
+            precutConfig, onPrecutConfigChange,
             onBack:(targetGroup)=>{
               if(targetGroup) setSelectedShop(targetGroup);
               else setSelectedShop(null);
@@ -11352,6 +11735,7 @@ function App() {
   const [activeTcEE,setActiveTcEE]=useState(null);
   const [activeTcUD,setActiveTcUD]=useState(null);
   const [globalStationConfig,setGlobalStationConfig]=useState({});
+  const [precutConfig,setPrecutConfig]=useState(()=>new Set());
   // Load initial data
   useEffect(()=>{
     (async()=>{
@@ -11362,6 +11746,7 @@ function App() {
       const tcs=await loadTechCards();
       setAllTechcards(tcs);
       try{const r=await fetch('/api/config/stations');if(r.ok){const{config}=await r.json();setGlobalStationConfig(config||{});}}catch(_){}
+      try{const r=await fetch('/api/precut');if(r.ok){const{ids}=await r.json();setPrecutConfig(new Set(ids));}}catch(_){}
       const existing=await loadShift(today);
       let loadedShift=existing||emptyShiftData(today);
       setShift(loadedShift);
@@ -11545,6 +11930,11 @@ function App() {
       allEmployees,
       isManager,
       shopGroups: (shopParam||!isManager) ? null : shopGroups,
+      precutConfig,
+      onPrecutConfigChange: async(newSet)=>{
+        setPrecutConfig(newSet);
+        try{ await fetch('/api/precut',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:[...newSet]})}); }catch(_){}
+      },
       onBack:(targetGroup)=>{
         if(targetGroup){setSelectedShop(targetGroup);}
         else{setMode('home');setSelectedShop(null);}
@@ -11567,7 +11957,12 @@ function App() {
       onRefreshTechcards:refreshTechcards,
       shopGroups,
       globalStationConfig,
-      onStationConfigChange:setGlobalStationConfig
+      onStationConfigChange:setGlobalStationConfig,
+      precutConfig,
+      onPrecutConfigChange: async(newSet)=>{
+        setPrecutConfig(newSet);
+        try{ await fetch('/api/precut',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:[...newSet]})}); }catch(_){}
+      }
     })
   );
 }

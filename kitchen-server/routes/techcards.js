@@ -65,30 +65,43 @@ async function buildTechcard(id) {
     if (!treeSeen.has(k)) { treeSeen.add(k); treeRowsDedup.push(r); }
   }
 
-  // Граммовки подзаготовок (трёхуровневый ключ: grandparent:parent:sub)
-  const allParentIds = new Set(itemRows.map(r => r.item_id));
-  for (const r of treeRowsDedup) allParentIds.add(r.parent_id);
+  // Per-techcard данные из items_json (объявляем здесь, т.к. нужны ниже для subIngredRows)
+  const parsedJson = (() => { try { return JSON.parse(row.items_json || '{}'); } catch { return {}; } })();
+  const perTcIngAmounts = parsedJson.ingAmounts || null;
+  const perTcSubIngAmounts = parsedJson.subIngAmounts || null;
 
+  // Граммовки подзаготовок: сначала per-techcard из items_json, иначе глобальная таблица
   let subIngredRows = [];
-  if (allParentIds.size > 0) {
-    const ids = [...allParentIds];
-    const ph = ids.map((_, i) => `$${i + 1}`).join(',');
-    const { rows } = await pool.query(
-      `SELECT grandparent_item_id, item_id, sub_item_id, ing_id, ing_name, plan_amount, unit
-       FROM sub_prep_ingredients WHERE item_id IN (${ph})
-       ORDER BY grandparent_item_id, item_id, sub_item_id, sort_order`,
-      ids
-    );
-    subIngredRows = rows;
+  if (perTcSubIngAmounts) {
+    // Восстанавливаем из items_json — ключ "grandparent:parent:sub"
+    for (const [key, ings] of Object.entries(perTcSubIngAmounts)) {
+      const [gp, par, sub] = key.split(':').map(Number);
+      for (let j = 0; j < ings.length; j++) {
+        const ing = ings[j];
+        subIngredRows.push({ grandparent_item_id: gp, item_id: par, sub_item_id: sub,
+          ing_id: ing.id, ing_name: ing.name, plan_amount: ing.planAmount || 0, unit: ing.unit || 'г' });
+      }
+    }
+  } else {
+    const allParentIds = new Set(itemRows.map(r => r.item_id));
+    for (const r of treeRowsDedup) allParentIds.add(r.parent_id);
+    if (allParentIds.size > 0) {
+      const ids = [...allParentIds];
+      const ph = ids.map((_, i) => `$${i + 1}`).join(',');
+      const { rows } = await pool.query(
+        `SELECT grandparent_item_id, item_id, sub_item_id, ing_id, ing_name, plan_amount, unit
+         FROM sub_prep_ingredients WHERE item_id IN (${ph})
+         ORDER BY grandparent_item_id, item_id, sub_item_id, sort_order`,
+        ids
+      );
+      subIngredRows = rows;
+    }
   }
 
   // ─── Карты для быстрого поиска ───────────────────────────────────────────────
 
   // Граммовки ингредиентов: сначала пробуем per-techcard данные из items_json,
   // иначе — глобальная таблица item_ingredients (для обратной совместимости)
-  const parsedJson = (() => { try { return JSON.parse(row.items_json || '{}'); } catch { return {}; } })();
-  const perTcIngAmounts = parsedJson.ingAmounts || null;
-
   const ingredMap = perTcIngAmounts
     ? Object.fromEntries(Object.entries(perTcIngAmounts).map(([itemId, ings]) => [
         Number(itemId),
@@ -276,14 +289,24 @@ router.post('/', async (req, res) => {
     const { id } = await pool.withTransaction(async (client) => {
       // Сохраняем граммовки ингредиентов per-techcard в items_json
       const ingAmounts = {};
+      const subIngAmounts = {}; // key: "grandparent:parent:sub"
+      function collectSubIngs(subPreps, parentId, grandparentId = 0) {
+        for (const sp of (subPreps || [])) {
+          if (sp.ingredients?.length) {
+            subIngAmounts[`${grandparentId}:${parentId}:${sp.id}`] = sp.ingredients;
+          }
+          if (sp.subPreps?.length) collectSubIngs(sp.subPreps, sp.id, parentId);
+        }
+      }
       for (const st of (stations || [])) {
         for (const item of (st.items || [])) {
           if (item.ingredients?.length) ingAmounts[item.id] = item.ingredients;
+          collectSubIngs(item.subPreps, item.id, 0);
         }
       }
       const { rows: [tc] } = await client.query(
         'INSERT INTO techcards(name, filename, company, items_json) VALUES($1,$2,$3,$4) RETURNING id',
-        [name, filename || null, co, JSON.stringify({ ingAmounts })]
+        [name, filename || null, co, JSON.stringify({ ingAmounts, subIngAmounts })]
       );
       // Tag each pack line with source = company
       const taggedItems = {};
