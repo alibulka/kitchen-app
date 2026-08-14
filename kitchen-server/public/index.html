@@ -7156,6 +7156,15 @@ function PackTable({packLines, facts, onFactChange, itemKey,
   const [pickerFor, setPickerFor] = useState(null);
   const [pendingEmp, setPendingEmp] = useState(null); // {lineIdx, empId} — ждёт причину
   const [localFacts, setLocalFacts] = useState({}); // буфер ввода — не сохраняем при каждом нажатии
+  // Страховка: если таблица размонтируется (смена вкладки/цеха) с несохранённым вводом —
+  // сбрасываем буфер в shift, чтобы набранный вес не потерялся
+  const localFactsRef = useRef(localFacts); localFactsRef.current = localFacts;
+  const onFactChangeRef = useRef(onFactChange); onFactChangeRef.current = onFactChange;
+  useEffect(() => () => {
+    Object.entries(localFactsRef.current).forEach(([k, v]) => {
+      if (v !== undefined) onFactChangeRef.current(k, v);
+    });
+  }, []);
   const parseVolume = v => parseFloat((v||'0').replace(',','.')) || 0;
   const packOrder = [...new Set(packLines.map(l => l.packName||''))];
   const sortedLines = [...packLines].sort((a,b) => {
