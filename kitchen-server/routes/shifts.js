@@ -241,7 +241,11 @@ async function saveShift(date, shift) {
       await client.query(
         `INSERT INTO shift_item_status(shift_date, station_key, item_id, done, done_at, skip_reason, skip_at)
          VALUES($1,$2,$3,$4,$5,$6,$7)
-         ON CONFLICT(shift_date, station_key, item_id) DO UPDATE SET done=$4, done_at=$5, skip_reason=$6, skip_at=$7`,
+         ON CONFLICT(shift_date, station_key, item_id) DO UPDATE SET
+           done = GREATEST(shift_item_status.done, $4),
+           done_at = COALESCE(shift_item_status.done_at, $5),
+           skip_reason = CASE WHEN GREATEST(shift_item_status.done, $4) = 1 THEN NULL ELSE $6 END,
+           skip_at = CASE WHEN GREATEST(shift_item_status.done, $4) = 1 THEN NULL ELSE $7 END`,
         [date, stationKey, itemId, done ? 1 : 0, doneAt, skipReason, skipAt]
       );
     }
