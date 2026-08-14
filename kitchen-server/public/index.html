@@ -7155,6 +7155,7 @@ function PackTable({packLines, facts, onFactChange, itemKey,
                     prevLineData, hideCompanions}) {
   const [pickerFor, setPickerFor] = useState(null);
   const [pendingEmp, setPendingEmp] = useState(null); // {lineIdx, empId} — ждёт причину
+  const [localFacts, setLocalFacts] = useState({}); // буфер ввода — не сохраняем при каждом нажатии
   const parseVolume = v => parseFloat((v||'0').replace(',','.')) || 0;
   const packOrder = [...new Set(packLines.map(l => l.packName||''))];
   const sortedLines = [...packLines].sort((a,b) => {
@@ -7241,8 +7242,12 @@ function PackTable({packLines, facts, onFactChange, itemKey,
                   : isCarryoverCompanion
                     ? e('span',{style:{fontWeight:600,fontSize:15,color:'var(--muted)'}},planQty,' уп')
                     : e('input',{type:'number',step:1,min:0,className:'pack-fact-input',
-                        value:factVal,onFocus:ev=>ev.target.select(),
-                        onChange:ev=>onFactChange(k,ev.target.value)})
+                        value:localFacts[k]!==undefined?localFacts[k]:factVal,
+                        onFocus:ev=>ev.target.select(),
+                        onChange:ev=>setLocalFacts(p=>({...p,[k]:ev.target.value})),
+                        onBlur:ev=>{const v=localFacts[k];if(v!==undefined){onFactChange(k,v);setLocalFacts(p=>{const n={...p};delete n[k];return n;});}},
+                        onKeyDown:ev=>{if(ev.key==='Enter'){const v=localFacts[k];if(v!==undefined){onFactChange(k,v);setLocalFacts(p=>{const n={...p};delete n[k];return n;});}ev.target.blur();}}
+                      })
               ),
               onLineSkip && !isDoneYesterday && !isCarryoverCompanion && e('td',{style:{whiteSpace:'nowrap'}},
                 lineSkip
@@ -9271,6 +9276,22 @@ function TechcardsTab({shift, allTechcards, activeTcEE, activeTcUD, onApplyTechc
             fromWarehouse: Number(String(row[5]||'').replace(/\s/g,''))||0,
             qty:           Number(String(row[6]||'').replace(/\s/g,''))||0
           });
+        }
+
+        // Мержим pack lines с одинаковой граммовкой и упаковкой (разные назначения → суммируем qty)
+        for(const id of Object.keys(packLines)){
+          const merged=[];
+          for(const line of packLines[id]){
+            const key=(line.volume||'')+'|'+(line.packName||'');
+            const existing=merged.find(m=>(m.volume||'')+'|'+(m.packName||'')===key);
+            if(existing){
+              existing.qty=(Number(existing.qty)||0)+(Number(line.qty)||0);
+              existing.fromWarehouse=(Number(existing.fromWarehouse)||0)+(Number(line.fromWarehouse)||0);
+            } else {
+              merged.push({...line});
+            }
+          }
+          packLines[id]=merged;
         }
 
         const filteredStations=stations.filter(s=>s.items.length>0&&!/неизвестно/i.test(s.shop));
@@ -11782,7 +11803,25 @@ function App() {
         const msg=JSON.parse(e.data);
         // Игнорируем собственные апдейты (clientId совпадает с нашим)
         if(msg.type==='shift_updated' && msg.date===shift.date && msg.clientId!==MY_CLIENT_ID){
-          setShift(msg.shift);
+          // Мержим входящий shift с локальным: true в doneFlags не откатывается назад,
+          // факты и время сохраняются из обоих источников — предотвращает гонку между планшетами
+          setShift(local=>{
+            const inc=msg.shift;
+            // doneFlags: union — если хоть у одного true, остаётся true
+            const doneFlags={...inc.doneFlags};
+            Object.entries(local.doneFlags||{}).forEach(([k,v])=>{ if(v&&!doneFlags[k]) doneFlags[k]=v; });
+            // facts: local wins — не перезаписываем то что пользователь только что ввёл;
+            // incoming заполняет только отсутствующие ключи (другие строки с других планшетов)
+            const facts={...(inc.facts||{}),...(local.facts||{})};
+            // doneBy: incoming wins (последнее назначение сотрудника)
+            const doneBy={...(local.doneBy||{}),...(inc.doneBy||{})};
+            // doneTimes: берём самое раннее время из обоих (первый факт выполнения)
+            const doneTimes={...(local.doneTimes||{})};
+            Object.entries(inc.doneTimes||{}).forEach(([k,v])=>{
+              if(!doneTimes[k]||v<doneTimes[k]) doneTimes[k]=v;
+            });
+            return {...inc,doneFlags,facts,doneBy,doneTimes};
+          });
           // Обновляем техкарты если изменились
           if(msg.shift.techcardId){ loadTechCard(msg.shift.techcardId).then(tc=>{if(tc)setActiveTcEE(tc);}); }
           else setActiveTcEE(null);
