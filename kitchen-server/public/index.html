@@ -9303,7 +9303,19 @@ function TechcardsTab({shift, allTechcards, activeTcEE, activeTcUD, onApplyTechc
           packLines[id]=merged;
         }
 
+        // Позиции из нераспознанного рабочего места не показываем и не сохраняем.
+        // Важно: строки фасовки для них тоже исключаем, иначе БД получает фасовку
+        // без самой заготовки и правильно отменяет загрузку всей техкарты.
         const filteredStations=stations.filter(s=>s.items.length>0&&!/неизвестно/i.test(s.shop));
+        const savedItemIds=new Set();
+        const collectItemIds=item=>{
+          savedItemIds.add(String(item.id));
+          (item.subPreps||[]).forEach(collectItemIds);
+        };
+        filteredStations.forEach(st=>st.items.forEach(collectItemIds));
+        const filteredPackLines=Object.fromEntries(
+          Object.entries(packLines).filter(([itemId])=>savedItemIds.has(String(itemId)))
+        );
         const totalItems=filteredStations.reduce((a,s)=>a+s.items.length,0);
         if(totalItems===0){setMessageFn('⚠ Позиции не найдены. Проверьте формат файла.');return;}
 
@@ -9321,7 +9333,7 @@ function TechcardsTab({shift, allTechcards, activeTcEE, activeTcUD, onApplyTechc
 
         const baseName=file.name.replace(/\.[^.]+$/,'');
         setMessageFn(`✓ Найдено ${totalItems} позиций в ${filteredStations.length} станциях`);
-        setParsedFn({stations:filteredStations, packLines, filename:file.name, previewRows:rows.slice(0,5), baseName});
+        setParsedFn({stations:filteredStations, packLines:filteredPackLines, filename:file.name, previewRows:rows.slice(0,5), baseName});
       } catch(err){
         setMessageFn('Ошибка чтения файла: '+err.message);
       }
