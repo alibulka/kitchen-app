@@ -11582,11 +11582,11 @@ function ActsPage({isManager=false}) {
     color:primary?'white':'var(--text)',fontWeight:600,fontSize:13,cursor:'pointer'});
 
   // Экраны-подстраницы
-  if(view==='new-template')
+  if(isManager&&view==='new-template')
     return e(ActTemplateEditor,{template:null,
       onBack:()=>setView('templates'),
       onSave:()=>{ loadTemplates(); setView('templates'); }});
-  if(view==='edit-template'&&selectedTemplate)
+  if(isManager&&view==='edit-template'&&selectedTemplate)
     return e(ActTemplateEditor,{template:selectedTemplate,
       onBack:()=>setView('templates'),
       onSave:()=>{ loadTemplates(); setView('templates'); }});
@@ -11604,13 +11604,13 @@ function ActsPage({isManager=false}) {
       e('button',{onClick:()=>setView('list'),
         style:{...btnStyle(view==='list'),borderBottom:view==='list'?'2.5px solid var(--accent)':''}},
         '📄 Акты проработки'),
-      e('button',{onClick:()=>setView('templates'),
+      isManager&&e('button',{onClick:()=>setView('templates'),
         style:{...btnStyle(view==='templates'),borderBottom:view==='templates'?'2.5px solid var(--accent)':''}},
         '🗂 Шаблоны'),
     ),
 
     // ── Список шаблонов ──────────────────────────────────────────────────────
-    view==='templates'&&e('div',null,
+    isManager&&view==='templates'&&e('div',null,
       e('div',{style:{display:'flex',justifyContent:'flex-end',marginBottom:12}},
         e('button',{onClick:()=>setView('new-template'),style:btnStyle(true)},'+ Новый шаблон'),
       ),
