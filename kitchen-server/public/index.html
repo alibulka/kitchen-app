@@ -7446,7 +7446,13 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, prevLi
       // Время позиции (когда все строки выполнены)
       if(newFlags[itemKey]&&!wasItemDone) newDoneTimes[itemKey]=nowIso;
       else if(wasItemDone&&!newFlags[itemKey]) delete newDoneTimes[itemKey];
-      return {...prev,doneFlags:newFlags,doneTimes:newDoneTimes,doneBy:{...prev.doneBy,[lineKey]:next}};
+      // Автозаполнение факта = план при первой отметке выполнения строки
+      const newFacts={...prev.facts};
+      if(!isRemoving&&!wasLineDone&&prev.facts[lineKey]===undefined){
+        const planQty=packLines[lineIdx]?.qty;
+        if(planQty!=null) newFacts[lineKey]=String(planQty);
+      }
+      return {...prev,doneFlags:newFlags,doneTimes:newDoneTimes,doneBy:{...prev.doneBy,[lineKey]:next},facts:newFacts};
     });
   };
 
@@ -9496,7 +9502,7 @@ function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesCh
     tab==='employees' && e(EmployeesTab,{employees:allEmployees,onSave:onEmployeesChange}),
     tab==='shifts' && e(ShiftsTab,{archiveIndex,globalStationConfig,onStationConfigChange,shopGroups}),
     tab==='upload' && e(TechcardsTab,{shift,allTechcards,activeTcEE,activeTcUD,onApplyTechcard,onDeactivate,onRefreshTechcards}),
-    tab==='technologist' && e(TechnologistPage,null),
+    tab==='technologist' && e(TechnologistPage,{initialActId:actIdParam}),
     tab==='product' && e(ProductJournalPage,null),
     tab==='acts' && e(ActsPage,{isManager:true})
   );
@@ -10393,9 +10399,202 @@ function StandardCard({s, onToggleAlways, onReload, onDelete}) {
   );
 }
 
+// Модалка выбора шаблона и создания акта из задания проработки
+function ProrabotkaCreateActModal({task, onClose, onCreated}) {
+  const [templates,setTemplates]=useState([]);
+  const [templateId,setTemplateId]=useState('');
+  const [loading,setLoading]=useState(false);
+
+  useEffect(()=>{
+    fetch('/api/acts/templates').then(r=>r.json()).then(d=>setTemplates(d.templates||[]));
+  },[]);
+
+  const handleCreate=async()=>{
+    if(!templateId) return;
+    setLoading(true);
+    try {
+      const r=await fetch('/api/acts/acts',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          template_id:Number(templateId),
+          date:todayISO(),
+          product_name: task.name||'',
+          manufacturer: task.supplier||'',
+          raw_material: task.material||'',
+        })});
+      const d=await r.json();
+      if(d.error) throw new Error(d.error);
+      onCreated(d.id||d.act?.id);
+    } catch(err) {
+      alert('Ошибка: '+err.message);
+      setLoading(false);
+    }
+  };
+
+  return e('div',{style:{position:'fixed',inset:0,background:'rgba(0,0,0,0.55)',display:'flex',
+      alignItems:'center',justifyContent:'center',padding:'5vh 16px',zIndex:2000}},
+    e('div',{style:{background:'var(--surface)',borderRadius:16,padding:28,width:'100%',maxWidth:440,
+        boxShadow:'0 8px 40px rgba(0,0,0,0.18)'}},
+      e('div',{style:{fontWeight:700,fontSize:17,marginBottom:18}},'Создать акт проработки'),
+      e('div',{style:{fontSize:13,color:'var(--muted)',marginBottom:4}},'Задание:'),
+      e('div',{style:{fontWeight:600,fontSize:15,marginBottom:4}},task.name||'—'),
+      e('div',{style:{display:'flex',flexWrap:'wrap',gap:'4px 14px',fontSize:13,color:'var(--muted)',marginBottom:20}},
+        task.material&&e('span',null,'🥩 ',task.material),
+        task.type&&e('span',null,'🏷️ ',task.type),
+        task.supplier&&e('span',null,'📦 ',task.supplier)
+      ),
+      e('div',{style:{fontSize:13,color:'var(--muted)',marginBottom:6}},'Шаблон акта:'),
+      e('select',{className:'filter-input',value:templateId,
+          onChange:ev=>setTemplateId(ev.target.value),
+          style:{width:'100%',marginBottom:22}},
+        e('option',{value:''},'— Выберите шаблон —'),
+        templates.map(t=>e('option',{key:t.id,value:t.id},t.name))
+      ),
+      e('div',{style:{display:'flex',gap:10,justifyContent:'flex-end'}},
+        e('button',{onClick:onClose,style:{padding:'9px 20px',fontSize:14,borderRadius:9,border:'1.5px solid var(--border)',background:'var(--surface)',color:'var(--text)',cursor:'pointer'}},'Отмена'),
+        e('button',{onClick:handleCreate,disabled:!templateId||loading,style:{padding:'9px 22px',fontSize:14,fontWeight:600,borderRadius:9,border:'none',background:templateId?'var(--accent)':'var(--border)',color:'white',cursor:templateId?'pointer':'default'}},
+          loading?'Создание…':'Создать акт')
+      )
+    )
+  );
+}
+
+// Вкладка Проработки — задания из Google Sheet
+function ProrabotkaTab({onActCreated}) {
+  const [tasks,setTasks]=useState(null);
+  const [error,setError]=useState(null);
+  const [search,setSearch]=useState('');
+  const [createActFor,setCreateActFor]=useState(null);
+  const [sortCol,setSortCol]=useState('deadline');
+  const [sortDir,setSortDir]=useState(1); // 1=asc, -1=desc
+
+  useEffect(()=>{
+    fetch('/api/prorabotki/tasks')
+      .then(r=>r.json())
+      .then(d=>{ if(d.error) setError(d.error); else setTasks(d.tasks||[]); })
+      .catch(e=>setError(e.message));
+  },[]);
+
+  const handleSort=col=>{
+    if(sortCol===col) setSortDir(d=>-d);
+    else { setSortCol(col); setSortDir(1); }
+  };
+
+  // Парсим дату в формате dd.mm.yyyy или dd.mm.yy для сортировки
+  const parseDate=s=>{
+    if(!s) return 0;
+    const parts=s.split('.');
+    if(parts.length<3) return 0;
+    let [d,m,y]=parts;
+    if(y.length===2) y='20'+y;
+    return new Date(`${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`).getTime()||0;
+  };
+
+  const sorted=React.useMemo(()=>{
+    if(!tasks) return [];
+    const q=search.trim().toLowerCase();
+    let rows=q ? tasks.filter(t=>
+      (t.material||'').toLowerCase().includes(q)||
+      (t.name||'').toLowerCase().includes(q)||
+      (t.type||'').toLowerCase().includes(q)||
+      (t.supplier||'').toLowerCase().includes(q)||
+      (t.manufacturer||'').toLowerCase().includes(q)
+    ) : [...tasks];
+    const dateFields=['arrivalDate','deadline'];
+    rows.sort((a,b)=>{
+      let av=a[sortCol]||'', bv=b[sortCol]||'';
+      if(dateFields.includes(sortCol)){
+        av=parseDate(av); bv=parseDate(bv);
+        return (av-bv)*sortDir;
+      }
+      return av.localeCompare(bv,'ru')*sortDir;
+    });
+    return rows;
+  },[tasks,search,sortCol,sortDir]);
+
+  const cols=[
+    {key:'material',label:'Сырьё',w:'18%'},
+    {key:'name',label:'Название на этикетке',w:'20%'},
+    {key:'type',label:'Тип',w:'10%'},
+    {key:'supplier',label:'Поставщик',w:'14%'},
+    {key:'manufacturer',label:'Производитель',w:'14%'},
+    {key:'arrivalDate',label:'Дата прихода',w:'10%'},
+    {key:'deadline',label:'Дедлайн',w:'10%'},
+  ];
+
+  const sortArrow=col=>sortCol===col?(sortDir===1?' ↑':' ↓'):'';
+
+  const thStyle=(col)=>({
+    padding:'9px 10px',textAlign:'left',fontWeight:700,fontSize:12,
+    color:'var(--muted)',borderBottom:'2px solid var(--border)',
+    cursor:'pointer',userSelect:'none',whiteSpace:'nowrap',
+    background:sortCol===col?'var(--hover)':'transparent',
+  });
+
+  const tdStyle={padding:'9px 10px',fontSize:13,color:'var(--text)',
+    borderBottom:'1px solid var(--border)',verticalAlign:'middle'};
+
+  const deadlineColor=v=>{
+    const ts=parseDate(v);
+    if(!ts) return 'var(--text)';
+    const days=(ts-Date.now())/86400000;
+    if(days<0) return 'var(--danger)';
+    if(days<5) return '#f59e0b';
+    return 'var(--ok)';
+  };
+
+  if(error) return e('div',{className:'empty-state',style:{color:'var(--danger)'}},
+    '⚠️ Ошибка загрузки: '+error);
+  if(tasks===null) return e('div',{className:'empty-state'},'Загрузка заданий…');
+
+  return e(React.Fragment,null,
+    e('div',{style:{display:'flex',alignItems:'center',gap:12,marginBottom:14,flexWrap:'wrap'}},
+      e('input',{type:'text',className:'filter-input',placeholder:'Поиск по сырью, названию, типу, поставщику…',
+        value:search,onChange:ev=>setSearch(ev.target.value),style:{flex:'1 1 220px',minWidth:0}}),
+      e('span',{style:{color:'var(--muted)',fontSize:13,whiteSpace:'nowrap'}},sorted.length+' позиций')
+    ),
+    sorted.length===0
+      ? e('div',{className:'empty-state'},'Нет заданий')
+      : e('div',{style:{overflowX:'auto'}},
+          e('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:13}},
+            e('thead',null,
+              e('tr',null,
+                ...cols.map(c=>e('th',{key:c.key,style:{...thStyle(c.key),width:c.w},
+                  onClick:()=>handleSort(c.key)},c.label+sortArrow(c.key))),
+                e('th',{style:{...thStyle('_act'),width:'4%',cursor:'default'}},'')
+              )
+            ),
+            e('tbody',null,
+              sorted.map((t,i)=>e('tr',{key:i,style:{background:i%2===0?'transparent':'var(--hover)'}},
+                ...cols.map(c=>e('td',{key:c.key,style:{
+                  ...tdStyle,
+                  color:c.key==='deadline'?deadlineColor(t[c.key]):tdStyle.color,
+                  fontWeight:c.key==='deadline'&&t[c.key]?600:400,
+                }},t[c.key]||'—')),
+                e('td',{style:{...tdStyle,textAlign:'center'}},
+                  e('button',{onClick:()=>setCreateActFor(t),
+                    style:{padding:'5px 12px',borderRadius:7,border:'none',
+                      background:'var(--accent)',color:'white',cursor:'pointer',
+                      fontSize:12,fontWeight:600,whiteSpace:'nowrap'}},
+                  '+ Акт')
+                )
+              ))
+            )
+          )
+        ),
+    createActFor&&e(ProrabotkaCreateActModal,{
+      task:createActFor,
+      onClose:()=>setCreateActFor(null),
+      onCreated:(actId)=>{
+        setCreateActFor(null);
+        if(onActCreated) onActCreated(actId);
+      }
+    })
+  );
+}
+
 // Страница технолога
-function TechnologistPage() {
-  const [tab,setTab]=useState('tasks');
+function TechnologistPage({initialActId=null}) {
+  const [tab,setTab]=useState(initialActId?'acts':'tasks');
   const [date,setDate]=useState(todayISO);
   const [tasks,setTasks]=useState([]);
   const [carryoverTasks,setCarryoverTasks]=useState([]);
@@ -10406,6 +10605,7 @@ function TechnologistPage() {
   const [loading,setLoading]=useState(true);
   const [openTaskId,setOpenTaskId]=useState(null);
   const [showAdd,setShowAdd]=useState(false);
+  const [openActId,setOpenActId]=useState(initialActId);
   const [showScrollTop,setShowScrollTop]=useState(false);
   useEffect(()=>{
     const onScroll=()=>setShowScrollTop(window.scrollY>300);
@@ -10501,7 +10701,8 @@ function TechnologistPage() {
     e('div',{className:'mgr-tabs',style:{marginBottom:20}},
       e('button',{className:'mgr-tab'+(tab==='tasks'?' active':''),onClick:()=>setTab('tasks')},'📋 Задания'),
       e('button',{className:'mgr-tab'+(tab==='library'?' active':''),onClick:()=>setTab('library')},'📚 Библиотека эталонов'),
-      e('button',{className:'mgr-tab'+(tab==='acts'?' active':''),onClick:()=>setTab('acts')},'🧪 Акты проработки')
+      e('button',{className:'mgr-tab'+(tab==='acts'?' active':''),onClick:()=>setTab('acts')},'🧪 Акты проработки'),
+      e('button',{className:'mgr-tab'+(tab==='prorabotki'?' active':''),onClick:()=>setTab('prorabotki')},'🔬 Проработки')
     ),
 
     // Вкладка Задания
@@ -10574,7 +10775,8 @@ function TechnologistPage() {
 
     // Вкладка Библиотека
     tab==='library'&&e(LibraryTab,{standards,onReload:async()=>{await reloadStandards();}}),
-    tab==='acts'&&e(ActsPage,null),
+    tab==='acts'&&e(ActsPage,{key:openActId||'acts',initialActId:openActId}),
+    tab==='prorabotki'&&e(ProrabotkaTab,{onActCreated:(actId)=>{setOpenActId(actId);setTab('acts');}}),
 
     // Модалка добавления
     showAdd&&e('div',{style:{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',
@@ -11491,12 +11693,12 @@ function ActForm({actId, templateId, onBack, onSaved}) {
 }
 
 // ── Главная страница Актов ────────────────────────────────────────────────────
-function ActsPage({isManager=false}) {
-  const [view, setView] = useState('list'); // 'list'|'templates'|'new-template'|'edit-template'|'new-act'|'fill-act'
+function ActsPage({isManager=false, initialActId=null}) {
+  const [view, setView] = useState(initialActId?'fill-act':'list');
   const [templates, setTemplates] = useState([]);
   const [acts, setActs] = useState([]);
   const [selectedTemplate, setSelectedTemplate] = useState(null);
-  const [selectedActId, setSelectedActId] = useState(null);
+  const [selectedActId, setSelectedActId] = useState(initialActId);
   const [cloneTarget, setCloneTarget] = useState(null);
   const [cloneName, setCloneName] = useState('');
   const [listFilterRaw, setListFilterRaw] = useState('');
@@ -11737,6 +11939,7 @@ function App() {
   // Tablet lock: ?shop=KEY pins this device to one workshop
   const shopParam=useMemo(()=>new URLSearchParams(location.search).get('shop'),[]);
   const roleParam=useMemo(()=>new URLSearchParams(location.search).get('role'),[]);
+  const actIdParam=useMemo(()=>{ const v=new URLSearchParams(location.search).get('actId'); return v?Number(v):null; },[]);
   const isManager=roleParam==='manager';
   const isTechnologist=roleParam==='technologist';
   const isProduct=roleParam==='product';
@@ -11905,7 +12108,7 @@ function App() {
       e('div',null,e('span',{className:'topnav-brand'},'🔬 Технолог')),
       e('div',{className:'topnav-right'},e('div',{className:'date-pill'},formatDateRu(today)))
     ),
-    e(TechnologistPage,null)
+    e(TechnologistPage,{initialActId:actIdParam})
   );
   if(isProduct) return e('div',null,
     e('div',{className:'topnav'},
