@@ -8538,14 +8538,22 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
   const pct=totalPlan>0?Math.round(totalFact/totalPlan*100):0;
   const lagging=stationSummary.filter(s=>s.plan>0&&s.fact/s.plan<0.85).length;
 
+  const exportStatus=(r)=>{
+    if(r.rowType==='zames') return 'Замес';
+    if(r.rowType==='precut') return 'Для Робокопа';
+    if(r.done) return 'Готово';
+    if(r.skipReason) return SKIP_LABELS[r.skipReason]||r.skipReason;
+    return 'В работе';
+  };
+
   const exportXlsx=()=>{
-    const hdr=["Дата","Цех","Станция","Заготовка","Объём","Упаковка","Кол-во","Выполнено","Время (мин)","Уп/мин","Сотрудник"];
+    const hdr=["Дата","Цех","Станция","Заготовка","Объём","Упаковка","Кол-во","Статус","Выполнено","Время (мин)","Уп/мин","Сотрудник"];
     const data=filtered.map(r=>[
       formatDateRu(r.date),r.shop,r.station,r.name,r.volume||'',r.packName||'',r.planQty||0,
-      r.done?'Да':'Нет',r.durationMin??'',r.minPerPack??'',r.employee
+      exportStatus(r),r.done?'Да':'Нет',r.durationMin??'',r.minPerPack??'',r.employee
     ]);
     const ws=XLSX.utils.aoa_to_sheet([hdr,...data]);
-    ws['!cols']=[10,16,24,38,20,10,8,10,10,8,18].map(w=>({wch:w}));
+    ws['!cols']=[10,16,24,38,20,10,8,14,10,10,8,18].map(w=>({wch:w}));
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb,ws,'Отчёт');
     XLSX.writeFile(wb,`otchet-${dateKey}.xlsx`);
