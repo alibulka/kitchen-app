@@ -9495,6 +9495,7 @@ function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesCh
   const activeTechcard = activeTcEE || activeTcUD; // для обратной совместимости
   const [tab,setTab]=useState('dashboard');
   const [selectedShop,setSelectedShop]=useState(null);
+  const actIdParam=useMemo(()=>{ const v=new URLSearchParams(location.search).get('actId'); return v?Number(v):null; },[]);
 
   // Сбрасываем выбранный цех при выходе из вкладки кухни
   const switchTab=(t)=>{if(t!=='kitchen') setSelectedShop(null); setTab(t);};
