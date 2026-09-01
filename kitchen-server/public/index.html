@@ -8502,7 +8502,8 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
     if(filterStation) rows=rows.filter(r=>r.station===filterStation);
     if(filterStatus==='done') rows=rows.filter(r=>r.done&&r.rowType==='regular');
     if(filterStatus==='todo') rows=rows.filter(r=>!r.done&&!r.skipReason&&r.rowType==='regular');
-    if(filterStatus==='delay') rows=rows.filter(r=>!!r.skipReason&&!r.done&&r.rowType==='regular');
+    if(filterStatus==='no_time'||filterStatus==='no_material')
+      rows=rows.filter(r=>r.skipReason===filterStatus&&!r.done&&r.rowType==='regular');
     if(filterStatus==='zames') rows=rows.filter(r=>r.rowType==='zames');
     if(filterStatus==='precut') rows=rows.filter(r=>r.rowType==='precut');
     if(filterEmployee) rows=rows.filter(r=>r.employee.includes(filterEmployee));
@@ -8643,7 +8644,8 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
           e('option',{value:''},'Все статусы'),
           e('option',{value:'done'},'✓ Готово'),
           e('option',{value:'todo'},'В работе'),
-          e('option',{value:'delay'},'⚠ Задержка'),
+          e('option',{value:'no_time'},'⚠ Не успели'),
+          e('option',{value:'no_material'},'⚠ Нет сырья'),
           e('option',{value:'zames'},'🥣 Замесы'),
           e('option',{value:'precut'},'✂ Для Робокопа')
         ),
@@ -8663,8 +8665,10 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
         if(!carriedRows.length) return null;
         const carriedFiltered=carriedRows.filter(r=>{
           if(filterStatus==='done') return r.done;
-          if(filterStatus==='pending') return !r.done;
-          if(filterStatus==='delay') return r.skipReason&&!r.done&&!r.isCarriedOver;
+          if(filterStatus==='todo') return !r.done&&!r.skipReason;
+          if(filterStatus==='no_time'||filterStatus==='no_material')
+            return r.skipReason===filterStatus&&!r.done;
+          if(filterStatus==='zames'||filterStatus==='precut') return false;
           return true;
         }).filter(r=>!filterShop||r.shop===filterShop);
         if(!carriedFiltered.length) return null;
