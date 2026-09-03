@@ -6,6 +6,7 @@ const fs = require('fs');
 
 const SPREADSHEET_ID = process.env.FACTS_SPREADSHEET_ID || '1F7iI77aLPMy4-1Bp7aLblVgTOdKzkRyih5DDEaRVXAQ';
 const SHEET_NAME = process.env.FACTS_SHEET_NAME || 'Лист1';
+const FACTS_SHEETS_ENABLED = process.env.FACTS_SHEETS_ENABLED === 'true';
 
 // Индексы колонок (0-based)
 const COL_WRAPPER_ID  = 0; // A — Wrapper ID
@@ -71,6 +72,7 @@ function httpsReq(method, host, path, token, body, contentType) {
 // Основная функция: принимает массив обновлений и пишет в Sheet
 // updates: [{itemId, volume, packName, planDate, factValue}]
 async function writeFacts(updates) {
+  if (!FACTS_SHEETS_ENABLED) { console.log('[facts-sheets] запись отключена для этого окружения'); return; }
   if (!getCreds()) { console.warn('[facts-sheets] credentials отсутствуют'); return; }
   if (!updates.length) return;
 
@@ -128,6 +130,7 @@ const COL2_DATE       = 2; // C
 const COL2_FACT       = 4; // E
 
 async function writeFacts2(updates) {
+  if (!FACTS_SHEETS_ENABLED) { console.log('[facts-sheets2] запись отключена для этого окружения'); return; }
   if (!getCreds()) { console.warn('[facts-sheets2] credentials отсутствуют'); return; }
   if (!updates.length) return;
 
