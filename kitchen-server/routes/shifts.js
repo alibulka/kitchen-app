@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../db');
+let writeFacts, writeFacts2;
+try { ({ writeFacts, writeFacts2 } = require('../lib/facts-sheets')); } catch {}
 
 // ─── Чтение смены ─────────────────────────────────────────────────────────────
 
@@ -309,6 +311,100 @@ function splitCompKey(compKey) {
 }
 
 
+// Определяем плановую дату для каждого факта и пишем в Google Sheets
+async function syncFactsToSheet(date, factsMap) {
+  // Получаем техкарты текущей и предыдущей смены
+  const { rows: [cur] } = await pool.query(
+    'SELECT techcard_id, ud_techcard_id FROM shifts WHERE date=$1', [date]);
+  if (!cur) return;
+
+  // Для каждого факта: найти технкарту содержащую эту строку и дату смены с ней
+  // Берём все техкарты всех смен (до текущей даты включительно) с датами
+  const { rows: allShiftTcs } = await pool.query(
+    `SELECT s.date, tpl.item_id, tpl.line_idx, tpl.volume, tpl.pack_name
+     FROM shifts s
+     JOIN techcard_pack_lines tpl ON tpl.techcard_id = s.techcard_id
+     WHERE s.date <= $1
+     ORDER BY s.date DESC`, [date]);
+
+  // Индекс: "item_id-line_idx" → [{date, volume, pack_name}, ...] — от новых к старым
+  const tcByItem = {};
+  for (const r of allShiftTcs) {
+    const k = `${r.item_id}-${r.line_idx}`;
+    if (!tcByItem[k]) tcByItem[k] = [];
+    tcByItem[k].push(r);
+  }
+
+  // Для каждого факта определяем плановую дату и собираем обновления
+  const updates = [];
+  for (const [key, value] of Object.entries(factsMap)) {
+    if (value == null) continue;
+    const m = key.match(/^(.+)-(\d+)-pl-(\d+)$/);
+    if (!m) continue;
+    const itemId = m[2];
+    const lineIdx = Number(m[3]);
+    const lookupKey = `${itemId}-${lineIdx}`;
+
+    const candidates = tcByItem[lookupKey];
+    if (!candidates || !candidates.length) continue;
+
+    // Позиция считается выполненной только если done=1 И факт >= план
+    const { rows: doneRows } = await pool.query(
+      `SELECT sis.shift_date
+       FROM shift_item_status sis
+       WHERE sis.item_id=$1 AND sis.done=1
+       AND sis.shift_date IN (${candidates.map((_,i)=>`$${i+2}`).join(',')})`,
+      [itemId, ...candidates.map(c=>c.date)]);
+
+    const doneDates = new Set();
+    for (const dr of doneRows) {
+      const candidate = candidates.find(c => c.date === dr.shift_date);
+      if (!candidate) continue;
+      const planQty = Number(candidate.qty || 0);
+      if (planQty === 0) { doneDates.add(dr.shift_date); continue; }
+      const { rows: factRows } = await pool.query(
+        `SELECT COALESCE(SUM(value), 0) AS total FROM shift_facts_n
+         WHERE item_id=$1 AND line_idx=$2 AND shift_date=$3`,
+        [itemId, lineIdx, dr.shift_date]);
+      if (Number(factRows[0]?.total || 0) >= planQty) doneDates.add(dr.shift_date);
+    }
+
+    // planDate = самая ранняя невыполненная дата после последней полностью выполненной
+    // Это корректно обрабатывает случай когда позиция одновременно в нескольких техкартах
+    const lastFullyDone = candidates.find(c => doneDates.has(c.date)); // DESC → самая новая выполненная
+    const notDone = lastFullyDone
+      ? candidates.filter(c => c.date > lastFullyDone.date && !doneDates.has(c.date))
+      : candidates.filter(c => !doneDates.has(c.date));
+    const planEntry = notDone.length
+      ? notDone.reduce((a, b) => a.date < b.date ? a : b) // самая ранняя невыполненная
+      : candidates[0];
+
+    const packLine = planEntry;
+    const planDate = planEntry.date;
+
+    // Суммируем факты по всем сменам от planDate до date (перенос может быть несколько дней)
+    const stationKey = m[1];
+    const { rows: sumRows } = await pool.query(
+      `SELECT COALESCE(SUM(value), 0) AS total FROM shift_facts_n
+       WHERE item_id=$1 AND line_idx=$2 AND shift_date >= $3 AND shift_date <= $4`,
+      [itemId, lineIdx, planDate, date]);
+    const totalFact = Number(sumRows[0]?.total || 0);
+
+    updates.push({
+      itemId,
+      volume: packLine.volume,
+      packName: packLine.pack_name,
+      planDate,
+      factValue: totalFact,
+    });
+  }
+
+  if (updates.length) {
+    await writeFacts(updates);
+    if (writeFacts2) await writeFacts2(updates);
+  }
+}
+
 // ─── Маршруты ─────────────────────────────────────────────────────────────────
 
 router.get('/index', async (req, res) => {
@@ -378,9 +474,16 @@ router.post('/:date', async (req, res) => {
       wss.clients.forEach(c => { if (c.readyState === 1) c.send(msg); });
     }
     res.json({ ok: true });
+    // Асинхронно синхронизируем факты в Google Sheets
+    const factsKeys = shift.facts ? Object.keys(shift.facts) : [];
+    if (writeFacts && factsKeys.length > 0) {
+      syncFactsToSheet(date, shift.facts).catch(e => console.error('[facts-sheets]', e.message));
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
+
 module.exports = router;
+module.exports.syncFactsToSheet = syncFactsToSheet;
