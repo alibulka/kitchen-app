@@ -116,4 +116,59 @@ async function writeFacts(updates) {
   console.log(`[facts-sheets] обновлено ${batchData.length} ячеек`);
 }
 
-module.exports = { writeFacts };
+// ─── Второй документ: Wrapper ID + Дата → Резерв факт (колонка E) ────────────
+// Структура: A=Wrapper ID, B=Название, C=Дата работ, D=Резерв план, E=Резерв факт
+// updates: [{itemId, planDate, factValue}] — упаковка игнорируется, факт суммируется по позиции+дате
+
+const SPREADSHEET_ID_2  = process.env.FACTS2_SPREADSHEET_ID || '1Ru1gXNP-1eN31FWTtwJI6E57ccHhh1XkdDe9Llq9bqU';
+const SHEET_NAME_2      = process.env.FACTS2_SHEET_NAME     || 'Лист1';
+
+const COL2_WRAPPER_ID = 0; // A
+const COL2_DATE       = 2; // C
+const COL2_FACT       = 4; // E
+
+async function writeFacts2(updates) {
+  if (!getCreds()) { console.warn('[facts-sheets2] credentials отсутствуют'); return; }
+  if (!updates.length) return;
+
+  // Схлопываем по itemId+date — суммируем факт по всем упаковкам
+  const totals = {};
+  for (const u of updates) {
+    const key = `${String(u.itemId).trim()}|${String(u.planDate).trim()}`;
+    totals[key] = (totals[key] || 0) + Number(u.factValue || 0);
+  }
+
+  const token = await getAccessToken();
+
+  const range = encodeURIComponent(`${SHEET_NAME_2}!A:E`);
+  const res = await httpsReq('GET', 'sheets.googleapis.com',
+    `/v4/spreadsheets/${SPREADSHEET_ID_2}/values/${range}`, token);
+  const rows = res.values || [];
+
+  // Индекс: "wrapperId|date" → rowNum (1-based)
+  const index = {};
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    const wid  = (row[COL2_WRAPPER_ID] || '').toString().trim();
+    const date = (row[COL2_DATE]       || '').toString().trim();
+    if (wid) index[`${wid}|${date}`] = i + 1;
+  }
+
+  const batchData = [];
+  for (const [key, total] of Object.entries(totals)) {
+    const rowNum = index[key];
+    if (!rowNum) { console.warn(`[facts-sheets2] строка не найдена: ${key}`); continue; }
+    batchData.push({ range: `${SHEET_NAME_2}!E${rowNum}`, values: [[String(total)]] });
+  }
+
+  if (!batchData.length) { console.log('[facts-sheets2] нет совпадений для обновления'); return; }
+
+  const body = JSON.stringify({ valueInputOption: 'RAW', data: batchData });
+  await httpsReq('POST', 'sheets.googleapis.com',
+    `/v4/spreadsheets/${SPREADSHEET_ID_2}/values:batchUpdate`,
+    token, body, 'application/json');
+
+  console.log(`[facts-sheets2] обновлено ${batchData.length} ячеек`);
+}
+
+module.exports = { writeFacts, writeFacts2 };
