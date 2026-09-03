@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../db');
-let writeFacts; try { writeFacts = require('../lib/facts-sheets').writeFacts; } catch {}
+let writeFacts, writeFacts2;
+try { ({ writeFacts, writeFacts2 } = require('../lib/facts-sheets')); } catch {}
 
 // ─── Чтение смены ─────────────────────────────────────────────────────────────
 
@@ -347,18 +348,36 @@ async function syncFactsToSheet(date, factsMap) {
     const candidates = tcByItem[lookupKey];
     if (!candidates || !candidates.length) continue;
 
-    // Ищем ближайшую смену где эта строка НЕ была выполнена
-    // (если выполнена — значит это уже новое задание, не перенос)
+    // Позиция считается выполненной только если done=1 И факт >= план
     const { rows: doneRows } = await pool.query(
-      `SELECT shift_date FROM shift_item_status
-       WHERE item_id=$1 AND done=1
-       AND shift_date IN (${candidates.map((_,i)=>`$${i+2}`).join(',')})`,
+      `SELECT sis.shift_date
+       FROM shift_item_status sis
+       WHERE sis.item_id=$1 AND sis.done=1
+       AND sis.shift_date IN (${candidates.map((_,i)=>`$${i+2}`).join(',')})`,
       [itemId, ...candidates.map(c=>c.date)]);
-    const doneDates = new Set(doneRows.map(r => r.shift_date));
 
-    // Берём самую недавнюю смену где позиция не выполнена (candidates уже отсортированы DESC)
-    const planEntry = candidates.find(c => !doneDates.has(c.date))
-      || candidates[0]; // fallback на текущую
+    const doneDates = new Set();
+    for (const dr of doneRows) {
+      const candidate = candidates.find(c => c.date === dr.shift_date);
+      if (!candidate) continue;
+      const planQty = Number(candidate.qty || 0);
+      if (planQty === 0) { doneDates.add(dr.shift_date); continue; }
+      const { rows: factRows } = await pool.query(
+        `SELECT COALESCE(SUM(value), 0) AS total FROM shift_facts_n
+         WHERE item_id=$1 AND line_idx=$2 AND shift_date=$3`,
+        [itemId, lineIdx, dr.shift_date]);
+      if (Number(factRows[0]?.total || 0) >= planQty) doneDates.add(dr.shift_date);
+    }
+
+    // planDate = самая ранняя невыполненная дата после последней полностью выполненной
+    // Это корректно обрабатывает случай когда позиция одновременно в нескольких техкартах
+    const lastFullyDone = candidates.find(c => doneDates.has(c.date)); // DESC → самая новая выполненная
+    const notDone = lastFullyDone
+      ? candidates.filter(c => c.date > lastFullyDone.date && !doneDates.has(c.date))
+      : candidates.filter(c => !doneDates.has(c.date));
+    const planEntry = notDone.length
+      ? notDone.reduce((a, b) => a.date < b.date ? a : b) // самая ранняя невыполненная
+      : candidates[0];
 
     const packLine = planEntry;
     const planDate = planEntry.date;
@@ -380,7 +399,10 @@ async function syncFactsToSheet(date, factsMap) {
     });
   }
 
-  if (updates.length) await writeFacts(updates);
+  if (updates.length) {
+    await writeFacts(updates);
+    if (writeFacts2) await writeFacts2(updates);
+  }
 }
 
 // ─── Маршруты ─────────────────────────────────────────────────────────────────
