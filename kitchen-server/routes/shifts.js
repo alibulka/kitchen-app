@@ -321,7 +321,7 @@ async function syncFactsToSheet(date, factsMap) {
   // Для каждого факта: найти технкарту содержащую эту строку и дату смены с ней
   // Берём все техкарты всех смен (до текущей даты включительно) с датами
   const { rows: allShiftTcs } = await pool.query(
-    `SELECT s.date, tpl.item_id, tpl.line_idx, tpl.volume, tpl.pack_name
+    `SELECT s.date, tpl.item_id, tpl.line_idx, tpl.volume, tpl.pack_name, tpl.qty
      FROM shifts s
      JOIN techcard_pack_lines tpl ON tpl.techcard_id = s.techcard_id
      WHERE s.date <= $1
