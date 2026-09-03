@@ -4,7 +4,7 @@ const https = require('https');
 const path = require('path');
 const fs = require('fs');
 
-const SPREADSHEET_ID = process.env.FACTS_SPREADSHEET_ID || '120rHcvJvG4XeQmwKpfmQ2DtCeYzUQj1eUOhtfL7cOH0';
+const SPREADSHEET_ID = process.env.FACTS_SPREADSHEET_ID || '1F7iI77aLPMy4-1Bp7aLblVgTOdKzkRyih5DDEaRVXAQ';
 const SHEET_NAME = process.env.FACTS_SHEET_NAME || 'Лист1';
 
 // Индексы колонок (0-based)
