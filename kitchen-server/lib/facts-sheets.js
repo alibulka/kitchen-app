@@ -69,6 +69,19 @@ function httpsReq(method, host, path, token, body, contentType) {
   });
 }
 
+// Google Sheets должен получать факт как число, а не текст вида "'130".
+function normalizeFactNumber(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  const normalized = String(value ?? '')
+    .trim()
+    .replace(/^'+/, '')
+    .replace(/\s/g, '')
+    .replace(',', '.');
+  if (!normalized) return null;
+  const number = Number(normalized);
+  return Number.isFinite(number) ? number : null;
+}
+
 // Основная функция: принимает массив обновлений и пишет в Sheet
 // updates: [{itemId, volume, packName, planDate, factValue}]
 async function writeFacts(updates) {
@@ -103,8 +116,13 @@ async function writeFacts(updates) {
       console.warn(`[facts-sheets] строка не найдена: ${key}`);
       continue;
     }
+    const factNumber = normalizeFactNumber(u.factValue);
+    if (factNumber == null) {
+      console.warn(`[facts-sheets] некорректный факт: ${u.factValue}`);
+      continue;
+    }
     const cellRange = `${SHEET_NAME}!G${rowNum}`;
-    batchData.push({ range: cellRange, values: [[String(u.factValue)]] });
+    batchData.push({ range: cellRange, values: [[factNumber]] });
   }
 
   if (!batchData.length) { console.log('[facts-sheets] нет совпадений для обновления'); return; }
@@ -138,7 +156,12 @@ async function writeFacts2(updates) {
   const totals = {};
   for (const u of updates) {
     const key = `${String(u.itemId).trim()}|${String(u.planDate).trim()}`;
-    totals[key] = (totals[key] || 0) + Number(u.factValue || 0);
+    const factNumber = normalizeFactNumber(u.factValue);
+    if (factNumber == null) {
+      console.warn(`[facts-sheets2] некорректный факт: ${u.factValue}`);
+      continue;
+    }
+    totals[key] = (totals[key] || 0) + factNumber;
   }
 
   const token = await getAccessToken();
@@ -161,7 +184,7 @@ async function writeFacts2(updates) {
   for (const [key, total] of Object.entries(totals)) {
     const rowNum = index[key];
     if (!rowNum) { console.warn(`[facts-sheets2] строка не найдена: ${key}`); continue; }
-    batchData.push({ range: `${SHEET_NAME_2}!E${rowNum}`, values: [[String(total)]] });
+    batchData.push({ range: `${SHEET_NAME_2}!E${rowNum}`, values: [[total]] });
   }
 
   if (!batchData.length) { console.log('[facts-sheets2] нет совпадений для обновления'); return; }
