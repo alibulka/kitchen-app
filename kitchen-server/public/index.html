@@ -10461,6 +10461,7 @@ function ProrabotkaCreateActModal({task, onClose, onCreated}) {
         })});
       const d=await r.json();
       if(d.error) throw new Error(d.error);
+      if(d.sheetSync?.status==='error') alert(d.sheetSync.message);
       onCreated(d.id||d.act?.id);
     } catch(err) {
       alert('Ошибка: '+err.message);
@@ -11638,6 +11639,7 @@ function ActForm({actId, templateId, onBack, onSaved}) {
       const d = await r.json();
       if(d.error) return alert('Ошибка: '+d.error);
       if(onSaved) onSaved(aid, status);
+      if(d.sheetSync?.status==='error') { alert(d.sheetSync.message); return; }
       if(status==='done') onBack();
     } finally{setSaving(false);}
   };

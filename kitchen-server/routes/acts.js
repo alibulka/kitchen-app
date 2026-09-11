@@ -6,18 +6,7 @@ const multer = require('multer');
 const { pool } = require('../db');
 const { generateTemplateDOCX, generateActDOCX } = require('../docx-gen');
 
-function prorabotkaWriteback(sheetId, fields) {
-  const http = require('http');
-  const body = JSON.stringify({ sheetId, ...fields });
-  const req = http.request({
-    hostname: '127.0.0.1', port: process.env.PORT || 3000,
-    path: '/api/prorabotki/result', method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
-  }, res => { res.resume(); }); // читаем и сбрасываем ответ чтобы сокет не завис
-  req.on('error', e => console.error('[acts] writeback error:', e.message));
-  req.write(body);
-  req.end();
-}
+const { syncActSafely } = require('../lib/prorabotki-writeback');
 
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -334,7 +323,8 @@ router.post('/acts', async (req, res) => {
        gross_mass != null ? Number(gross_mass) : null,
        sheet_id || null, source_sheet || null]
     );
-    res.json({ ok: true, id: act.id });
+    const sheetSync = await syncActSafely(pool, act.id);
+    res.json({ ok: true, id: act.id, sheetSync });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -369,30 +359,8 @@ router.put('/acts/:id', async (req, res) => {
       }
     });
 
-    // Write-back в Google Sheet если акт привязан к заданию проработки
-    if (conclusion !== undefined || defrost_mass !== undefined || gross_mass !== undefined || status === 'done') {
-      const { rows: [act] } = await pool.query('SELECT source_row, date, conclusion, gross_mass, defrost_mass FROM acts WHERE id=$1', [req.params.id]);
-      if (act && act.source_row) {
-        // Собираем поля с типом 'comment' для выжимки
-        const { rows: fieldRows } = await pool.query(
-          `SELECT f.label, v.value FROM act_values v
-           JOIN act_fields f ON f.id=v.field_id
-           WHERE v.act_id=$1 AND f.type='comment' AND v.value IS NOT NULL AND v.value<>''
-           ORDER BY f.sort_order`,
-          [req.params.id]
-        );
-        const comment = fieldRows.length ? fieldRows.map(r => `${r.label}: ${r.value}`).join('\n') : null;
-        prorabotkaWriteback(String(act.source_row), {
-          workDate:    act.date || null,
-          grossMass:   act.gross_mass != null ? act.gross_mass : null,
-          defrostMass: act.defrost_mass != null ? act.defrost_mass : null,
-          conclusion:  act.conclusion || null,
-          comment,
-        });
-      }
-    }
-
-    res.json({ ok: true });
+    const sheetSync = await syncActSafely(pool, req.params.id);
+    res.json({ ok: true, sheetSync });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -48,3 +48,4 @@ waitForPort = 5000
 
 [userenv.production]
 FACTS_SHEETS_ENABLED = "true"
+PRORABOTKI_WRITE_ENABLED = "true"
