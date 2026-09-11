@@ -62,13 +62,18 @@ test('renamed acts sync all comments; mismatched source rows block writes', asyn
   let sourceName = 'Старое название';
   const writes = [];
   const dbUpdates = [];
+  let locks = 0;
   const pool = { async query(sql, params) {
+    if (sql.includes('pg_advisory_xact_lock')) { locks++; return { rows: [] }; }
     if (sql.startsWith('UPDATE acts')) { dbUpdates.push(params); return { rows: [] }; }
     if (sql.includes('JOIN act_fields')) return { rows: [{ label: 'Вкус', value: 'Хороший' }, { label: 'Вид', value: 'Нормальный' }] };
     return { rows: [act] };
   } };
+  pool.connect = async () => pool;
+  pool.withTransaction = async fn => fn(pool);
   JWT.prototype.request = async function(request) {
     if (request.method === 'POST') { writes.push(request.data); return { data: {} }; }
+    assert.ok(locks > 0, 'Google access must run under a cross-instance lock');
     if (request.url.includes('/values/')) {
       const row = []; row[3] = sourceName;
       return { data: { values: [row] } };
@@ -83,6 +88,7 @@ test('renamed acts sync all comments; mismatched source rows block writes', asyn
     sourceName = 'Другое задание';
     assert.equal((await syncActSafely(pool, 42)).status, 'error');
     assert.equal(writes.length, 1);
+    assert.equal(locks, 2);
   } finally {
     JWT.prototype.request = originalRequest;
     if (oldFlag === undefined) delete process.env.PRORABOTKI_WRITE_ENABLED;

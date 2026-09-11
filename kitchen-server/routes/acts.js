@@ -333,21 +333,33 @@ router.post('/acts', async (req, res) => {
 // Сохранить значения акта
 router.put('/acts/:id', async (req, res) => {
   try {
-    const { values = {}, status, raw_material, product_name, manufacturer, supplier, conclusion, gross_mass, defrost_mass } = req.body;
+    const { values = {}, status, date, raw_material, product_name, manufacturer, supplier, conclusion, gross_mass, defrost_mass } = req.body;
+    const normalizeMass = value => value == null || String(value).trim() === ''
+      ? null : Number(String(value).replace(',', '.'));
+    for (const mass of [gross_mass, defrost_mass]) {
+      const value = normalizeMass(mass);
+      if (value !== null && (!Number.isFinite(value) || value < 0)) {
+        return res.status(400).json({ error: 'Масса должна быть неотрицательным числом' });
+      }
+    }
+    if (date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: 'Неверный формат даты' });
+    }
     await pool.withTransaction(async (client) => {
       // Preserve the source name before editing, so renaming can safely write back.
       await client.query(`UPDATE acts SET source_product_name=product_name
         WHERE id=$1 AND source_row IS NOT NULL AND source_product_name IS NULL`, [req.params.id]);
       const sets = [];
       const params = [];
+      if (date !== undefined) { sets.push(`date=$${params.length+1}`); params.push(date); }
       if (status) { sets.push(`status=$${params.length+1}`); params.push(status); }
       if (raw_material !== undefined) { sets.push(`raw_material=$${params.length+1}`); params.push(raw_material); }
       if (product_name !== undefined) { sets.push(`product_name=$${params.length+1}`); params.push(product_name); }
       if (manufacturer !== undefined) { sets.push(`manufacturer=$${params.length+1}`); params.push(manufacturer); }
       if (supplier !== undefined) { sets.push(`supplier=$${params.length+1}`); params.push(supplier); }
       if (conclusion !== undefined) { sets.push(`conclusion=$${params.length+1}`); params.push(conclusion); }
-      if (gross_mass !== undefined) { sets.push(`gross_mass=$${params.length+1}`); params.push(gross_mass === '' ? null : Number(gross_mass)); }
-      if (defrost_mass !== undefined) { sets.push(`defrost_mass=$${params.length+1}`); params.push(defrost_mass === '' ? null : Number(defrost_mass)); }
+      if (gross_mass !== undefined) { sets.push(`gross_mass=$${params.length+1}`); params.push(normalizeMass(gross_mass)); }
+      if (defrost_mass !== undefined) { sets.push(`defrost_mass=$${params.length+1}`); params.push(normalizeMass(defrost_mass)); }
       if (sets.length > 0) {
         sets.push(`updated_at=(NOW()::text)`);
         params.push(req.params.id);

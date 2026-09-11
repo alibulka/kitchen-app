@@ -10973,7 +10973,7 @@ function ActsViewer({readOnly, initialActId=null}) {
           url.searchParams.set('actId',openAct.id);
           navigator.clipboard.writeText(url.toString()).then(()=>alert('Ссылка скопирована!')).catch(()=>prompt('Ссылка на акт:',url.toString()));
         },style:btnStyle},'🔗 Ссылка'),
-        e('button',{onClick:()=>setEditing(true),style:btnStyle},'✏ Редактировать'),
+        !readOnly&&e('button',{onClick:()=>setEditing(true),style:btnStyle},'✏ Редактировать'),
         e('a',{href:`/api/acts/acts/${openAct.id}/docx`,download:true,
           style:{...btnStyle,textDecoration:'none',display:'inline-flex',alignItems:'center',gap:6}},
           '⬇ Скачать .docx'),
@@ -11614,8 +11614,13 @@ function ActForm({actId, templateId, onBack, onSaved}) {
       const manufacturer = values._manufacturer || '';
       const supplier = values._supplier || '';
       const conclusion = values._conclusion || '';
-      const grossMassSave = values._gross_mass !== '' ? (parseFloat(values._gross_mass)||null) : null;
-      const defrostMassSave = values._defrost_mass !== '' ? (parseFloat(values._defrost_mass)||null) : null;
+      const parseMass = value => value == null || String(value).trim() === ''
+        ? null : Number(String(value).replace(',', '.'));
+      const grossMassSave = parseMass(values._gross_mass);
+      const defrostMassSave = parseMass(values._defrost_mass);
+      if ([grossMassSave, defrostMassSave].some(v => v !== null && (!Number.isFinite(v) || v < 0))) {
+        alert('Масса должна быть неотрицательным числом'); return;
+      }
       const saveValues = {...values};
       delete saveValues._date; delete saveValues._raw_material;
       delete saveValues._product_name; delete saveValues._manufacturer; delete saveValues._supplier;
@@ -11633,7 +11638,7 @@ function ActForm({actId, templateId, onBack, onSaved}) {
       }
       const r = await fetch(`/api/acts/acts/${aid}`,{method:'PUT',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({values:saveValues, status, raw_material:rawMaterial,
+        body:JSON.stringify({values:saveValues, status, date, raw_material:rawMaterial,
           product_name:productName, manufacturer, supplier, conclusion,
           gross_mass:grossMassSave, defrost_mass:defrostMassSave})});
       const d = await r.json();

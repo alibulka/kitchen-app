@@ -186,6 +186,9 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS quality_standard_photos (
     if (!cols.includes('gross_mass'))    sqlite.exec('ALTER TABLE acts ADD COLUMN gross_mass REAL');
     if (!cols.includes('defrost_mass'))  sqlite.exec('ALTER TABLE acts ADD COLUMN defrost_mass REAL');
     if (!cols.includes('source_product_name')) sqlite.exec('ALTER TABLE acts ADD COLUMN source_product_name TEXT');
+    if (!cols.includes('supplier')) sqlite.exec("ALTER TABLE acts ADD COLUMN supplier TEXT NOT NULL DEFAULT ''");
+    if (!cols.includes('source_row')) sqlite.exec('ALTER TABLE acts ADD COLUMN source_row TEXT');
+    if (!cols.includes('source_sheet')) sqlite.exec('ALTER TABLE acts ADD COLUMN source_sheet TEXT');
   }
 }
 

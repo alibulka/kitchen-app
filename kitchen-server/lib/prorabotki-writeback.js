@@ -62,7 +62,7 @@ async function syncAct(pool, actId) {
   if (!initial?.source_row) return { status: 'unlinked' };
   const key = initial.source_row;
   const previous = queues.get(key) || Promise.resolve();
-  const job = previous.catch(() => {}).then(async () => {
+  const runSync = async (pool) => {
     // Re-read after earlier writes finish; do not send a stale request snapshot.
     const { rows: [act] } = await pool.query('SELECT * FROM acts WHERE id=$1', [actId]);
     if (!act || act.source_row !== key) throw new Error('Привязка акта изменилась');
@@ -98,6 +98,16 @@ async function syncAct(pool, actId) {
     await pool.query('UPDATE acts SET source_product_name=$1 WHERE id=$2',
       [act.product_name || expectedName, actId]);
     return { status: 'synced', cells: data.length };
+  };
+  const job = previous.catch(() => {}).then(() => {
+    if (typeof pool.connect === 'function' && typeof pool.withTransaction === 'function') {
+      return pool.withTransaction(async client => {
+        // Serialize writes to one source row across production autoscale instances.
+        await client.query("SELECT pg_advisory_xact_lock(72841, hashtext($1))", [key]);
+        return runSync(client);
+      });
+    }
+    return runSync(pool);
   });
   queues.set(key, job);
   try { return await job; } finally { if (queues.get(key) === job) queues.delete(key); }
