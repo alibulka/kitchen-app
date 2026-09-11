@@ -10452,8 +10452,12 @@ function ProrabotkaCreateActModal({task, onClose, onCreated}) {
           template_id:Number(templateId),
           date:todayISO(),
           product_name: task.name||'',
-          manufacturer: task.supplier||'',
+          manufacturer: task.manufacturer||'',
+          supplier: task.supplier||'',
           raw_material: task.material||'',
+          gross_mass: task.grossMass ? Number(task.grossMass) : null,
+          sheet_id: task.sheetId||null,
+          source_sheet: task.sourceSheet||null,
         })});
       const d=await r.json();
       if(d.error) throw new Error(d.error);
@@ -10493,19 +10497,28 @@ function ProrabotkaCreateActModal({task, onClose, onCreated}) {
 }
 
 // Вкладка Проработки — задания из Google Sheet
-function ProrabotkaTab({onActCreated}) {
+function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
   const [tasks,setTasks]=useState(null);
   const [error,setError]=useState(null);
   const [search,setSearch]=useState('');
   const [createActFor,setCreateActFor]=useState(null);
   const [sortCol,setSortCol]=useState('deadline');
   const [sortDir,setSortDir]=useState(1); // 1=asc, -1=desc
+  // actBySheetId/setActBySheetId приходят из TechnologistPage (общее состояние)
 
   useEffect(()=>{
-    fetch('/api/prorabotki/tasks')
+    fetch('/api/prorabotki')
       .then(r=>r.json())
       .then(d=>{ if(d.error) setError(d.error); else setTasks(d.tasks||[]); })
       .catch(e=>setError(e.message));
+    fetch('/api/acts/acts')
+      .then(r=>r.json())
+      .then(d=>{
+        const map={};
+        (d.acts||[]).forEach(a=>{ if(a.source_row) map[String(a.source_row)]=a; });
+        setActBySheetId(map);
+      })
+      .catch(()=>{});
   },[]);
 
   const handleSort=col=>{
@@ -10546,26 +10559,39 @@ function ProrabotkaTab({onActCreated}) {
   },[tasks,search,sortCol,sortDir]);
 
   const cols=[
-    {key:'material',label:'Сырьё',w:'18%'},
-    {key:'name',label:'Название на этикетке',w:'20%'},
-    {key:'type',label:'Тип',w:'10%'},
-    {key:'supplier',label:'Поставщик',w:'14%'},
-    {key:'manufacturer',label:'Производитель',w:'14%'},
-    {key:'arrivalDate',label:'Дата прихода',w:'10%'},
-    {key:'deadline',label:'Дедлайн',w:'10%'},
+    {key:'material',label:'Сырьё',w:'8%'},
+    {key:'name',label:'Название',w:'13%'},
+    {key:'productType',label:'Тип',w:'5%'},
+    {key:'manufacturer',label:'Производитель',w:'10%'},
+    {key:'supplier',label:'Поставщик',w:'9%'},
+    {key:'arrivalDate',label:'Приход',w:'7%'},
+    {key:'deadline',label:'Дедлайн',w:'7%'},
+    {key:'grossMass',label:'Брутто',w:'6%'},
+    {key:'defrostMass',label:'Нетто',w:'6%'},
+    {key:'_defrostPct',label:'%дефр.',w:'5%'},
+    {key:'_act',label:'Акт',w:'7%'},
   ];
 
   const sortArrow=col=>sortCol===col?(sortDir===1?' ↑':' ↓'):'';
 
   const thStyle=(col)=>({
-    padding:'9px 10px',textAlign:'left',fontWeight:700,fontSize:12,
+    padding:'7px 8px',textAlign:'left',fontWeight:700,fontSize:11,
     color:'var(--muted)',borderBottom:'2px solid var(--border)',
     cursor:'pointer',userSelect:'none',whiteSpace:'nowrap',
     background:sortCol===col?'var(--hover)':'transparent',
+    overflow:'hidden',
   });
 
-  const tdStyle={padding:'9px 10px',fontSize:13,color:'var(--text)',
-    borderBottom:'1px solid var(--border)',verticalAlign:'middle'};
+  const tdStyle={padding:'7px 8px',fontSize:12,color:'var(--text)',
+    borderBottom:'1px solid var(--border)',verticalAlign:'middle',
+    overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'};
+
+  // Форматируем дату: "2026-09-03" → "03.09.2026", остальные оставляем как есть
+  const fmtDate=v=>{
+    if(!v) return '';
+    const m=v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return m ? `${m[3]}.${m[2]}.${m[1]}` : v;
+  };
 
   const deadlineColor=v=>{
     const ts=parseDate(v);
@@ -10589,29 +10615,45 @@ function ProrabotkaTab({onActCreated}) {
     sorted.length===0
       ? e('div',{className:'empty-state'},'Нет заданий')
       : e('div',{style:{overflowX:'auto'}},
-          e('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:13}},
+          e('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:12,tableLayout:'fixed'}},
             e('thead',null,
               e('tr',null,
-                ...cols.map(c=>e('th',{key:c.key,style:{...thStyle(c.key),width:c.w},
-                  onClick:()=>handleSort(c.key)},c.label+sortArrow(c.key))),
-                e('th',{style:{...thStyle('_act'),width:'4%',cursor:'default'}},'')
+                ...cols.map(c=>e('th',{key:c.key,style:{...thStyle(c.key),width:c.w,
+                  cursor:c.key==='_act'?'default':'pointer'},
+                  onClick:c.key==='_act'?undefined:()=>handleSort(c.key)},
+                  c.key==='_act'?'':c.label+sortArrow(c.key)))
               )
             ),
             e('tbody',null,
-              sorted.map((t,i)=>e('tr',{key:i,style:{background:i%2===0?'transparent':'var(--hover)'}},
+              sorted.map((t,i)=>{
+                const gm=parseFloat(t.grossMass)||0;
+                const dm=parseFloat(t.defrostMass)||0;
+                const dpct=gm>0?((gm-dm)/gm*100).toFixed(1)+'%':'—';
+                const cellVal=c=>{
+                  if(c.key==='_defrostPct') return dpct;
+                  if(c.key==='_act') return actBySheetId[t.sheetId]
+                    ? e('button',{
+                        onClick:()=>onActCreated(actBySheetId[t.sheetId].id),
+                        style:{padding:'4px 8px',borderRadius:7,border:'1.5px solid var(--ok)',
+                          background:'transparent',color:'var(--ok)',cursor:'pointer',
+                          fontSize:11,fontWeight:600,whiteSpace:'nowrap',width:'100%'}},
+                        '✓ Акт')
+                    : e('button',{onClick:()=>setCreateActFor(t),
+                        style:{padding:'4px 8px',borderRadius:7,border:'none',
+                          background:'var(--accent)',color:'white',cursor:'pointer',
+                          fontSize:11,fontWeight:600,whiteSpace:'nowrap',width:'100%'}},
+                      '+ Акт');
+                  if(['arrivalDate','deadline'].includes(c.key)) return fmtDate(t[c.key])||'—';
+                  return (t[c.key]!=null&&t[c.key]!=='')?t[c.key]:'—';
+                };
+                return e('tr',{key:i,style:{background:i%2===0?'transparent':'var(--hover)'}},
                 ...cols.map(c=>e('td',{key:c.key,style:{
                   ...tdStyle,
+                  textAlign:c.key==='_act'?'center':tdStyle.textAlign,
                   color:c.key==='deadline'?deadlineColor(t[c.key]):tdStyle.color,
                   fontWeight:c.key==='deadline'&&t[c.key]?600:400,
-                }},t[c.key]||'—')),
-                e('td',{style:{...tdStyle,textAlign:'center'}},
-                  e('button',{onClick:()=>setCreateActFor(t),
-                    style:{padding:'5px 12px',borderRadius:7,border:'none',
-                      background:'var(--accent)',color:'white',cursor:'pointer',
-                      fontSize:12,fontWeight:600,whiteSpace:'nowrap'}},
-                  '+ Акт')
-                )
-              ))
+                }},cellVal(c)))
+              );})
             )
           )
         ),
@@ -10619,7 +10661,9 @@ function ProrabotkaTab({onActCreated}) {
       task:createActFor,
       onClose:()=>setCreateActFor(null),
       onCreated:(actId)=>{
+        const task=createActFor;
         setCreateActFor(null);
+        if(task?.sheetId) setActBySheetId(prev=>({...prev,[task.sheetId]:{id:actId,source_row:task.sheetId}}));
         if(onActCreated) onActCreated(actId);
       }
     })
@@ -10640,6 +10684,7 @@ function TechnologistPage({initialActId=null}) {
   const [openTaskId,setOpenTaskId]=useState(null);
   const [showAdd,setShowAdd]=useState(false);
   const [openActId,setOpenActId]=useState(initialActId);
+  const [actBySheetId,setActBySheetId]=useState({});
   const [showScrollTop,setShowScrollTop]=useState(false);
   useEffect(()=>{
     const onScroll=()=>setShowScrollTop(window.scrollY>300);
@@ -10735,7 +10780,7 @@ function TechnologistPage({initialActId=null}) {
     e('div',{className:'mgr-tabs',style:{marginBottom:20}},
       e('button',{className:'mgr-tab'+(tab==='tasks'?' active':''),onClick:()=>setTab('tasks')},'📋 Задания'),
       e('button',{className:'mgr-tab'+(tab==='library'?' active':''),onClick:()=>setTab('library')},'📚 Библиотека эталонов'),
-      e('button',{className:'mgr-tab'+(tab==='acts'?' active':''),onClick:()=>setTab('acts')},'🧪 Акты проработки'),
+      e('button',{className:'mgr-tab'+(tab==='acts'?' active':''),onClick:()=>{setOpenActId(null);setTab('acts');}},'🧪 Акты проработки'),
       e('button',{className:'mgr-tab'+(tab==='prorabotki'?' active':''),onClick:()=>setTab('prorabotki')},'🔬 Проработки')
     ),
 
@@ -10809,8 +10854,9 @@ function TechnologistPage({initialActId=null}) {
 
     // Вкладка Библиотека
     tab==='library'&&e(LibraryTab,{standards,onReload:async()=>{await reloadStandards();}}),
-    tab==='acts'&&e(ActsPage,{key:openActId||'acts',initialActId:openActId}),
-    tab==='prorabotki'&&e(ProrabotkaTab,{onActCreated:(actId)=>{setOpenActId(actId);setTab('acts');}}),
+    tab==='acts'&&e(ActsPage,{key:openActId||'acts',initialActId:openActId,
+      onActDeleted:(id)=>setActBySheetId(prev=>{const next={...prev};Object.keys(next).forEach(k=>{if(next[k]?.id===id)delete next[k];});return next;})}),
+    tab==='prorabotki'&&e(ProrabotkaTab,{actBySheetId,setActBySheetId,onActCreated:(actId)=>{setOpenActId(actId);setTab('acts');}}),
 
     // Модалка добавления
     showAdd&&e('div',{style:{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',
@@ -10827,7 +10873,7 @@ function TechnologistPage({initialActId=null}) {
 }
 
 // Просмотр актов проработки (только чтение — для технолога и продуктовой команды)
-function ActsViewer({readOnly}) {
+function ActsViewer({readOnly, initialActId=null}) {
   const [acts,setActs]=useState([]);
   const [templates,setTemplates]=useState([]);
   const [filterTemplate,setFilterTemplate]=useState('');
@@ -10840,11 +10886,23 @@ function ActsViewer({readOnly}) {
   const [openAct,setOpenAct]=useState(null); // полный акт с данными
   const [template,setTemplate]=useState(null); // шаблон открытого акта
   const [lightbox,setLightbox]=useState(null);
+  const [editing,setEditing]=useState(false);
 
   useEffect(()=>{
     fetch('/api/acts/templates').then(r=>r.json()).then(d=>setTemplates(d.templates||[]));
     load();
   },[]);
+
+  useEffect(()=>{
+    if(!initialActId) return;
+    fetch(`/api/acts/acts/${initialActId}`).then(r=>r.ok?r.json():null).then(async d=>{
+      if(!d?.act) return;
+      const tr=await fetch(`/api/acts/templates/${d.act.template_id}`).then(r=>r.json());
+      setOpenAct(d.act);
+      setTemplate(tr.template);
+      setEditing(false);
+    });
+  },[initialActId]);
 
   const load=async()=>{
     const r=await fetch('/api/acts/acts').then(r=>r.json());
@@ -10858,6 +10916,17 @@ function ActsViewer({readOnly}) {
     ]);
     setOpenAct(ar.act);
     setTemplate(tr.template);
+    setEditing(false);
+    const url=new URL(window.location.href);
+    url.searchParams.set('actId',act.id);
+    window.history.pushState({},'',url.toString());
+  };
+
+  const closeActDetail=()=>{
+    setOpenAct(null);setTemplate(null);setEditing(false);
+    const url=new URL(window.location.href);
+    url.searchParams.delete('actId');
+    window.history.pushState({},'',url.toString());
   };
 
   const statusLabel=(s)=>s==='done'?'✓ Завершён':s==='draft'?'Черновик':'—';
@@ -10875,17 +10944,21 @@ function ActsViewer({readOnly}) {
 
   // Детальный просмотр акта
   if(openAct&&template) {
+    if(editing) return e(ActForm,{actId:openAct.id,onBack:()=>{
+      openActDetail(openAct); // перезагрузить после сохранения
+    }});
+
     const values=openAct.values||{};
     const photos=openAct.photos||[];
     const rowStyle={display:'flex',alignItems:'baseline',justifyContent:'space-between',
       gap:12,padding:'5px 0',borderBottom:'1px solid var(--border)',fontSize:13};
     const labelStyle={color:'var(--muted)',fontWeight:500,flexShrink:0};
     const valStyle=(color)=>({fontWeight:600,textAlign:'right',color:color||'var(--text)'});
+    const btnStyle={padding:'6px 14px',borderRadius:8,border:'1.5px solid var(--border)',
+      background:'transparent',color:'var(--text)',fontWeight:600,fontSize:13,cursor:'pointer'};
     return e('div',{style:{maxWidth:720,margin:'0 auto',padding:'0 16px 40px'}},
-      e('div',{style:{display:'flex',alignItems:'center',gap:12,margin:'16px 0 16px'}},
-        e('button',{onClick:()=>{setOpenAct(null);setTemplate(null);},
-          style:{padding:'6px 14px',borderRadius:8,border:'1.5px solid var(--border)',
-            background:'transparent',color:'var(--text)',fontWeight:600,fontSize:13,cursor:'pointer'}},'← Назад'),
+      e('div',{style:{display:'flex',alignItems:'center',gap:8,margin:'16px 0 16px',flexWrap:'wrap'}},
+        e('button',{onClick:closeActDetail,style:btnStyle},'← Назад'),
         e('div',{style:{flex:1}},
           e('h2',{style:{margin:0,fontSize:18,fontWeight:700}},template.name),
           e('div',{style:{fontSize:13,color:'var(--muted)',marginTop:2}},
@@ -10894,10 +10967,14 @@ function ActsViewer({readOnly}) {
             e('span',{style:{marginLeft:8,fontWeight:600,color:statusColor(openAct.status)}},
               statusLabel(openAct.status))),
         ),
+        e('button',{onClick:()=>{
+          const url=new URL(window.location.href);
+          url.searchParams.set('actId',openAct.id);
+          navigator.clipboard.writeText(url.toString()).then(()=>alert('Ссылка скопирована!')).catch(()=>prompt('Ссылка на акт:',url.toString()));
+        },style:btnStyle},'🔗 Ссылка'),
+        e('button',{onClick:()=>setEditing(true),style:btnStyle},'✏ Редактировать'),
         e('a',{href:`/api/acts/acts/${openAct.id}/docx`,download:true,
-          style:{padding:'7px 14px',borderRadius:8,border:'1.5px solid var(--border)',
-            background:'transparent',color:'var(--text)',fontWeight:600,fontSize:13,
-            textDecoration:'none',display:'inline-flex',alignItems:'center',gap:6}},
+          style:{...btnStyle,textDecoration:'none',display:'inline-flex',alignItems:'center',gap:6}},
           '⬇ Скачать .docx'),
       ),
       lightbox&&e(Lightbox,{photos:lightbox.photos,startIndex:lightbox.index,onClose:()=>setLightbox(null)}),
@@ -10909,6 +10986,7 @@ function ActsViewer({readOnly}) {
           {label:'Дата проработки',val:new Date(openAct.date).toLocaleDateString('ru-RU')},
           openAct.product_name&&{label:'Наименование (как на этикетке)',val:openAct.product_name},
           openAct.manufacturer&&{label:'Производитель (как на этикетке)',val:openAct.manufacturer},
+          openAct.supplier&&{label:'Поставщик',val:openAct.supplier},
         ].filter(Boolean);
         return e('div',{style:{background:'var(--surface)',borderRadius:12,border:'1.5px solid var(--border)',
           padding:'8px 14px',marginBottom:12}},
@@ -11045,8 +11123,11 @@ function ActsViewer({readOnly}) {
 }
 
 // Журнал для продуктовой команды
-function ProductJournalPage() {
-  const [tab,setTab]=useState('journal');
+function ProductJournalPage({initialActId=null}) {
+  const actIdParam=useMemo(()=>{ const v=new URLSearchParams(location.search).get('actId'); return v?Number(v):null; },[]);
+  const resolvedActId=initialActId||actIdParam;
+  const [tab,setTab]=useState(resolvedActId?'acts':'journal');
+  const [openActId,setOpenActId]=useState(resolvedActId);
   const [from,setFrom]=useState(()=>{ const d=new Date(); d.setDate(d.getDate()-7); return d.toISOString().slice(0,10); });
   const [to,setTo]=useState(todayISO);
   const [company,setCompany]=useState('');
@@ -11094,10 +11175,10 @@ function ProductJournalPage() {
     e('h2',{className:'page-title'},'Журнал проверок'),
     e('div',{className:'mgr-tabs',style:{marginBottom:20}},
       e('button',{className:'mgr-tab'+(tab==='journal'?' active':''),onClick:()=>setTab('journal')},'📋 Проверки качества'),
-      e('button',{className:'mgr-tab'+(tab==='acts'?' active':''),onClick:()=>setTab('acts')},'🧪 Акты проработки'),
+      e('button',{className:'mgr-tab'+(tab==='acts'?' active':''),onClick:()=>{setOpenActId(null);setTab('acts');}},'🧪 Акты проработки'),
     ),
 
-    tab==='acts'&&e(ActsViewer,{readOnly:true}),
+    tab==='acts'&&e(ActsViewer,{readOnly:true,initialActId:openActId}),
     tab==='journal'&&e(React.Fragment,null,
 
     // Фильтры
@@ -11427,13 +11508,18 @@ function ActForm({actId, templateId, onBack, onSaved}) {
   const [template, setTemplate] = useState(null);
   const [values, setValues] = useState({});
   const [photos, setPhotos] = useState([]); // [{id,field_id,filename}]
+  const [editing, setEditing] = useState(!actId); // новый акт сразу редактируется
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(null); // field_id being uploaded
   const fileRefs = useRef({});
 
   useEffect(()=>{
     if(actId) {
-      fetch(`/api/acts/acts/${actId}`).then(r=>r.json()).then(d=>{
+      fetch(`/api/acts/acts/${actId}`).then(r=>{
+        if(!r.ok) { if(onBack) onBack(); return null; }
+        return r.json();
+      }).then(d=>{
+        if(!d) return;
         if(d.act) {
           setAct(d.act);
           setValues({
@@ -11442,14 +11528,18 @@ function ActForm({actId, templateId, onBack, onSaved}) {
             _date: d.act.date||new Date().toISOString().slice(0,10),
             _product_name: d.act.product_name||'',
             _manufacturer: d.act.manufacturer||'',
+            _supplier: d.act.supplier||'',
             _conclusion: d.act.conclusion||'',
+            _gross_mass: d.act.gross_mass!=null?String(d.act.gross_mass):'',
+            _defrost_mass: d.act.defrost_mass!=null?String(d.act.defrost_mass):'',
           });
           setPhotos(d.act.photos||[]);
+          setEditing(d.act.status !== 'done');
           fetch(`/api/acts/templates/${d.act.template_id}`).then(r=>r.json()).then(td=>{
             if(td.template) setTemplate(td.template);
           });
-        }
-      });
+        } else if(onBack) onBack();
+      }).catch(()=>{ if(onBack) onBack(); });
     } else if(templateId) {
       fetch(`/api/acts/templates/${templateId}`).then(r=>r.json()).then(d=>{
         if(d.template) setTemplate(d.template);
@@ -11521,16 +11611,20 @@ function ActForm({actId, templateId, onBack, onSaved}) {
       const rawMaterial = values._raw_material || template?.name || '';
       const productName = values._product_name || '';
       const manufacturer = values._manufacturer || '';
+      const supplier = values._supplier || '';
       const conclusion = values._conclusion || '';
+      const grossMassSave = values._gross_mass !== '' ? (parseFloat(values._gross_mass)||null) : null;
+      const defrostMassSave = values._defrost_mass !== '' ? (parseFloat(values._defrost_mass)||null) : null;
       const saveValues = {...values};
       delete saveValues._date; delete saveValues._raw_material;
-      delete saveValues._product_name; delete saveValues._manufacturer; delete saveValues._conclusion;
+      delete saveValues._product_name; delete saveValues._manufacturer; delete saveValues._supplier;
+      delete saveValues._conclusion; delete saveValues._gross_mass; delete saveValues._defrost_mass;
 
       if(!aid) {
         const cr = await fetch('/api/acts/acts',{method:'POST',
           headers:{'Content-Type':'application/json'},
           body:JSON.stringify({template_id:templateId||act?.template_id, date,
-            raw_material:rawMaterial, product_name:productName, manufacturer})});
+            raw_material:rawMaterial, product_name:productName, manufacturer, supplier})});
         const cd = await cr.json();
         if(cd.error) return alert('Ошибка: '+cd.error);
         aid = cd.id;
@@ -11539,7 +11633,8 @@ function ActForm({actId, templateId, onBack, onSaved}) {
       const r = await fetch(`/api/acts/acts/${aid}`,{method:'PUT',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({values:saveValues, status, raw_material:rawMaterial,
-          product_name:productName, manufacturer, conclusion})});
+          product_name:productName, manufacturer, supplier, conclusion,
+          gross_mass:grossMassSave, defrost_mass:defrostMassSave})});
       const d = await r.json();
       if(d.error) return alert('Ошибка: '+d.error);
       if(onSaved) onSaved(aid, status);
@@ -11560,6 +11655,7 @@ function ActForm({actId, templateId, onBack, onSaved}) {
   const renderField = (field, isLast) => {
     if(!isVisible(field)) return null;
     const val = values[field.id];
+    const ro = !editing; // readonly в режиме просмотра
     const fieldPhotos = photos.filter(p=>p.field_id===field.id);
     // inline: label left + control right; block: label above control
     const inlineTypes = new Set(['text','number','date','autodate','comply','yes_no','select','photo']);
@@ -11575,17 +11671,18 @@ function ActForm({actId, templateId, onBack, onSaved}) {
     );
 
     let control;
+    const disabledStyle=ro?{opacity:0.7,pointerEvents:'none'}:{};
     if(field.type==='text') {
-      control=e('input',{value:val||'',onChange:ev=>set(field.id,ev.target.value),style:{...inputStyle,fontSize:13,padding:'5px 8px'}});
+      control=e('input',{value:val||'',disabled:ro,onChange:ev=>set(field.id,ev.target.value),style:{...inputStyle,fontSize:13,padding:'5px 8px'}});
     } else if(field.type==='number') {
-      control=e('input',{type:'number',value:val||'',onChange:ev=>set(field.id,ev.target.value),style:{...inputStyle,fontSize:13,padding:'5px 8px'}});
+      control=e('input',{type:'number',value:val||'',disabled:ro,onChange:ev=>set(field.id,ev.target.value),style:{...inputStyle,fontSize:13,padding:'5px 8px'}});
     } else if(field.type==='date'||field.type==='autodate') {
-      control=e('input',{type:'date',value:val||'',onChange:ev=>set(field.id,ev.target.value),style:{...inputStyle,fontSize:13,padding:'5px 8px'}});
+      control=e('input',{type:'date',value:val||'',disabled:ro,onChange:ev=>set(field.id,ev.target.value),style:{...inputStyle,fontSize:13,padding:'5px 8px'}});
     } else if(field.type==='comply') {
-      control=e('div',{style:{display:'flex',gap:6}},
+      control=e('div',{style:{display:'flex',gap:6,...disabledStyle}},
         ['соответствует','не соответствует'].map(opt=>
-          e('button',{key:opt,onClick:()=>set(field.id,val===opt?null:opt),
-            style:{flex:1,padding:'5px 8px',borderRadius:6,fontWeight:600,fontSize:12,cursor:'pointer',
+          e('button',{key:opt,onClick:ro?undefined:()=>set(field.id,val===opt?null:opt),
+            style:{flex:1,padding:'5px 8px',borderRadius:6,fontWeight:600,fontSize:12,cursor:ro?'default':'pointer',
               border:'1.5px solid '+(val===opt?(opt==='соответствует'?'var(--ok)':'var(--danger)'):'var(--border)'),
               background:val===opt?(opt==='соответствует'?'var(--ok-bg)':'#FEF2F2'):'var(--surface)',
               color:val===opt?(opt==='соответствует'?'var(--ok)':'var(--danger)'):'var(--text)'}},
@@ -11593,10 +11690,10 @@ function ActForm({actId, templateId, onBack, onSaved}) {
         )
       );
     } else if(field.type==='yes_no') {
-      control=e('div',{style:{display:'flex',gap:6}},
+      control=e('div',{style:{display:'flex',gap:6,...disabledStyle}},
         ['да','нет'].map(opt=>
-          e('button',{key:opt,onClick:()=>set(field.id,val===opt?null:opt),
-            style:{flex:1,padding:'5px 8px',borderRadius:6,fontWeight:600,fontSize:12,cursor:'pointer',
+          e('button',{key:opt,onClick:ro?undefined:()=>set(field.id,val===opt?null:opt),
+            style:{flex:1,padding:'5px 8px',borderRadius:6,fontWeight:600,fontSize:12,cursor:ro?'default':'pointer',
               border:'1.5px solid '+(val===opt?'var(--accent)':'var(--border)'),
               background:val===opt?'var(--accent-light, #FEF2F0)':'var(--surface)',
               color:val===opt?'var(--accent)':'var(--text)'}},
@@ -11605,9 +11702,9 @@ function ActForm({actId, templateId, onBack, onSaved}) {
       );
     } else if(field.type==='select') {
       const opts = field.config?.options||[];
-      control=e('div',{style:{display:'flex',flexWrap:'wrap',gap:5}},
-        opts.map(opt=>e('button',{key:opt,onClick:()=>set(field.id,val===opt?null:opt),
-          style:{padding:'4px 10px',borderRadius:20,fontSize:12,cursor:'pointer',
+      control=e('div',{style:{display:'flex',flexWrap:'wrap',gap:5,...disabledStyle}},
+        opts.map(opt=>e('button',{key:opt,onClick:ro?undefined:()=>set(field.id,val===opt?null:opt),
+          style:{padding:'4px 10px',borderRadius:20,fontSize:12,cursor:ro?'default':'pointer',
             border:'1.5px solid '+(val===opt?'var(--accent)':'var(--border)'),
             background:val===opt?'var(--accent-light, #FEF2F0)':'var(--surface)',
             color:val===opt?'var(--accent)':'var(--text)',fontWeight:val===opt?600:400}},
@@ -11620,35 +11717,35 @@ function ActForm({actId, templateId, onBack, onSaved}) {
         const next = selected.includes(opt)?selected.filter(x=>x!==opt):[...selected,opt];
         set(field.id, next.join('|'));
       };
-      control=e('div',{style:{display:'flex',flexWrap:'wrap',gap:5}},
-        opts.map(opt=>e('button',{key:opt,onClick:()=>toggle(opt),
-          style:{padding:'4px 10px',borderRadius:20,fontSize:12,cursor:'pointer',
+      control=e('div',{style:{display:'flex',flexWrap:'wrap',gap:5,...disabledStyle}},
+        opts.map(opt=>e('button',{key:opt,onClick:ro?undefined:()=>toggle(opt),
+          style:{padding:'4px 10px',borderRadius:20,fontSize:12,cursor:ro?'default':'pointer',
             border:'1.5px solid '+(selected.includes(opt)?'var(--accent)':'var(--border)'),
             background:selected.includes(opt)?'var(--accent-light, #FEF2F0)':'var(--surface)',
             color:selected.includes(opt)?'var(--accent)':'var(--text)',fontWeight:selected.includes(opt)?600:400}},
           opt))
       );
     } else if(field.type==='comment') {
-      control=e('textarea',{value:val||'',onChange:ev=>set(field.id,ev.target.value),
+      control=e('textarea',{value:val||'',disabled:ro,onChange:ev=>set(field.id,ev.target.value),
         rows:3,style:{...inputStyle,fontSize:13,padding:'6px 8px',resize:'vertical'}});
     } else if(field.type==='photo') {
       control=e('div',{style:{display:'flex',flexDirection:'column',alignItems:'flex-end'}},
         fieldPhotos.length>0&&e('div',{style:{display:'flex',flexWrap:'wrap',justifyContent:'flex-end',gap:6,marginBottom:6}},
           fieldPhotos.map(p=>e('div',{key:p.filename,style:{position:'relative'}},
             e('img',{src:`/uploads/${p.filename}`,style:{width:72,height:72,objectFit:'cover',borderRadius:8,border:'1px solid var(--border)'}}),
-            e('button',{onClick:()=>deletePhoto(p.filename),
+            !ro&&e('button',{onClick:()=>deletePhoto(p.filename),
               style:{position:'absolute',top:-5,right:-5,width:18,height:18,borderRadius:'50%',border:'none',
                 background:'var(--danger)',color:'white',fontSize:10,cursor:'pointer',
                 display:'flex',alignItems:'center',justifyContent:'center'}},'✕')
           ))
         ),
-        e(PhotoPickerButton,{
+        !ro&&e(PhotoPickerButton,{
           onFiles:(files)=>handlePhoto(field.id,files),
           uploading:uploading===field.id,
           label:'+ Фото'}),
       );
     } else {
-      control=e('input',{value:val||'',onChange:ev=>set(field.id,ev.target.value),style:{...inputStyle,fontSize:13,padding:'5px 8px'}});
+      control=e('input',{value:val||'',disabled:ro,onChange:ev=>set(field.id,ev.target.value),style:{...inputStyle,fontSize:13,padding:'5px 8px'}});
     }
 
     return e('div',{key:field.id,style:{
@@ -11664,7 +11761,25 @@ function ActForm({actId, templateId, onBack, onSaved}) {
     e('div',{style:{display:'flex',alignItems:'center',gap:12,margin:'16px 0 20px'}},
       e('button',{onClick:onBack,style:{padding:'6px 12px',borderRadius:8,border:'1.5px solid var(--border)',
         background:'transparent',color:'var(--text)',fontWeight:600,fontSize:13,cursor:'pointer'}},'← Назад'),
-      e('h2',{style:{margin:0,fontSize:20,fontWeight:700}},template.name),
+      e('h2',{style:{margin:0,fontSize:20,fontWeight:700,flex:1}},template.name),
+      act?.status==='done'&&(editing
+        ? e('button',{onClick:()=>setEditing(false),
+            style:{padding:'6px 14px',borderRadius:8,border:'1.5px solid var(--border)',
+              background:'transparent',color:'var(--text)',fontWeight:600,fontSize:13,cursor:'pointer',whiteSpace:'nowrap'}},
+            'Отмена')
+        : e('button',{onClick:()=>setEditing(true),
+            style:{padding:'6px 14px',borderRadius:8,border:'none',
+              background:'var(--accent)',color:'white',fontWeight:600,fontSize:13,cursor:'pointer',whiteSpace:'nowrap'}},
+            '✏ Редактировать')),
+      actId&&e('button',{
+        onClick:()=>{
+          const url=new URL(window.location.href);
+          url.searchParams.set('actId',actId);
+          navigator.clipboard.writeText(url.toString()).then(()=>alert('Ссылка скопирована!')).catch(()=>prompt('Ссылка на акт:',url.toString()));
+        },
+        style:{padding:'6px 12px',borderRadius:8,border:'1.5px solid var(--border)',
+          background:'transparent',color:'var(--muted)',fontWeight:600,fontSize:12,cursor:'pointer',whiteSpace:'nowrap'},
+        title:'Скопировать ссылку на акт'},'🔗 Ссылка'),
     ),
 
     // Шапка акта
@@ -11672,19 +11787,31 @@ function ActForm({actId, templateId, onBack, onSaved}) {
       const hRowStyle={display:'flex',alignItems:'center',padding:'8px 14px',borderBottom:'1px solid var(--border)'};
       const hLabelStyle={flexShrink:0,width:'38%',fontSize:13,fontWeight:600,paddingRight:12};
       const hInputStyle={...inputStyle,fontSize:13,padding:'5px 8px',flex:1};
+      const grossM = parseFloat(values._gross_mass)||0;
+      const defrostM = parseFloat(values._defrost_mass)||0;
+      const defrostPct = grossM>0 ? ((grossM-defrostM)/grossM*100).toFixed(1)+'%' : '—';
       const hRows=[
         {label:'Наименование сырья',key:'_raw_material',placeholder:template.name},
         {label:'Дата проработки',key:'_date',type:'date'},
         {label:'Наименование (как на этикетке)',key:'_product_name',placeholder:'Как указано на этикетке'},
         {label:'Производитель (как на этикетке)',key:'_manufacturer',placeholder:'Как указано на этикетке'},
+        {label:'Поставщик',key:'_supplier',placeholder:'Название поставщика'},
+        {label:'Масса брутто (кг)',key:'_gross_mass',type:'number',placeholder:'0.000'},
+        {label:'Масса после дефроста (кг)',key:'_defrost_mass',type:'number',placeholder:'0.000'},
       ];
       return e('div',{style:{background:'var(--surface)',borderRadius:12,border:'1.5px solid var(--border)',marginBottom:14}},
-        hRows.map((r,i)=>e('div',{key:r.key,style:{...hRowStyle,borderBottom:i<hRows.length-1?hRowStyle.borderBottom:'none'}},
+        [...hRows.map((r,i)=>e('div',{key:r.key,style:{...hRowStyle,borderBottom:hRowStyle.borderBottom}},
           e('span',{style:hLabelStyle},r.label),
-          e('input',{type:r.type||'text',value:values[r.key]||'',
+          e('input',{type:r.type||'text',value:values[r.key]||'',step:r.type==='number'?'0.001':undefined,
+            disabled:!editing,
             onChange:ev=>setValues(p=>({...p,[r.key]:ev.target.value})),
             placeholder:r.placeholder||'',style:hInputStyle})
-        ))
+        )),
+        e('div',{key:'_defrost_pct',style:{...hRowStyle,borderBottom:'none'}},
+          e('span',{style:hLabelStyle},'Процент дефроста'),
+          e('span',{style:{...hInputStyle,border:'none',background:'transparent',fontWeight:600,
+            color:grossM>0?'var(--text)':'var(--muted)'}},defrostPct)
+        )]
       );
     })(),
 
@@ -11706,18 +11833,19 @@ function ActForm({actId, templateId, onBack, onSaved}) {
         e('span',{style:{flexShrink:0,width:'38%',fontSize:13,fontWeight:600,paddingRight:12}},'Общий вывод'),
         e('div',{style:{display:'flex',gap:6,flex:1}},
           ['соответствует','не соответствует'].map(opt=>
-            e('button',{key:opt,onClick:()=>setValues(p=>({...p,_conclusion:values._conclusion===opt?null:opt})),
-              style:{flex:1,padding:'5px 8px',borderRadius:6,fontWeight:600,fontSize:12,cursor:'pointer',
+            e('button',{key:opt,onClick:editing?()=>setValues(p=>({...p,_conclusion:values._conclusion===opt?null:opt})):undefined,
+              style:{flex:1,padding:'5px 8px',borderRadius:6,fontWeight:600,fontSize:12,cursor:editing?'pointer':'default',
                 border:'1.5px solid '+(values._conclusion===opt?(opt==='соответствует'?'var(--ok)':'var(--danger)'):'var(--border)'),
                 background:values._conclusion===opt?(opt==='соответствует'?'var(--ok-bg)':'#FEF2F2'):'var(--surface)',
-                color:values._conclusion===opt?(opt==='соответствует'?'var(--ok)':'var(--danger)'):'var(--text)'}},
+                color:values._conclusion===opt?(opt==='соответствует'?'var(--ok)':'var(--danger)'):'var(--text)',
+                opacity:editing?1:0.8}},
               opt==='соответствует'?'✓ Соответствует':'✗ Не соответствует')
           )
         ),
       ),
     ),
 
-    e('div',{style:{display:'flex',gap:10,justifyContent:'flex-end'}},
+    editing&&e('div',{style:{display:'flex',gap:10,justifyContent:'flex-end'}},
       e('button',{onClick:()=>handleSave('draft'),disabled:saving,
         style:btnStyle(false)}, saving?'…':'Сохранить черновик'),
       e('button',{onClick:()=>handleSave('done'),disabled:saving,
@@ -11727,7 +11855,7 @@ function ActForm({actId, templateId, onBack, onSaved}) {
 }
 
 // ── Главная страница Актов ────────────────────────────────────────────────────
-function ActsPage({isManager=false, initialActId=null}) {
+function ActsPage({isManager=false, initialActId=null, onActDeleted}) {
   const [view, setView] = useState(initialActId?'fill-act':'list');
   const [templates, setTemplates] = useState([]);
   const [acts, setActs] = useState([]);
@@ -11775,6 +11903,7 @@ function ActsPage({isManager=false, initialActId=null}) {
       const r = await fetch(`/api/acts/acts/${id}`,{method:'DELETE'});
       const d = await r.json().catch(()=>({}));
       if(!r.ok || d.error) alert('Не удалось удалить акт: '+(d.error||r.status));
+      else if(onActDeleted) onActDeleted(id);
     }catch(err){ alert('Не удалось удалить акт: '+err.message); }
     loadActs();
   };
@@ -11805,12 +11934,27 @@ function ActsPage({isManager=false, initialActId=null}) {
     return e(ActTemplateEditor,{template:selectedTemplate,
       onBack:()=>setView('templates'),
       onSave:()=>{ loadTemplates(); setView('templates'); }});
+  const openAct=(id)=>{
+    setSelectedActId(id);
+    setView('fill-act');
+    const url=new URL(window.location.href);
+    url.searchParams.set('actId',id);
+    window.history.pushState({},'',url.toString());
+  };
+  const closeAct=()=>{
+    setView('list');
+    loadActs();
+    const url=new URL(window.location.href);
+    url.searchParams.delete('actId');
+    window.history.pushState({},'',url.toString());
+  };
+
   if(view==='fill-act')
     return e(ActForm,{
       actId:selectedActId,
       templateId:selectedActId?null:selectedTemplate?.id,
-      onBack:()=>{ setView('list'); loadActs(); },
-      onSaved:(id)=>{ setSelectedActId(id); }});
+      onBack:closeAct,
+      onSaved:(id)=>{ openAct(id); }});
 
   return e('div',{style:{maxWidth:900,margin:'0 auto',padding:'16px'}},
 
@@ -11877,7 +12021,7 @@ function ActsPage({isManager=false, initialActId=null}) {
       templates.length>0&&e('div',{style:{display:'flex',gap:8,marginBottom:12,flexWrap:'wrap'}},
         e('span',{style:{fontSize:13,color:'var(--muted)',alignSelf:'center'}},'Создать акт:'),
         templates.map(t=>e('button',{key:t.id,
-          onClick:()=>{setSelectedTemplate(t);setSelectedActId(null);setView('fill-act');},
+          onClick:()=>{setSelectedTemplate(t);setSelectedActId(null);setView('fill-act');const url=new URL(window.location.href);url.searchParams.delete('actId');window.history.pushState({},'',url.toString());},
           style:{...btnStyle(false),fontSize:12,padding:'6px 12px'}},t.name)),
       ),
       e('div',{style:{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}},
@@ -11936,7 +12080,7 @@ function ActsPage({isManager=false, initialActId=null}) {
                   e('span',{style:{fontSize:12,fontWeight:600,color:statusColor(a.status)}},statusLabel(a.status))),
                 e('td',{style:{padding:'10px 8px',textAlign:'right'}},
                   e('div',{style:{display:'flex',gap:6,justifyContent:'flex-end',flexWrap:'wrap'}},
-                    e('button',{onClick:()=>{setSelectedActId(a.id);setView('fill-act');},
+                    e('button',{onClick:()=>openAct(a.id),
                       style:{...btnStyle(false),padding:'5px 10px',fontSize:12}},
                       a.status==='done'?'Просмотр':'Продолжить'),
                     e('a',{href:`/api/acts/acts/${a.id}/docx`,download:true,
@@ -12149,7 +12293,7 @@ function App() {
       e('div',null,e('span',{className:'topnav-brand'},'📋 Продуктовая команда')),
       e('div',{className:'topnav-right'},e('div',{className:'date-pill'},formatDateRu(today)))
     ),
-    e(ProductJournalPage,null)
+    e(ProductJournalPage,{initialActId:actIdParam})
   );
 
   if(loading) return e('div',{className:'empty-state',style:{marginTop:60}},'Загрузка…');
