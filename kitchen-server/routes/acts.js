@@ -6,6 +6,19 @@ const multer = require('multer');
 const { pool } = require('../db');
 const { generateTemplateDOCX, generateActDOCX } = require('../docx-gen');
 
+function prorabotkaWriteback(sheetId, fields) {
+  const http = require('http');
+  const body = JSON.stringify({ sheetId, ...fields });
+  const req = http.request({
+    hostname: '127.0.0.1', port: process.env.PORT || 3000,
+    path: '/api/prorabotki/result', method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+  }, res => { res.resume(); }); // читаем и сбрасываем ответ чтобы сокет не завис
+  req.on('error', e => console.error('[acts] writeback error:', e.message));
+  req.write(body);
+  req.end();
+}
+
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
@@ -116,11 +129,12 @@ router.put('/templates/:id', async (req, res) => {
       const oldFieldIds = oldFields.map(f => f.id);
       let savedValues = [], savedPhotos = [];
       if (oldFieldIds.length) {
+        const ph = oldFieldIds.map((_,i)=>`$${i+1}`).join(',');
         ({ rows: savedValues } = await client.query(
-          'SELECT act_id, field_id, value FROM act_values WHERE field_id = ANY($1)', [oldFieldIds]
+          `SELECT act_id, field_id, value FROM act_values WHERE field_id IN (${ph})`, oldFieldIds
         ));
         ({ rows: savedPhotos } = await client.query(
-          'SELECT id, field_id FROM act_photos WHERE field_id = ANY($1)', [oldFieldIds]
+          `SELECT id, field_id FROM act_photos WHERE field_id IN (${ph})`, oldFieldIds
         ));
       }
       const oldKeyById = {};
@@ -269,8 +283,9 @@ router.get('/acts', async (req, res) => {
   try {
     const { rows } = await pool.query(`
       SELECT a.id, a.template_id, a.date, a.raw_material,
-             a.product_name, a.manufacturer, a.conclusion,
-             a.status, a.created_at, t.name AS template_name
+             a.product_name, a.manufacturer, a.supplier, a.conclusion,
+             a.status, a.created_at, a.source_row, a.source_sheet,
+             a.gross_mass, a.defrost_mass, t.name AS template_name
       FROM acts a JOIN act_templates t ON t.id = a.template_id
       ORDER BY a.date DESC, a.id DESC
     `);
@@ -311,11 +326,13 @@ router.get('/acts/:id', async (req, res) => {
 // Создать акт
 router.post('/acts', async (req, res) => {
   try {
-    const { template_id, date, raw_material, product_name, manufacturer } = req.body;
+    const { template_id, date, raw_material, product_name, manufacturer, supplier, gross_mass, sheet_id, source_sheet } = req.body;
     if (!template_id || !date) return res.status(400).json({ error: 'template_id and date required' });
     const { rows: [act] } = await pool.query(
-      'INSERT INTO acts(template_id,date,raw_material,product_name,manufacturer) VALUES($1,$2,$3,$4,$5) RETURNING *',
-      [template_id, date, raw_material || '', product_name || '', manufacturer || '']
+      'INSERT INTO acts(template_id,date,raw_material,product_name,manufacturer,supplier,gross_mass,source_row,source_sheet) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *',
+      [template_id, date, raw_material || '', product_name || '', manufacturer || '', supplier || '',
+       gross_mass != null ? Number(gross_mass) : null,
+       sheet_id || null, source_sheet || null]
     );
     res.json({ ok: true, id: act.id });
   } catch (err) {
@@ -326,7 +343,7 @@ router.post('/acts', async (req, res) => {
 // Сохранить значения акта
 router.put('/acts/:id', async (req, res) => {
   try {
-    const { values = {}, status, raw_material, product_name, manufacturer, conclusion } = req.body;
+    const { values = {}, status, raw_material, product_name, manufacturer, supplier, conclusion, gross_mass, defrost_mass } = req.body;
     await pool.withTransaction(async (client) => {
       const sets = [];
       const params = [];
@@ -334,7 +351,10 @@ router.put('/acts/:id', async (req, res) => {
       if (raw_material !== undefined) { sets.push(`raw_material=$${params.length+1}`); params.push(raw_material); }
       if (product_name !== undefined) { sets.push(`product_name=$${params.length+1}`); params.push(product_name); }
       if (manufacturer !== undefined) { sets.push(`manufacturer=$${params.length+1}`); params.push(manufacturer); }
+      if (supplier !== undefined) { sets.push(`supplier=$${params.length+1}`); params.push(supplier); }
       if (conclusion !== undefined) { sets.push(`conclusion=$${params.length+1}`); params.push(conclusion); }
+      if (gross_mass !== undefined) { sets.push(`gross_mass=$${params.length+1}`); params.push(gross_mass === '' ? null : Number(gross_mass)); }
+      if (defrost_mass !== undefined) { sets.push(`defrost_mass=$${params.length+1}`); params.push(defrost_mass === '' ? null : Number(defrost_mass)); }
       if (sets.length > 0) {
         sets.push(`updated_at=(NOW()::text)`);
         params.push(req.params.id);
@@ -348,6 +368,30 @@ router.put('/acts/:id', async (req, res) => {
         );
       }
     });
+
+    // Write-back в Google Sheet если акт привязан к заданию проработки
+    if (conclusion !== undefined || defrost_mass !== undefined || gross_mass !== undefined || status === 'done') {
+      const { rows: [act] } = await pool.query('SELECT source_row, date, conclusion, gross_mass, defrost_mass FROM acts WHERE id=$1', [req.params.id]);
+      if (act && act.source_row) {
+        // Собираем поля с типом 'comment' для выжимки
+        const { rows: fieldRows } = await pool.query(
+          `SELECT f.label, v.value FROM act_values v
+           JOIN act_fields f ON f.id=v.field_id
+           WHERE v.act_id=$1 AND f.type='comment' AND v.value IS NOT NULL AND v.value<>''
+           ORDER BY f.sort_order`,
+          [req.params.id]
+        );
+        const comment = fieldRows.length ? fieldRows.map(r => `${r.label}: ${r.value}`).join('\n') : null;
+        prorabotkaWriteback(String(act.source_row), {
+          workDate:    act.date || null,
+          grossMass:   act.gross_mass != null ? act.gross_mass : null,
+          defrostMass: act.defrost_mass != null ? act.defrost_mass : null,
+          conclusion:  act.conclusion || null,
+          comment,
+        });
+      }
+    }
+
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
