@@ -56,10 +56,12 @@ test('renamed acts sync all comments; mismatched source rows block writes', asyn
   const originalRequest = JWT.prototype.request;
   const oldFlag = process.env.PRORABOTKI_WRITE_ENABLED;
   process.env.PRORABOTKI_WRITE_ENABLED = 'true';
-  const act = { id: 42, source_row: '750743492:225', source_product_name: 'Старое название',
+  const act = { id: 42, source_row: '750743492:id:225', source_product_name: 'Старое название',
     product_name: 'Новое название', raw_material: 'Сырьё', manufacturer: 'Завод',
     supplier: 'Поставщик', gross_mass: 100, defrost_mass: 80, date: '2026-09-11', conclusion: 'Подходит' };
   let sourceName = 'Старое название';
+  let moved = false;
+  let changedBeforeWrite = false;
   const writes = [];
   const dbUpdates = [];
   let locks = 0;
@@ -75,20 +77,45 @@ test('renamed acts sync all comments; mismatched source rows block writes', asyn
     if (request.method === 'POST') { writes.push(request.data); return { data: {} }; }
     assert.ok(locks > 0, 'Google access must run under a cross-instance lock');
     if (request.url.includes('/values/')) {
-      const row = []; row[3] = sourceName;
-      return { data: { values: [row] } };
+      const range = decodeURIComponent(request.url.split('/values/')[1]);
+      if (range.includes("'Другое'")) return { data: { values: [] } };
+      if (range.endsWith('!A1:A')) return { data: { values: [...Array.from({ length: 224 }, () => []), [225]] } };
+      const row = [225]; row[3] = sourceName;
+      if (/!A\d+:Y\d+$/.test(range)) {
+        if (changedBeforeWrite) row[0] = 999;
+        return { data: { values: [row] } };
+      }
+      return { data: { values: moved ? [[], [], row] : [row] } };
     }
-    return { data: { sheets: [{ properties: { sheetId: 750743492, title: 'Мясо' } }] } };
+    return { data: { sheets: [
+      { properties: { sheetId: 750743492, title: 'Мясо' } },
+      { properties: { sheetId: 255104827, title: 'Другое' } },
+    ] } };
   };
   try {
     assert.deepEqual(await syncActSafely(pool, 42), { status: 'synced', cells: 10 });
     assert.equal(writes[0].requests[1].updateCells.rows[0].values[0].userEnteredValue.stringValue, 'Новое название');
     assert.equal(writes[0].requests[9].updateCells.rows[0].values[0].userEnteredValue.stringValue, 'Вкус: Хороший\nВид: Нормальный');
     assert.deepEqual(dbUpdates, [['Новое название', 42]]);
+    moved = true;
+    // The raw ID column also moves, while the stable act key does not.
+    const previousRequest = JWT.prototype.request;
+    JWT.prototype.request = async function(request) {
+      if (request.url.includes('/values/') && decodeURIComponent(request.url).includes("'Мясо'!A1:A")) {
+        return { data: { values: [...Array.from({ length: 226 }, () => []), [225]] } };
+      }
+      return previousRequest.call(this, request);
+    };
+    assert.equal((await syncActSafely(pool, 42)).status, 'synced');
+    assert.equal(writes[1].requests[0].updateCells.range.startRowIndex, 226);
+    changedBeforeWrite = true;
+    assert.equal((await syncActSafely(pool, 42)).status, 'error');
+    assert.equal(writes.length, 2, 'A concurrent row move must not update another task');
+    changedBeforeWrite = false;
     sourceName = 'Другое задание';
     assert.equal((await syncActSafely(pool, 42)).status, 'error');
-    assert.equal(writes.length, 1);
-    assert.equal(locks, 2);
+    assert.equal(writes.length, 2);
+    assert.equal(locks, 4);
   } finally {
     JWT.prototype.request = originalRequest;
     if (oldFlag === undefined) delete process.env.PRORABOTKI_WRITE_ENABLED;

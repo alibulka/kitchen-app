@@ -10510,16 +10510,20 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
   useEffect(()=>{
     fetch('/api/prorabotki')
       .then(r=>r.json())
-      .then(d=>{ if(d.error) setError(d.error); else setTasks(d.tasks||[]); })
-      .catch(e=>setError(e.message));
-    fetch('/api/acts/acts')
+      .then(d=>{
+        if(d.error) throw new Error(d.error);
+        setTasks(d.tasks||[]);
+        // ID initialization can migrate existing act links; load them afterwards.
+        return fetch('/api/acts/acts');
+      })
       .then(r=>r.json())
       .then(d=>{
+        if(d.error) throw new Error(d.error);
         const map={};
         (d.acts||[]).forEach(a=>{ if(a.source_row) map[String(a.source_row)]=a; });
         setActBySheetId(map);
       })
-      .catch(()=>{});
+      .catch(e=>setError(e.message));
   },[]);
 
   const handleSort=col=>{

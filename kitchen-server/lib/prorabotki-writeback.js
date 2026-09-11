@@ -1,6 +1,5 @@
-const { JWT } = require('google-auth-library');
-const { SOURCES } = require('./prorabotki-sheets');
-const queues = new Map();
+const { SOURCES, loadSnapshot, withSpreadsheetLock } = require('./prorabotki-sheets');
+const { findTaskRow, taskKey } = require('./prorabotki-identity');
 const RESULT_FIELDS = ['material', 'name', 'manufacturer', 'supplier', 'workDate',
   'grossMass', 'defrostMass', 'defrostPercent', 'conclusion', 'comment'];
 
@@ -61,23 +60,19 @@ async function syncAct(pool, actId) {
   const { rows: [initial] } = await pool.query('SELECT source_row FROM acts WHERE id=$1', [actId]);
   if (!initial?.source_row) return { status: 'unlinked' };
   const key = initial.source_row;
-  const previous = queues.get(key) || Promise.resolve();
   const runSync = async (pool) => {
     // Re-read after earlier writes finish; do not send a stale request snapshot.
     const { rows: [act] } = await pool.query('SELECT * FROM acts WHERE id=$1', [actId]);
     if (!act || act.source_row !== key) throw new Error('Привязка акта изменилась');
-    const { source, row } = targetFor(key);
-    const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON || '{}');
-    const auth = new JWT({ email: credentials.client_email, key: credentials.private_key,
-      scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
-    const base = 'https://sheets.googleapis.com/v4/spreadsheets/1WomFf4GOeRQta4MdzP_RnHqzv467FCnrs7uARsVF7I0';
-    const { data: meta } = await auth.request({ url: base,
-      params: { fields: 'sheets(properties(sheetId,title))' }, timeout: 20000 });
-    const title = meta.sheets.find(s => s.properties.sheetId === source.gid)?.properties.title;
-    if (!title) throw new Error('Исходная вкладка не найдена');
-    const range = `'${title.replace(/'/g, "''")}'!A${row}:Y${row}`;
-    const { data: current } = await auth.request({ url: `${base}/values/${encodeURIComponent(range)}`, timeout: 20000 });
-    const name = String(current.values?.[0]?.[source.columns.name] || '').trim();
+    const source = SOURCES.find(s => key.startsWith(`${s.gid}:`));
+    if (!source) throw new Error('Неизвестная вкладка задания');
+    const { snapshots, auth, base } = await loadSnapshot(pool, { writable: true });
+    const snapshot = snapshots.find(s => s.source.gid === source.gid);
+    // Initialization may have migrated an old physical-row key to a persistent ID.
+    const { rows: [linkedAct] } = await pool.query('SELECT source_row FROM acts WHERE id=$1', [actId]);
+    const { row, values: current } = findTaskRow(source, snapshot.rows, linkedAct.source_row);
+    const title = snapshot.title;
+    const name = String(current[source.columns.name] || '').trim();
     const expectedName = String(act.source_product_name ?? act.product_name ?? '').trim();
     if (!name || (name !== expectedName && name !== String(act.product_name || '').trim())) {
       throw new Error('Название задания не совпадает: проверьте исходную строку');
@@ -86,31 +81,31 @@ async function syncAct(pool, actId) {
       `SELECT f.label,v.value FROM act_values v JOIN act_fields f ON f.id=v.field_id
        WHERE v.act_id=$1 AND f.type='comment' AND v.value IS NOT NULL AND v.value<>''
        ORDER BY f.section_id,f.sort_order,f.id`, [actId]);
-    const data = buildData(key, title, {
+    const rowTarget = `${source.gid}:${row}`;
+    const data = buildData(rowTarget, title, {
       material: act.raw_material, name: act.product_name,
       manufacturer: act.manufacturer, supplier: act.supplier,
       workDate: act.date, grossMass: act.gross_mass, defrostMass: act.defrost_mass,
       conclusion: act.conclusion, comment: comments.map(c => `${c.label}: ${c.value}`).join('\n'),
     });
     if (!data.length) return { status: 'unchanged' };
+    const targetRange = `'${title.replace(/'/g, "''")}'!A${row}:Y${row}`;
+    const { data: checked } = await auth.request({
+      url: `${base}/values/${encodeURIComponent(targetRange)}`,
+      params: { valueRenderOption: 'UNFORMATTED_VALUE' }, timeout: 20000,
+    });
+    const target = checked.values?.[0] || [];
+    if (taskKey(source, target[0]) !== linkedAct.source_row ||
+        String(target[source.columns.name] || '').trim() !== name) {
+      throw new Error('Строка задания изменилась во время сохранения. Повторите сохранение');
+    }
     await auth.request({ url: `${base}:batchUpdate`, method: 'POST',
-      data: { requests: buildRequests(key, data) }, timeout: 20000 });
+      data: { requests: buildRequests(rowTarget, data) }, timeout: 20000 });
     await pool.query('UPDATE acts SET source_product_name=$1 WHERE id=$2',
       [act.product_name || expectedName, actId]);
     return { status: 'synced', cells: data.length };
   };
-  const job = previous.catch(() => {}).then(() => {
-    if (typeof pool.connect === 'function' && typeof pool.withTransaction === 'function') {
-      return pool.withTransaction(async client => {
-        // Serialize writes to one source row across production autoscale instances.
-        await client.query("SELECT pg_advisory_xact_lock(72841, hashtext($1))", [key]);
-        return runSync(client);
-      });
-    }
-    return runSync(pool);
-  });
-  queues.set(key, job);
-  try { return await job; } finally { if (queues.get(key) === job) queues.delete(key); }
+  return withSpreadsheetLock(pool, runSync);
 }
 
 async function syncActSafely(pool, actId) {
