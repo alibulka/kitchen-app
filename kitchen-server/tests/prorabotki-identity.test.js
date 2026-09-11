@@ -9,7 +9,7 @@ function rowFor(source, id, name = 'Задание') {
   return row;
 }
 
-test('fill only empty IDs on task rows; reserve historical and existing IDs', () => {
+test('fill only empty IDs on task rows; reserve existing IDs in allowed range', () => {
   for (const source of SOURCES) {
     const rows = [rowFor(source, ''), [], rowFor(source, 900), rowFor(source, ''), rowFor(source, 'custom')];
     const plan = planIds(source, rows, [1200, 900, 'custom']);
@@ -104,8 +104,9 @@ test('production initialization changes only A; repeated loading is idempotent; 
     })) } };
     const range = decodeURIComponent(req.url.split('/values/')[1]);
     const i = Number(range.match(/Лист(\d)/)[1]);
-    return { data: { values: structuredClone(range.endsWith('!A1:A')
-      ? [...Array.from({ length: SOURCES[i].startRow - 1 }, () => []), ...data[i].map(r => [r[0]])] : data[i]) } };
+    assert.ok(Number(range.match(/!A(\d+)/)[1]) >= SOURCES[i].startRow, 'Never read historical rows, including column A');
+    return { data: { values: structuredClone(/!A\d+:A$/.test(range)
+      ? data[i].map(r => [r[0]]) : data[i]) } };
   } };
   try {
     delete process.env.PRORABOTKI_WRITE_ENABLED;
@@ -135,7 +136,7 @@ test('changed source during initialization aborts without writing any ID', async
       properties: { sheetId: s.gid, title: `Лист${i}` },
     })) } };
     const range = decodeURIComponent(req.url.split('/values/')[1]);
-    if (range.endsWith('!A1:A')) return { data: { values: [] } };
+    if (/!A\d+:A$/.test(range)) return { data: { values: [] } };
     if (range.includes('Лист1')) return { data: { values: [] } };
     rowReads++;
     return { data: { values: [rowFor(SOURCES[0], '', rowReads === 1 ? 'До перестановки' : 'После перестановки')] } };
@@ -165,8 +166,8 @@ test('legacy link migrates to existing ID without overwriting the ID or losing a
     })) } };
     const range = decodeURIComponent(req.url.split('/values/')[1]);
     if (range.includes('Лист1')) return { data: { values: [] } };
-    return { data: { values: range.endsWith('!A1:A')
-      ? [...Array.from({ length: 225 }, () => []), [17]]
+    return { data: { values: /!A\d+:A$/.test(range)
+      ? [[], [17]]
       : [[], rowFor(SOURCES[0], 17, 'Существующий акт')] } };
   } };
   try {
@@ -176,5 +177,14 @@ test('legacy link migrates to existing ID without overwriting the ID or losing a
   } finally {
     if (old === undefined) delete process.env.PRORABOTKI_WRITE_ENABLED;
     else process.env.PRORABOTKI_WRITE_ENABLED = old;
+  }
+});
+
+test('legacy acts before cutoffs are ignored, not migrated or used for numbering', () => {
+  for (const source of SOURCES) {
+    const rows = [rowFor(source, '', 'Новое задание')];
+    const oldActs = [{ id: 1, source_row: `${source.gid}:${source.startRow - 1}`, product_name: 'Старое задание' }];
+    assert.deepEqual(reconcileLegacy(source, rows, oldActs), []);
+    assert.equal(planIds(source, rows, [], oldActs)[0].id, source.startRow);
   }
 });

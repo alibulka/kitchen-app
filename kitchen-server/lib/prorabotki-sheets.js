@@ -81,7 +81,7 @@ async function loadSnapshot(client, { writable = false, auth = createAuth(writab
     const sheet = data.sheets.find(s => s.properties.sheetId === source.gid)?.properties;
     if (!sheet) throw new Error(`Не найдена вкладка ${source.gid}`);
     const range = `'${sheet.title.replace(/'/g, "''")}'!A${source.startRow}:Y`;
-    const idRange = `'${sheet.title.replace(/'/g, "''")}'!A1:A`;
+    const idRange = `'${sheet.title.replace(/'/g, "''")}'!A${source.startRow}:A`;
     const [response, idResponse] = await Promise.all([
       auth.request({ url: `${base}/values/${encodeURIComponent(range)}`, timeout: 20000 }),
       auth.request({
@@ -91,7 +91,7 @@ async function loadSnapshot(client, { writable = false, auth = createAuth(writab
     ]);
     const allIds = idResponse.data.values?.map(row => row[0]) || [];
     const rows = response.data.values || [];
-    rows.forEach((row, offset) => { row[0] = allIds[source.startRow + offset - 1] ?? ''; });
+    rows.forEach((row, offset) => { row[0] = allIds[offset] ?? ''; });
     return { source, title: sheet.title, rows, allIds, range, idRange };
   }));
   if (writable) {
@@ -122,7 +122,7 @@ async function loadSnapshot(client, { writable = false, auth = createAuth(writab
         });
         const checkIds = ids.data.values?.map(row => row[0]) || [];
         const checkRows = check.data.values || [];
-        checkRows.forEach((row, offset) => { row[0] = checkIds[snapshot.source.startRow + offset - 1] ?? ''; });
+        checkRows.forEach((row, offset) => { row[0] = checkIds[offset] ?? ''; });
         if (JSON.stringify(checkRows) !== JSON.stringify(snapshot.rows) ||
             JSON.stringify(checkIds) !== JSON.stringify(snapshot.allIds)) {
           throw new Error('Таблица изменилась во время присвоения ID. Повторите загрузку без редактирования таблицы');

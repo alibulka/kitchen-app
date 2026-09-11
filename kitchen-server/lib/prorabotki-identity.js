@@ -13,7 +13,7 @@ function reconcileLegacy(source, rows, acts) {
   return acts.flatMap(act => {
     const match = String(act.source_row).match(/^(\d+):(\d+)$/);
     if (!match || Number(match[1]) !== source.gid) return [];
-    if (Number(match[2]) < source.startRow) throw new Error('Старый акт привязан к строке до разрешённой границы');
+    if (Number(match[2]) < source.startRow) return [];
     const byName = name => name ? rows.flatMap((row, offset) =>
       cellId(row[source.columns.name]) === name ? [offset] : []) : [];
     let matches = byName(cellId(act.source_product_name));
@@ -40,6 +40,7 @@ function planIds(source, rows, allIds, acts = []) {
     if (!String(act.source_row).startsWith(`${source.gid}:`)) continue;
     used.add(act.source_row);
     const token = String(act.source_row).slice(String(source.gid).length + 1);
+    if (/^\d+$/.test(token) && Number(token) < source.startRow) continue;
     const value = token.startsWith('id:') ? decodeURIComponent(token.slice(3)) : token;
     if (/^\d+$/.test(value) && Number.isSafeInteger(Number(value))) max = Math.max(max, Number(value));
   }

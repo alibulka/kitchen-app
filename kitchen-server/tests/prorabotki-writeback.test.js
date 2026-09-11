@@ -79,7 +79,7 @@ test('renamed acts sync all comments; mismatched source rows block writes', asyn
     if (request.url.includes('/values/')) {
       const range = decodeURIComponent(request.url.split('/values/')[1]);
       if (range.includes("'Другое'")) return { data: { values: [] } };
-      if (range.endsWith('!A1:A')) return { data: { values: [...Array.from({ length: 224 }, () => []), [225]] } };
+      if (/!A\d+:A$/.test(range)) return { data: { values: [[225]] } };
       const row = [225]; row[3] = sourceName;
       if (/!A\d+:Y\d+$/.test(range)) {
         if (changedBeforeWrite) row[0] = 999;
@@ -101,8 +101,8 @@ test('renamed acts sync all comments; mismatched source rows block writes', asyn
     // The raw ID column also moves, while the stable act key does not.
     const previousRequest = JWT.prototype.request;
     JWT.prototype.request = async function(request) {
-      if (request.url.includes('/values/') && decodeURIComponent(request.url).includes("'Мясо'!A1:A")) {
-        return { data: { values: [...Array.from({ length: 226 }, () => []), [225]] } };
+      if (request.url.includes('/values/') && decodeURIComponent(request.url).includes("'Мясо'!A225:A")) {
+        return { data: { values: [[], [], [225]] } };
       }
       return previousRequest.call(this, request);
     };
