@@ -27,7 +27,7 @@ app.use('/api/config',    require('./routes/config'));
 app.use('/api/precut',    require('./routes/precut'));
 app.use('/api/quality',  require('./routes/quality'));
 app.use('/api/acts',     require('./routes/acts'));
-try { app.use('/api/prorabotki', require('./routes/prorabotki')); } catch { app.use('/api/prorabotki', require('./routes/prorabotki-stub')); }
+app.use('/api/prorabotki', require('./routes/prorabotki'));
 const objectStorage = require('./lib/objectStorage');
 app.get('/uploads/:filename', async (req, res) => {
   const filename = path.basename(req.params.filename);
