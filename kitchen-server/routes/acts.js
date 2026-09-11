@@ -318,7 +318,7 @@ router.post('/acts', async (req, res) => {
     const { template_id, date, raw_material, product_name, manufacturer, supplier, gross_mass, sheet_id, source_sheet } = req.body;
     if (!template_id || !date) return res.status(400).json({ error: 'template_id and date required' });
     const { rows: [act] } = await pool.query(
-      'INSERT INTO acts(template_id,date,raw_material,product_name,manufacturer,supplier,gross_mass,source_row,source_sheet) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *',
+      'INSERT INTO acts(template_id,date,raw_material,product_name,manufacturer,supplier,gross_mass,source_row,source_sheet,source_product_name) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$4) RETURNING *',
       [template_id, date, raw_material || '', product_name || '', manufacturer || '', supplier || '',
        gross_mass != null ? Number(gross_mass) : null,
        sheet_id || null, source_sheet || null]
@@ -335,6 +335,9 @@ router.put('/acts/:id', async (req, res) => {
   try {
     const { values = {}, status, raw_material, product_name, manufacturer, supplier, conclusion, gross_mass, defrost_mass } = req.body;
     await pool.withTransaction(async (client) => {
+      // Preserve the source name before editing, so renaming can safely write back.
+      await client.query(`UPDATE acts SET source_product_name=product_name
+        WHERE id=$1 AND source_row IS NOT NULL AND source_product_name IS NULL`, [req.params.id]);
       const sets = [];
       const params = [];
       if (status) { sets.push(`status=$${params.length+1}`); params.push(status); }

@@ -317,6 +317,7 @@ async function initDb(pool) {
   await q('ALTER TABLE acts ADD COLUMN IF NOT EXISTS defrost_mass REAL');
   await q('ALTER TABLE acts ADD COLUMN IF NOT EXISTS source_row TEXT');
   await q('ALTER TABLE acts ADD COLUMN IF NOT EXISTS source_sheet TEXT');
+  await q('ALTER TABLE acts ADD COLUMN IF NOT EXISTS source_product_name TEXT');
   await pool.query(`
     CREATE TABLE IF NOT EXISTS act_values (
       id       SERIAL PRIMARY KEY,

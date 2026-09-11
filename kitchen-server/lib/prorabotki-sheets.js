@@ -6,12 +6,12 @@ const SOURCES = [
   { gid: 750743492, startRow: 225, columns: {
     material: 1, purpose: 2, name: 3, productType: 4, manufacturer: 6,
     supplier: 7, arrivalDate: 11, deadline: 12, workDate: 13,
-    grossMass: 14, defrostMass: 15, conclusion: 19, comment: 23,
+    grossMass: 14, defrostMass: 15, defrostPercent: 17, conclusion: 21, comment: 23,
   } },
   { gid: 255104827, startRow: 822, columns: {
     purpose: 1, name: 2, manufacturer: 3, supplier: 4,
     arrivalDate: 8, deadline: 9, workDate: 10,
-    grossMass: 12, defrostMass: 13, conclusion: 15, comment: 19,
+    grossMass: 12, defrostMass: 13, defrostPercent: 14, conclusion: 16, comment: 19,
   } },
 ];
 
