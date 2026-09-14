@@ -27,6 +27,7 @@ app.use('/api/config',    require('./routes/config'));
 app.use('/api/precut',    require('./routes/precut'));
 app.use('/api/quality',  require('./routes/quality'));
 app.use('/api/acts',     require('./routes/acts'));
+app.use('/api/prorabotki', require('./routes/prorabotki'));
 const objectStorage = require('./lib/objectStorage');
 app.get('/uploads/:filename', async (req, res) => {
   const filename = path.basename(req.params.filename);
@@ -54,19 +55,66 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-server.on('upgrade', (req, socket, head) => {
-  wss.handleUpgrade(req, socket, head, ws => {
-    wss.emit('connection', ws, req);
+function attachWebSocketUpgrade(httpServer) {
+  httpServer.on('upgrade', (req, socket, head) => {
+    wss.handleUpgrade(req, socket, head, ws => {
+      wss.emit('connection', ws, req);
+    });
   });
-});
+}
+attachWebSocketUpgrade(server);
 
 const PORT = process.env.PORT || 3000;
 server.keepAliveTimeout = 5000;
+
+// Ночная синхронизация фактов в Google Sheets в 23:50
+function scheduleNightlySync() {
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(23, 50, 0, 0);
+  if (next <= now) next.setDate(next.getDate() + 1);
+  const delay = next - now;
+  setTimeout(async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    console.log(`[nightly-sync] Запуск синхронизации фактов за ${today}`);
+    try {
+      const { syncFactsToSheet } = require('./routes/shifts');
+      if (syncFactsToSheet) {
+        const { rows: [shift] } = await pool.query(
+          'SELECT date FROM shifts WHERE date=$1', [today]);
+        if (shift) {
+          const res = await pool.query(
+            'SELECT station_key, item_id, line_idx, value FROM shift_facts_n WHERE shift_date=$1', [today]);
+          const facts = {};
+          for (const r of res.rows)
+            facts[`${r.station_key}-${r.item_id}-pl-${r.line_idx}`] = r.value;
+          await syncFactsToSheet(today, facts);
+          console.log(`[nightly-sync] Завершено`);
+        } else {
+          console.log(`[nightly-sync] Смена за ${today} не найдена`);
+        }
+      }
+    } catch (e) {
+      console.error('[nightly-sync] Ошибка:', e.message);
+    }
+    scheduleNightlySync(); // планируем следующую ночь
+  }, delay);
+  console.log(`[nightly-sync] Следующий запуск в 23:50 (через ${Math.round(delay/60000)} мин)`);
+}
 
 initDb()
   .then(() => {
     server.listen(PORT, () => {
       console.log(`Kitchen server running on http://localhost:${PORT}`);
+      scheduleNightlySync();
+      const fallbackPort = Number(process.env.DEV_FALLBACK_PORT);
+      if (Number.isInteger(fallbackPort) && fallbackPort > 0 && fallbackPort !== Number(PORT)) {
+        const fallbackServer = http.createServer(app);
+        attachWebSocketUpgrade(fallbackServer);
+        fallbackServer.listen(fallbackPort, () => {
+          console.log(`Development fallback listening on http://localhost:${fallbackPort}`);
+        });
+      }
     });
   })
   .catch(err => {
