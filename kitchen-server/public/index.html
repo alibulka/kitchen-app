@@ -10655,6 +10655,14 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
                 return e('tr',{key:i,style:{background:i%2===0?'transparent':'var(--hover)'}},
                 ...cols.map(c=>e('td',{key:c.key,style:{
                   ...tdStyle,
+                  ...(['material','name'].includes(c.key)?{
+                    whiteSpace:'normal',
+                    textOverflow:'clip',
+                    overflow:'visible',
+                    overflowWrap:'anywhere',
+                    wordBreak:'break-word',
+                    lineHeight:1.35,
+                  }:{}),
                   textAlign:c.key==='_act'?'center':tdStyle.textAlign,
                   color:c.key==='deadline'?deadlineColor(t[c.key]):tdStyle.color,
                   fontWeight:c.key==='deadline'&&t[c.key]?600:400,
