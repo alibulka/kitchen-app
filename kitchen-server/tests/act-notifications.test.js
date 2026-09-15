@@ -1,14 +1,14 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { notificationParams, notifyActSafely } = require('../lib/act-notifications');
-const act = { id: 123, source_row: '750743492:id:225', date: '2026-09-02',
+const act = { id: 123, source_row: '236716915:id:225', date: '2026-09-02',
   raw_material: 'Мясо мидий', product_name: 'Другое название',
   manufacturer: 'Inversiones Coihuin Limitada №10800', supplier: 'Глобал & Co' };
 const env = { ACT_NOTIFICATIONS_ENABLED: 'true', ACT_NOTIFICATION_TOKEN: 'test-only-token' };
 const productionEndpoint = 'https://frontapi.elementaree.org/replit/notification/send';
 
 test('GET payload encodes exact fields, channel and create/update flags', async () => {
-  for (const [gid, isMeat] of [['750743492', '1'], ['255104827', '0']]) {
+  for (const [gid, isMeat] of [['236716915', '1'], ['184249890', '0']]) {
     for (const isNew of [true, false]) {
       let calls = 0;
       const result = await notifyActSafely({ ...act, source_row: `${gid}:id:822` }, isNew, {
@@ -31,7 +31,7 @@ test('GET payload encodes exact fields, channel and create/update flags', async 
     }
   }
   assert.equal(notificationParams({ ...act, raw_material: '' }, false).get('source'), act.product_name);
-  assert.equal(notificationParams({ ...act, source_row: '750743492:225' }, true).get('isMeat'), '1');
+  assert.equal(notificationParams({ ...act, source_row: '236716915:225' }, true).get('isMeat'), '1');
 });
 
 test('production endpoint is selected only by explicit environment configuration', async () => {

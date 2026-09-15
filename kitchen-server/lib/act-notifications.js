@@ -1,7 +1,7 @@
 const STAGING_ENDPOINT = 'https://frontapi.staging.elementaree.org/replit/notification/send';
 const PRODUCTION_ENDPOINT = 'https://frontapi.elementaree.org/replit/notification/send';
 const ALLOWED_ENDPOINTS = new Set([STAGING_ENDPOINT, PRODUCTION_ENDPOINT]);
-const CHANNELS = new Map([['750743492', '1'], ['255104827', '0']]);
+const CHANNELS = new Map([['236716915', '1'], ['184249890', '0']]);
 
 function notificationParams(act, isNew) {
   const gid = String(act?.source_row || '').split(':')[0];

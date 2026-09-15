@@ -65,7 +65,7 @@ test('release: create/edit act, retain values and photos when adding template fi
       const template = await request('POST', '/templates', original);
       const { rows: fields } = await client.query('SELECT id FROM act_fields ORDER BY id');
       const act = await request('POST', '/acts', { template_id: template.id, date: '2026-09-11',
-        product_name: 'Исходное название', sheet_id: '750743492:225', source_sheet: 'Мясо' });
+        product_name: 'Исходное название', sheet_id: '236716915:225', source_sheet: 'Мясо' });
       assert.equal(act.sheetSync.status, 'disabled');
       assert.equal(act.notification, undefined);
       assert.equal(notifications.length, 0);

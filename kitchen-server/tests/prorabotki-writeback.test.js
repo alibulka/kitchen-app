@@ -6,15 +6,15 @@ test('only result columns, correct boundaries and numeric masses', () => {
   const fields = { material: 'Сырьё', name: 'Название', manufacturer: 'Производитель',
     supplier: 'Поставщик', workDate: '2026-09-11', grossMass: 100, defrostMass: 80,
     conclusion: 'Да', comment: 'Комментарий 1\nКомментарий 2', unrelated: 'ignored' };
-  const first = buildData('750743492:225', 'Мясо', fields);
-  const second = buildData('255104827:822', 'Другое', fields);
+  const first = buildData('236716915:225', 'Мясо', fields);
+  const second = buildData('184249890:822', 'Другое', fields);
   assert.deepEqual(first.map(x => x.range), ['B','D','G','H','N','O','P','R','V','X'].map(c=>`'Мясо'!${c}225`));
   assert.deepEqual(second.map(x => x.range), ['C','D','E','K','M','N','O','Q','T'].map(c=>`'Другое'!${c}822`));
   assert.equal(first[5].values[0][0], 100);
   assert.equal(first[6].values[0][0], 80);
   assert.equal(first[7].values[0][0], 0.2);
   assert.equal(first[9].values[0][0], 'Комментарий 1\nКомментарий 2');
-  for (const [id, data, percentIndex] of [['750743492:225', first, 7], ['255104827:822', second, 6]]) {
+  for (const [id, data, percentIndex] of [['236716915:225', first, 7], ['184249890:822', second, 6]]) {
     const requests = buildRequests(id, data);
     assert.equal(requests.length, data.length);
     const pct = requests[percentIndex].updateCells;
@@ -26,12 +26,12 @@ test('only result columns, correct boundaries and numeric masses', () => {
     assert.equal(pct.range.endColumnIndex - pct.range.startColumnIndex, 1);
     assert.equal(requests[0].updateCells.fields, 'userEnteredValue');
   }
-  assert.deepEqual(buildData('255104827:822', 'Другое', { conclusion: '', grossMass: null }), []);
-  for (const id of ['750743492:224', '255104827:821', '123:822', '822']) assert.throws(() => targetFor(id));
+  assert.deepEqual(buildData('184249890:822', 'Другое', { conclusion: '', grossMass: null }), []);
+  for (const id of ['236716915:224', '184249890:821', '123:822', '822']) assert.throws(() => targetFor(id));
 });
 
 test('percentage handles zero net, missing masses and zero gross', () => {
-  const data = masses => buildData('750743492:225', 'Мясо', masses);
+  const data = masses => buildData('236716915:225', 'Мясо', masses);
   const pct = masses => data(masses).find(c => c.range.endsWith('!R225'))?.values[0][0];
   assert.equal(pct({ grossMass: 100, defrostMass: 0 }), 1);
   assert.equal(pct({ grossMass: 100, defrostMass: 100 }), 0);
@@ -56,7 +56,7 @@ test('renamed acts sync all comments; mismatched source rows block writes', asyn
   const originalRequest = JWT.prototype.request;
   const oldFlag = process.env.PRORABOTKI_WRITE_ENABLED;
   process.env.PRORABOTKI_WRITE_ENABLED = 'true';
-  const act = { id: 42, source_row: '750743492:id:225', source_product_name: 'Старое название',
+  const act = { id: 42, source_row: '236716915:id:225', source_product_name: 'Старое название',
     product_name: 'Новое название', raw_material: 'Сырьё', manufacturer: 'Завод',
     supplier: 'Поставщик', gross_mass: 100, defrost_mass: 80, date: '2026-09-11', conclusion: 'Подходит' };
   let sourceName = 'Старое название';
@@ -78,7 +78,7 @@ test('renamed acts sync all comments; mismatched source rows block writes', asyn
     assert.ok(locks > 0, 'Google access must run under a cross-instance lock');
     if (request.url.includes('/values/')) {
       const range = decodeURIComponent(request.url.split('/values/')[1]);
-      if (range.includes("'Другое'")) return { data: { values: [] } };
+      if (range.includes("'ни рыба ни мясо'")) return { data: { values: [] } };
       if (/!A\d+:A$/.test(range)) return { data: { values: [[225]] } };
       const row = [225]; row[3] = sourceName;
       if (/!A\d+:Y\d+$/.test(range)) {
@@ -88,8 +88,8 @@ test('renamed acts sync all comments; mismatched source rows block writes', asyn
       return { data: { values: moved ? [[], [], row] : [row] } };
     }
     return { data: { sheets: [
-      { properties: { sheetId: 750743492, title: 'Мясо' } },
-      { properties: { sheetId: 255104827, title: 'Другое' } },
+      { properties: { sheetId: 236716915, title: 'Мясо / Рыба Проработки (с 2025года)' } },
+      { properties: { sheetId: 184249890, title: 'ни рыба ни мясо' } },
     ] } };
   };
   try {
@@ -101,7 +101,8 @@ test('renamed acts sync all comments; mismatched source rows block writes', asyn
     // The raw ID column also moves, while the stable act key does not.
     const previousRequest = JWT.prototype.request;
     JWT.prototype.request = async function(request) {
-      if (request.url.includes('/values/') && decodeURIComponent(request.url).includes("'Мясо'!A225:A")) {
+      if (request.url.includes('/values/') &&
+          decodeURIComponent(request.url).includes("'Мясо / Рыба Проработки (с 2025года)'!A225:A")) {
         return { data: { values: [[], [], [225]] } };
       }
       return previousRequest.call(this, request);

@@ -22,41 +22,41 @@ test('fill only empty IDs on task rows; reserve existing IDs in allowed range', 
 test('legacy acts keep their ID on first initialization without collisions', () => {
   const source = SOURCES[0];
   const rows = [rowFor(source, '', 'Первое'), rowFor(source, '', 'Второе')];
-  const acts = [{ source_row: '750743492:226', source_product_name: 'Второе' }];
+  const acts = [{ source_row: '236716915:226', source_product_name: 'Второе' }];
   const plan = planIds(source, rows, [], acts);
   assert.deepEqual(plan.map(p => p.id), [227, 226]);
   assert.throws(() => planIds(source, rows, [], [
-    { source_row: '750743492:225', source_product_name: 'Другой товар' },
+    { source_row: '236716915:225', source_product_name: 'Другой товар' },
   ]), /однозначно/);
 });
 
 test('persistent task ID follows moved row; new task cannot reuse an act ID', () => {
   const source = SOURCES[0];
   const rows = [rowFor(source, '', 'Новая'), [], rowFor(source, 225, 'Старая')];
-  const acts = [{ source_row: '750743492:id:225', product_name: 'Старая' }];
-  assert.equal(findTaskRow(source, rows, '750743492:id:225').row, 227);
+  const acts = [{ source_row: '236716915:id:225', product_name: 'Старая' }];
+  assert.equal(findTaskRow(source, rows, '236716915:id:225').row, 227);
   assert.equal(planIds(source, rows, [225], acts)[0].id, 226);
   const [task] = parseTasks(source, 'Мясо', [[], rowFor(source, 500)]);
-  assert.equal(task.sheetId, '750743492:id:500');
+  assert.equal(task.sheetId, '236716915:id:500');
   assert.equal(task.sourceRow, 226);
   assert.equal(task.idPersisted, true);
   assert.equal(planIds(source, [rowFor(source, '')], [], [
-    { source_row: '750743492:id:999', product_name: 'Удалённое задание' },
+    { source_row: '236716915:id:999', product_name: 'Удалённое задание' },
   ])[0].id, 1000);
 });
 
 test('duplicate IDs fail; missing IDs never resolve to a physical-row fallback', () => {
   const source = SOURCES[1];
   assert.throws(() => planIds(source, [rowFor(source, 12), rowFor(source, '12')], []), /Повторяющийся/);
-  assert.throws(() => findTaskRow(source, [rowFor(source, '')], '255104827:id:822'), /не найден/);
-  assert.equal(findTaskRow(source, [rowFor(source, 12)], '255104827:id:12').row, 822);
+  assert.throws(() => findTaskRow(source, [rowFor(source, '')], '184249890:id:822'), /не найден/);
+  assert.equal(findTaskRow(source, [rowFor(source, 12)], '184249890:id:12').row, 822);
   const key = taskKey(source, 'Особый ID');
   assert.equal(findTaskRow(source, [rowFor(source, 'Особый ID')], key).row, 822);
 });
 
 test('legacy blank-ID task moved before initialization is reconciled unambiguously', () => {
   const source = SOURCES[0];
-  const acts = [{ source_row: '750743492:225', product_name: 'Старое задание' }];
+  const acts = [{ source_row: '236716915:225', product_name: 'Старое задание' }];
   for (const first of [[], rowFor(source, '', 'Новое задание')]) {
     const rows = [first, rowFor(source, '', 'Старое задание')];
     const assignment = planIds(source, rows, [], acts).find(a => a.offset === 1);
@@ -71,11 +71,11 @@ test('legacy blank-ID task moved before initialization is reconciled unambiguous
 
 test('legacy source name has priority; competing old identities cannot merge into one task', () => {
   const source = SOURCES[0];
-  const act = { id: 1, source_row: '750743492:225', source_product_name: 'Исходное', product_name: 'Переименованное' };
+  const act = { id: 1, source_row: '236716915:225', source_product_name: 'Исходное', product_name: 'Переименованное' };
   const rows = [rowFor(source, '', 'Исходное'), rowFor(source, '', 'Переименованное')];
   assert.equal(reconcileLegacy(source, rows, [act])[0].offset, 0);
   assert.throws(() => reconcileLegacy(source, [rows[0]], [
-    act, { ...act, id: 2, source_row: '750743492:226' },
+    act, { ...act, id: 2, source_row: '236716915:226' },
   ]), /разные задания/);
   assert.equal(reconcileLegacy(source, [rows[0]], [act, { ...act, id: 2 }]).length, 2);
 });
@@ -99,11 +99,11 @@ test('production initialization changes only A; repeated loading is idempotent; 
       }
       return { data: {} };
     }
-    if (!req.url.includes('/values/')) return { data: { sheets: SOURCES.map((s, i) => ({
-      properties: { sheetId: s.gid, title: `Лист${i}` },
+    if (!req.url.includes('/values/')) return { data: { sheets: SOURCES.map(s => ({
+      properties: { sheetId: s.gid, title: s.title },
     })) } };
     const range = decodeURIComponent(req.url.split('/values/')[1]);
-    const i = Number(range.match(/Лист(\d)/)[1]);
+    const i = SOURCES.findIndex(source => range.includes(`'${source.title}'`));
     assert.ok(Number(range.match(/!A(\d+)/)[1]) >= SOURCES[i].startRow, 'Never read historical rows, including column A');
     return { data: { values: structuredClone(/!A\d+:A$/.test(range)
       ? data[i].map(r => [r[0]]) : data[i]) } };
@@ -132,12 +132,12 @@ test('changed source during initialization aborts without writing any ID', async
   let rowReads = 0, writes = 0;
   const auth = { async request(req) {
     if (req.method === 'POST') { writes++; return { data: {} }; }
-    if (!req.url.includes('/values/')) return { data: { sheets: SOURCES.map((s, i) => ({
-      properties: { sheetId: s.gid, title: `Лист${i}` },
+    if (!req.url.includes('/values/')) return { data: { sheets: SOURCES.map(s => ({
+      properties: { sheetId: s.gid, title: s.title },
     })) } };
     const range = decodeURIComponent(req.url.split('/values/')[1]);
     if (/!A\d+:A$/.test(range)) return { data: { values: [] } };
-    if (range.includes('Лист1')) return { data: { values: [] } };
+    if (range.includes(`'${SOURCES[1].title}'`)) return { data: { values: [] } };
     rowReads++;
     return { data: { values: [rowFor(SOURCES[0], '', rowReads === 1 ? 'До перестановки' : 'После перестановки')] } };
   } };
@@ -157,15 +157,15 @@ test('legacy link migrates to existing ID without overwriting the ID or losing a
   let writes = 0;
   const client = { async query(sql, params) {
     if (sql.startsWith('UPDATE')) { updates.push(params); return { rows: [] }; }
-    return { rows: [{ id: 42, source_row: '750743492:225', product_name: 'Существующий акт' }] };
+    return { rows: [{ id: 42, source_row: '236716915:225', product_name: 'Существующий акт' }] };
   } };
   const auth = { async request(req) {
     if (req.method === 'POST') { writes++; return { data: {} }; }
-    if (!req.url.includes('/values/')) return { data: { sheets: SOURCES.map((s, i) => ({
-      properties: { sheetId: s.gid, title: `Лист${i}` },
+    if (!req.url.includes('/values/')) return { data: { sheets: SOURCES.map(s => ({
+      properties: { sheetId: s.gid, title: s.title },
     })) } };
     const range = decodeURIComponent(req.url.split('/values/')[1]);
-    if (range.includes('Лист1')) return { data: { values: [] } };
+    if (range.includes(`'${SOURCES[1].title}'`)) return { data: { values: [] } };
     return { data: { values: /!A\d+:A$/.test(range)
       ? [[], [17]]
       : [[], rowFor(SOURCES[0], 17, 'Существующий акт')] } };
@@ -173,7 +173,7 @@ test('legacy link migrates to existing ID without overwriting the ID or losing a
   try {
     await loadSnapshot(client, { auth, writable: true });
     assert.equal(writes, 0);
-    assert.deepEqual(updates, [['750743492:id:17', '750743492:225', 42]]);
+    assert.deepEqual(updates, [['236716915:id:17', '236716915:225', 42]]);
   } finally {
     if (old === undefined) delete process.env.PRORABOTKI_WRITE_ENABLED;
     else process.env.PRORABOTKI_WRITE_ENABLED = old;
