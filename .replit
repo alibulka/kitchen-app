@@ -48,7 +48,7 @@ waitForPort = 5000
 FACTS_SHEETS_ENABLED = "true"
 PRORABOTKI_WRITE_ENABLED = "true"
 ACT_NOTIFICATIONS_ENABLED = "true"
-ACT_NOTIFICATION_ENDPOINT = "https://frontapi.elementaree.org/replit/notification/send"
+ACT_NOTIFICATION_ENDPOINT = "https://api-new.elementaree.ru/replit/notification/send"
 
 [userenv.development]
 ACT_NOTIFICATIONS_ENABLED = "true"
