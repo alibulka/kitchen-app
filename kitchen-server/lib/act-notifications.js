@@ -1,5 +1,5 @@
 const STAGING_ENDPOINT = 'https://frontapi.staging.elementaree.org/replit/notification/send';
-const PRODUCTION_ENDPOINT = 'https://frontapi.elementaree.org/replit/notification/send';
+const PRODUCTION_ENDPOINT = 'https://api-new.elementaree.ru/replit/notification/send';
 const ALLOWED_ENDPOINTS = new Set([STAGING_ENDPOINT, PRODUCTION_ENDPOINT]);
 const CHANNELS = new Map([['236716915', '1'], ['184249890', '0']]);
 

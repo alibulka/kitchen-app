@@ -5,7 +5,7 @@ const act = { id: 123, source_row: '236716915:id:225', date: '2026-09-02',
   raw_material: 'Мясо мидий', product_name: 'Другое название',
   manufacturer: 'Inversiones Coihuin Limitada №10800', supplier: 'Глобал & Co' };
 const env = { ACT_NOTIFICATIONS_ENABLED: 'true', ACT_NOTIFICATION_TOKEN: 'test-only-token' };
-const productionEndpoint = 'https://frontapi.elementaree.org/replit/notification/send';
+const productionEndpoint = 'https://api-new.elementaree.ru/replit/notification/send';
 
 test('GET payload encodes exact fields, channel and create/update flags', async () => {
   for (const [gid, isMeat] of [['236716915', '1'], ['184249890', '0']]) {
