@@ -14,17 +14,23 @@ router.get('/', async (_req, res) => {
 router.post('/', async (req, res) => {
   const { ids } = req.body;
   if (!Array.isArray(ids)) return res.status(400).json({ error: 'ids must be array' });
+  // Валидация: только целые числа, без дублей
+  const clean = [...new Set(ids.map(Number))];
+  if (clean.some(n => !Number.isInteger(n))) {
+    return res.status(400).json({ error: 'ids must be integers' });
+  }
   try {
-    await pool.query('BEGIN');
-    await pool.query('DELETE FROM precut_item_ids');
-    if (ids.length > 0) {
-      const values = ids.map((id, i) => `($${i + 1})`).join(',');
-      await pool.query(`INSERT INTO precut_item_ids(item_id) VALUES ${values}`, ids);
-    }
-    await pool.query('COMMIT');
-    res.json({ ok: true, count: ids.length });
+    // Одна настоящая транзакция на одном соединении: при ошибке INSERT
+    // старый список останется нетронутым (раньше DELETE мог закоммититься отдельно)
+    await pool.withTransaction(async (client) => {
+      await client.query('DELETE FROM precut_item_ids');
+      if (clean.length > 0) {
+        const values = clean.map((_, i) => `($${i + 1})`).join(',');
+        await client.query(`INSERT INTO precut_item_ids(item_id) VALUES ${values}`, clean);
+      }
+    });
+    res.json({ ok: true, count: clean.length });
   } catch (e) {
-    await pool.query('ROLLBACK');
     res.status(500).json({ error: e.message });
   }
 });

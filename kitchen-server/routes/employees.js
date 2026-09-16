@@ -21,10 +21,13 @@ router.get('/', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { id, name, shops } = req.body;
+  const { id, name, shops, shop } = req.body;
   if (!name || !id) return res.status(400).json({ error: 'id and name required' });
-  const shopsArr = Array.isArray(shops) && shops.length > 0 ? shops : [];
-  const shopLegacy = shopsArr[0] || '';
+  // Принимаем и новый формат (shops: []), и старый (shop: '') — со старых кешированных страниц
+  const shopsArr = Array.isArray(shops) && shops.length > 0 ? shops
+    : (shop && String(shop).trim() ? [String(shop).trim()] : []);
+  if (shopsArr.length === 0) return res.status(400).json({ error: 'shops required — сотрудник без цеха не сохраняется' });
+  const shopLegacy = shopsArr[0];
   try {
     await pool.query(`
       INSERT INTO employees(id, name, shop, shops, active, updated_at)
@@ -39,10 +42,12 @@ router.post('/', async (req, res) => {
 });
 
 router.put('/:id', async (req, res) => {
-  const { name, shops } = req.body;
+  const { name, shops, shop } = req.body;
   if (!name) return res.status(400).json({ error: 'name required' });
-  const shopsArr = Array.isArray(shops) && shops.length > 0 ? shops : [];
-  const shopLegacy = shopsArr[0] || '';
+  const shopsArr = Array.isArray(shops) && shops.length > 0 ? shops
+    : (shop && String(shop).trim() ? [String(shop).trim()] : []);
+  if (shopsArr.length === 0) return res.status(400).json({ error: 'shops required — сотрудник без цеха не сохраняется' });
+  const shopLegacy = shopsArr[0];
   try {
     await pool.query(
       "UPDATE employees SET name=$1, shop=$2, shops=$3, updated_at=NOW()::text WHERE id=$4",

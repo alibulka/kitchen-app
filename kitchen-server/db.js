@@ -311,7 +311,20 @@ async function initDb(pool) {
   `);
   await q('ALTER TABLE acts ADD COLUMN IF NOT EXISTS product_name TEXT NOT NULL DEFAULT \'\'');
   await q('ALTER TABLE acts ADD COLUMN IF NOT EXISTS manufacturer TEXT NOT NULL DEFAULT \'\'');
+  await q('ALTER TABLE acts ADD COLUMN IF NOT EXISTS supplier TEXT NOT NULL DEFAULT \'\'');
   await q('ALTER TABLE acts ADD COLUMN IF NOT EXISTS conclusion TEXT NOT NULL DEFAULT \'\'');
+  await q('ALTER TABLE acts ADD COLUMN IF NOT EXISTS gross_mass REAL');
+  await q('ALTER TABLE acts ADD COLUMN IF NOT EXISTS defrost_mass REAL');
+  await q('ALTER TABLE acts ADD COLUMN IF NOT EXISTS source_row TEXT');
+  await q('ALTER TABLE acts ADD COLUMN IF NOT EXISTS source_sheet TEXT');
+  await q('ALTER TABLE acts ADD COLUMN IF NOT EXISTS source_product_name TEXT');
+  await q('ALTER TABLE acts ADD COLUMN IF NOT EXISTS first_completed_at TEXT');
+  await q("UPDATE acts SET first_completed_at=updated_at WHERE first_completed_at IS NULL AND status='done'");
+  // Preserve existing act links when the two supported tabs move to a new spreadsheet.
+  await q(`UPDATE acts SET source_row='236716915' || substring(source_row FROM 10)
+    WHERE source_row LIKE '750743492:%'`);
+  await q(`UPDATE acts SET source_row='184249890' || substring(source_row FROM 10)
+    WHERE source_row LIKE '255104827:%'`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS act_values (
       id       SERIAL PRIMARY KEY,
