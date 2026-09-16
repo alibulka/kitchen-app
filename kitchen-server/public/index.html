@@ -10532,14 +10532,24 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
     else { setSortCol(col); setSortDir(1); }
   };
 
-  // Парсим дату в формате dd.mm.yyyy или dd.mm.yy для сортировки
+  // Google Sheets может вернуть ISO или локальный формат даты.
   const parseDate=s=>{
-    if(!s) return 0;
-    const parts=s.split('.');
-    if(parts.length<3) return 0;
-    let [d,m,y]=parts;
-    if(y.length===2) y='20'+y;
-    return new Date(`${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`).getTime()||0;
+    const value=String(s||'').trim();
+    if(!value) return null;
+    let m=value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    let y,month,d;
+    if(m) [,y,month,d]=m;
+    else {
+      m=value.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})$/);
+      if(!m) return null;
+      [,d,month,y]=m;
+      if(y.length===2) y='20'+y;
+    }
+    const ts=Date.UTC(Number(y),Number(month)-1,Number(d));
+    const parsed=new Date(ts);
+    return parsed.getUTCFullYear()===Number(y)&&
+      parsed.getUTCMonth()===Number(month)-1&&parsed.getUTCDate()===Number(d)
+      ? ts : null;
   };
 
   const sorted=React.useMemo(()=>{
@@ -10557,6 +10567,9 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
       let av=a[sortCol]||'', bv=b[sortCol]||'';
       if(dateFields.includes(sortCol)){
         av=parseDate(av); bv=parseDate(bv);
+        if(av===null&&bv===null) return 0;
+        if(av===null) return 1;
+        if(bv===null) return -1;
         return (av-bv)*sortDir;
       }
       return av.localeCompare(bv,'ru')*sortDir;
