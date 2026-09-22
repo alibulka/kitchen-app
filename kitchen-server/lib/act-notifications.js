@@ -5,8 +5,8 @@ const CHANNELS = new Map([['236716915', '1'], ['184249890', '0']]);
 
 function notificationParams(act, isNew) {
   const gid = String(act?.source_row || '').split(':')[0];
-  const isMeat = CHANNELS.get(gid);
-  if (isMeat === undefined) throw new Error('Акт не связан с заданием из поддерживаемой вкладки');
+  const isMeat = act?.source_row ? CHANNELS.get(gid) : '1';
+  if (isMeat === undefined) throw new Error('Акт связан с неизвестным источником');
   return new URLSearchParams({
     actNo: String(act.id),
     source: String(act.raw_material || act.product_name || ''),
@@ -26,7 +26,9 @@ async function notifyActSafely(act, isNew, { env = process.env, fetchImpl = fetc
       time: new Date().toISOString(),
       actId: Number.isSafeInteger(Number(act?.id)) ? Number(act.id) : null,
       isNew: isNew ? 1 : 0,
-      isMeat: CHANNELS.get(String(act?.source_row || '').split(':')[0]) ?? null,
+      isMeat: act?.source_row
+        ? CHANNELS.get(String(act.source_row).split(':')[0]) ?? null
+        : '1',
       httpStatus, status: result.status, reason,
     };
     try { log('[act-notification] ' + JSON.stringify(entry)); } catch {}

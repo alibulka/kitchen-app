@@ -42,6 +42,7 @@ test('GET payload encodes exact fields, channel and create/update flags', async 
   }
   assert.equal(notificationParams({ ...act, raw_material: '' }, false).get('source'), act.product_name);
   assert.equal(notificationParams({ ...act, source_row: '236716915:225' }, true).get('isMeat'), '1');
+  assert.equal(notificationParams({ ...act, source_row: null }, true).get('isMeat'), '1');
 });
 
 test('production endpoint is selected only by explicit environment configuration', async () => {
@@ -66,15 +67,30 @@ test('production endpoint is selected only by explicit environment configuration
   assert.equal(calls, 0);
 });
 
-test('disabled, unconfigured and unlinked requests never contact service', async () => {
+test('disabled, unconfigured and unknown linked requests never contact service', async () => {
   const fetchImpl = () => { throw Error('Must not call'); };
   assert.equal((await notifyActSafely(act, true, { env: {}, fetchImpl })).status, 'disabled');
   assert.equal((await notifyActSafely(act, true, {
     env: { ACT_NOTIFICATIONS_ENABLED: 'true' }, fetchImpl,
   })).status, 'error');
-  for (const source_row of [null, 'unknown:1']) {
-    assert.equal((await notifyActSafely({ ...act, source_row }, false, { env, fetchImpl })).status, 'error');
-  }
+  assert.equal((await notifyActSafely({ ...act, source_row: 'unknown:1' }, false, { env, fetchImpl })).status, 'error');
+});
+
+test('completed acts without a sheet assignment notify as meat', async () => {
+  let requestedUrl;
+  const logs = [];
+  const result = await notifyActSafely({ ...act, source_row: null }, true, {
+    env,
+    log: entry => logs.push(entry),
+    fetchImpl: async url => {
+      requestedUrl = url;
+      return new Response('{"success":true}');
+    },
+  });
+  assert.equal(result.status, 'accepted');
+  assert.equal(requestedUrl.searchParams.get('isMeat'), '1');
+  assert.equal(requestedUrl.searchParams.get('isNew'), '1');
+  assert.equal(JSON.parse(logs[0].slice('[act-notification] '.length)).isMeat, '1');
 });
 
 test('HTTP, API rejection and timeout warn without leaking secrets or retrying', async () => {

@@ -6880,6 +6880,68 @@ function getStationGroups(catalog) {
   return groups;
 }
 
+// Workshop presentation only.  The raw groups above remain the source of truth
+// for reports, manager calculations and all persistence keys.
+function visibleStationName(station, shopName) {
+  const prefix = (station.shop || shopName || '') + ' / ';
+  return String(station.name || '').startsWith(prefix)
+    ? String(station.name).slice(prefix.length)
+    : String(station.name || '').replace(/^.+?\/\s*/, '');
+}
+function normalizedStationName(station, shopName) {
+  return visibleStationName(station, shopName).trim().toLocaleLowerCase('ru-RU');
+}
+function mergeWorkshopGroups(rawGroups, viewDate, today) {
+  if (!Array.isArray(rawGroups) || viewDate < (today || todayKey())) return rawGroups;
+  const pairs = [
+    ['Рыбный цех', 'Мясной цех', 'Рыбный/Мясной цех'],
+    ['Молочный цех', 'Соусный цех', 'Молочный/Соусный цех']
+  ];
+  const consumed = new Set();
+  const result = [];
+  rawGroups.forEach(group => {
+    if (consumed.has(group.shop)) return;
+    const pair = pairs.find(p => p[0] === group.shop || p[1] === group.shop);
+    if (!pair) { result.push(group); return; }
+    const first = rawGroups.find(g => g.shop === pair[0]);
+    const second = rawGroups.find(g => g.shop === pair[1]);
+    if (!first && !second) return;
+    const sources = [first, second].filter(Boolean);
+    const stations = [];
+    sources.forEach(source => (source.stations || []).forEach(station => {
+      const label = visibleStationName(station, source.shop);
+      const normalizedLabel = normalizedStationName(station, source.shop);
+      let target = stations.find(s => s._normalizedVisibleName === normalizedLabel);
+      if (!target) {
+        target = {
+          ...station,
+          key: station.key,
+          shop: pair[2],
+          name: pair[2] + ' / ' + label,
+          items: [],
+          _sourceKeys: [],
+          _visibleName: label,
+          _normalizedVisibleName: normalizedLabel
+        };
+        stations.push(target);
+      }
+      target._sourceKeys.push(station.key);
+      (station.items || []).forEach(item => target.items.push({
+        ...item,
+        __sourceStationKey: station.key,
+        __visualItemKey: station.key + '-' + item.id
+      }));
+    }));
+    const merged = {shop: pair[2], stations};
+    // Keep internal metadata non-presentational; employee union is resolved by
+    // getShopEmployees below from these source shop names.
+    Object.defineProperty(merged, '_sourceShops', {value: [pair[0], pair[1]], enumerable: false});
+    result.push(merged);
+    consumed.add(pair[0]); consumed.add(pair[1]);
+  });
+  return result;
+}
+
 // ============================================================
 // СОТРУДНИКИ ПО УМОЛЧАНИЮ
 // ============================================================
@@ -6919,9 +6981,12 @@ const INITIAL_EMPLOYEES = [
 const SAUCE_MILK_SHOPS = ['Соусный цех', 'Молочный цех'];
 
 function getShopEmployees(shopName, allEmployees) {
+  const sourceShops = Array.isArray(shopName)
+    ? shopName
+    : (shopName && shopName._sourceShops) || [shopName];
   return allEmployees.filter(e => {
     const s = Array.isArray(e.shops) && e.shops.length > 0 ? e.shops : (e.shop ? [e.shop] : []);
-    return s.includes(shopName);
+    return sourceShops.some(shop => s.includes(shop));
   });
 }
 
@@ -7708,6 +7773,9 @@ const OVOSHCH_FASOVKA_KEY = 'ovoshchnoj_tseh_fasovka';
 
 
 function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robokopItems=[], precutConfig=new Set(), onPrecutConfigChange, shopParam}) {
+  const sourceKeyOf=(item)=>item.__sourceStationKey||station.key;
+  const visualKeyOf=(item)=>item.__visualItemKey||(`${sourceKeyOf(item)}-${item.id}`);
+  const carryKeyOf=(stationKey,itemId)=>`${stationKey}:${itemId}`;
   const isRuchnaya = station.key === RUCHNAYA_KEY;
   const isRobokop  = station.key === ROBOKOP_KEY;
   const isZamesStation = station.key.startsWith('suhoj_tseh_') || station.key === OVOSHCH_FASOVKA_KEY;
@@ -7749,7 +7817,7 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robok
     if(!isZamesStation) return new Set();
     return new Set(zamesItems.filter(it=>shift.doneFlags[zamesKey(it.id)]&&!shift.doneFlags[`${station.key}-${it.id}`]).map(it=>it.id));
   },[isZamesStation,zamesItems,shift.doneFlags,station.key]);
-  const doneCount=items.filter(it=>shift.doneFlags[`${station.key}-${it.id}`]).length;
+  const doneCount=items.filter(it=>shift.doneFlags[`${sourceKeyOf(it)}-${it.id}`]).length;
   const pct=items.length>0?Math.round(doneCount/items.length*100):0;
   const pillColor=doneCount===items.length?'var(--ok)':'var(--warn)';
 
@@ -7760,10 +7828,10 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robok
     return ()=>window.removeEventListener('scroll',onScroll);
   },[]);
 
-  // displayOrder: current visual order of item IDs — done items изначально снизу
+  // displayOrder: current visual order of station+item keys — done items изначально снизу
   const [displayOrder,setDisplayOrder]=useState(()=>{
-    const todoIds=items.filter(i=>!shift.doneFlags[`${station.key}-${i.id}`]).map(i=>i.id);
-    const doneIds=items.filter(i=>!!shift.doneFlags[`${station.key}-${i.id}`]).map(i=>i.id);
+    const todoIds=items.filter(i=>!shift.doneFlags[`${sourceKeyOf(i)}-${i.id}`]).map(visualKeyOf);
+    const doneIds=items.filter(i=>!!shift.doneFlags[`${sourceKeyOf(i)}-${i.id}`]).map(visualKeyOf);
     return [...todoIds,...doneIds];
   });
   // sinkingIds: items currently in the fade-out phase before moving
@@ -7773,19 +7841,19 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robok
 
   // Инициализируем с текущим состоянием, чтобы уже выполненные позиции не мелькали в "Надо выполнить"
   const prevDoneRef=useRef(
-    Object.fromEntries(items.map(i=>[i.id,!!shift.doneFlags[`${station.key}-${i.id}`]]))
+    Object.fromEntries(items.map(i=>[visualKeyOf(i),!!shift.doneFlags[`${sourceKeyOf(i)}-${i.id}`]]))
   );
   const timersRef=useRef({});
 
   // Reset when station changes or items change (e.g. new techcard applied)
-  const itemsKey=items.map(i=>i.id).join(',');
+  const itemsKey=items.map(visualKeyOf).join(',');
   useEffect(()=>{
-    const todoIds=items.filter(i=>!shift.doneFlags[`${station.key}-${i.id}`]).map(i=>i.id);
-    const doneIds=items.filter(i=>!!shift.doneFlags[`${station.key}-${i.id}`]).map(i=>i.id);
+    const todoIds=items.filter(i=>!shift.doneFlags[`${sourceKeyOf(i)}-${i.id}`]).map(visualKeyOf);
+    const doneIds=items.filter(i=>!!shift.doneFlags[`${sourceKeyOf(i)}-${i.id}`]).map(visualKeyOf);
     setDisplayOrder([...todoIds,...doneIds]);
     setSinkingIds(new Set());
     setSettledIds(new Set());
-    prevDoneRef.current=Object.fromEntries(items.map(i=>[i.id,!!shift.doneFlags[`${station.key}-${i.id}`]]));
+    prevDoneRef.current=Object.fromEntries(items.map(i=>[visualKeyOf(i),!!shift.doneFlags[`${sourceKeyOf(i)}-${i.id}`]]));
     Object.values(timersRef.current).forEach(clearTimeout);
     timersRef.current={};
   },[station.key,itemsKey]);
@@ -7793,55 +7861,61 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robok
   // Watch done flag changes
   useEffect(()=>{
     items.forEach(item=>{
-      const ik=`${station.key}-${item.id}`;
+      const ik=`${sourceKeyOf(item)}-${item.id}`;
       const nowDone=!!shift.doneFlags[ik];
-      const wasDone=!!prevDoneRef.current[item.id];
+      const wasDone=!!prevDoneRef.current[visualKeyOf(item)];
 
       if(nowDone&&!wasDone){
         // Phase 1: start sinking (fade out)
-        setSinkingIds(prev=>{const n=new Set(prev);n.add(item.id);return n;});
+        setSinkingIds(prev=>{const n=new Set(prev);n.add(visualKeyOf(item));return n;});
         // Phase 2: after delay, move to bottom
-        timersRef.current[item.id]=setTimeout(()=>{
-          setSinkingIds(prev=>{const n=new Set(prev);n.delete(item.id);return n;});
-          setDisplayOrder(prev=>[...prev.filter(id=>id!==item.id), item.id]);
+        const visualKey=visualKeyOf(item);
+        timersRef.current[visualKey]=setTimeout(()=>{
+          setSinkingIds(prev=>{const n=new Set(prev);n.delete(visualKeyOf(item));return n;});
+          setDisplayOrder(prev=>[...prev.filter(id=>id!==visualKeyOf(item)), visualKeyOf(item)]);
           // Play settle animation briefly
-          setSettledIds(prev=>{const n=new Set(prev);n.add(item.id);return n;});
-          setTimeout(()=>setSettledIds(prev=>{const n=new Set(prev);n.delete(item.id);return n;}),500);
+          setSettledIds(prev=>{const n=new Set(prev);n.add(visualKeyOf(item));return n;});
+          setTimeout(()=>setSettledIds(prev=>{const n=new Set(prev);n.delete(visualKeyOf(item));return n;}),500);
         },SINK_DELAY);
       } else if(!nowDone&&wasDone){
         // Unchecked: cancel pending sink, move back above done items immediately
-        clearTimeout(timersRef.current[item.id]);
-        setSinkingIds(prev=>{const n=new Set(prev);n.delete(item.id);return n;});
+        const visualKey=visualKeyOf(item);
+        clearTimeout(timersRef.current[visualKey]);
+        setSinkingIds(prev=>{const n=new Set(prev);n.delete(visualKeyOf(item));return n;});
         setDisplayOrder(prev=>{
-          const without=prev.filter(id=>id!==item.id);
+          const without=prev.filter(id=>id!==visualKey);
           // insert before first done item
-          const firstDoneIdx=without.findIndex(id=>!!shift.doneFlags[`${station.key}-${id}`]);
-          if(firstDoneIdx===-1){return [...without,item.id];}
+          const firstDoneIdx=without.findIndex(id=>{
+            const found=itemById[id];
+            return found && !!shift.doneFlags[`${sourceKeyOf(found)}-${found.id}`];
+          });
+          if(firstDoneIdx===-1){return [...without,visualKeyOf(item)];}
           const result=[...without];
-          result.splice(firstDoneIdx,0,item.id);
+          result.splice(firstDoneIdx,0,visualKeyOf(item));
           return result;
         });
       }
     });
     prevDoneRef.current=Object.fromEntries(
-      items.map(i=>[i.id,!!shift.doneFlags[`${station.key}-${i.id}`]])
+      items.map(i=>[visualKeyOf(i),!!shift.doneFlags[`${sourceKeyOf(i)}-${i.id}`]])
     );
   },[shift.doneFlags]);
 
   const [statusTab,setStatusTab]=useState('todo');
   const [search,setSearch]=useState('');
-  const itemById=Object.fromEntries(items.map(i=>[i.id,i]));
+  const itemById=Object.fromEntries(items.map(i=>[visualKeyOf(i),i]));
   const orderedItems=displayOrder.map(id=>itemById[id]).filter(Boolean);
   // sinking items stay in todo while animating, then move to done
-  const todoItems=orderedItems.filter(it=>!shift.doneFlags[`${station.key}-${it.id}`]||sinkingIds.has(it.id));
-  const doneItems=orderedItems.filter(it=>!!shift.doneFlags[`${station.key}-${it.id}`]&&!sinkingIds.has(it.id));
+  const todoItems=orderedItems.filter(it=>!shift.doneFlags[`${sourceKeyOf(it)}-${it.id}`]||sinkingIds.has(visualKeyOf(it)));
+  const doneItems=orderedItems.filter(it=>!!shift.doneFlags[`${sourceKeyOf(it)}-${it.id}`]&&!sinkingIds.has(visualKeyOf(it)));
 
-  // Перенос из прошлой смены: prevItemDataMap[itemId][lineIdx] = {status, skipReason, yesterdayFact, volume, packName, planQty}
+  // Перенос из прошлой смены: prevItemDataMap[stationKey:itemId][lineIdx] = данные строки.
   const prevItemDataMap={};
   for(const p of (shift.prevSkips||[])){
-    if(p.stationKey!==station.key) continue;
-    const id=String(p.itemId);
+    if(!(station._sourceKeys||[station.key]).includes(p.stationKey)) continue;
+    const id=carryKeyOf(p.stationKey,p.itemId);
     if(!prevItemDataMap[id]) prevItemDataMap[id]={};
+    prevItemDataMap[id].__stationKey=p.stationKey;
     if(p.lineIdx!=null){
       prevItemDataMap[id][p.lineIdx]={status:p.status,skipReason:p.skipReason,skipAt:p.skipAt,yesterdayFact:p.yesterdayFact,
         volume:p.volume,packName:p.packName,planQty:p.planQty};
@@ -7849,8 +7923,6 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robok
       prevItemDataMap[id].__itemLevel={status:p.status||'skipped',skipReason:p.skipReason,skipAt:p.skipAt};
     }
   }
-  const todayItemIds=new Set(items.map(it=>String(it.id)));
-
   // Вчерашняя техкарта — для карточек переноса берём из неё ингредиенты/подзаготовки
   // (сегодняшние количества могут сильно отличаться от вчерашнего долга)
   const [prevCatalogItems,setPrevCatalogItems]=useState(null);
@@ -7866,48 +7938,55 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robok
       const cat=getCatalogForDate('prev',ee,ud);
       const map={};
       for(const st of cat){
-        if(st.key!==station.key) continue;
-        for(const it of st.items) map[String(it.id)]=it;
+        if(!(station._sourceKeys||[station.key]).includes(st.key)) continue;
+        for(const it of st.items) map[carryKeyOf(st.key,it.id)]=it;
       }
       setPrevCatalogItems(map);
     })();
     return ()=>{alive=false;};
   },[shift.prevTechcardId,shift.prevUdTechcardId,station.key]);
-  const prevItemFor=(id)=>(prevCatalogItems||{})[String(id)]||null;
+  const prevItemFor=(item)=>(prevCatalogItems||{})[carryKeyOf(sourceKeyOf(item),item.id)]||null;
   // Карточка переноса: подменяем ингредиенты/подзаготовки на вчерашние (если нашли)
   const carryItem=(item)=>{
-    const pi=prevItemFor(item.id);
+    const pi=prevItemFor(item);
     return pi?{...item,ingredients:pi.ingredients,subPreps:pi.subPreps,yieldAmount:pi.yieldAmount,yieldUnit:pi.yieldUnit}:item;
   };
   // Items с хотя бы одной skipped/partial строкой (done-only не показываем как перенос)
   const hasCarryoverSkip=(d)=>d&&Object.values(d).some(p=>p.status==='skipped'||p.status==='partial');
   // Берём из всех позиций дня (не только невыполненных): сегодняшняя галочка не должна скрывать вчерашний долг
-  const allCarriedItems=orderedItems.filter(it=>hasCarryoverSkip(prevItemDataMap[String(it.id)]));
+  const allCarriedItems=orderedItems.filter(it=>hasCarryoverSkip(prevItemDataMap[carryKeyOf(sourceKeyOf(it),it.id)]));
   // Позиции переноса, которых НЕТ в сегодняшней техкарте
   const allCarriedOnlyItems=[];
   const seenCarriedOnly=new Set();
   for(const p of (shift.prevSkips||[])){
-    if(p.stationKey!==station.key) continue;
+    if(!(station._sourceKeys||[station.key]).includes(p.stationKey)) continue;
     const sid=String(p.itemId);
-    if(todayItemIds.has(sid)||seenCarriedOnly.has(sid)) continue;
-    if(!hasCarryoverSkip(prevItemDataMap[sid])) continue;
-    seenCarriedOnly.add(sid);
-    allCarriedOnlyItems.push({id:p.itemId,name:p.itemName||`Позиция #${p.itemId}`,ingredients:[]});
+    const carryKey=carryKeyOf(p.stationKey,p.itemId);
+    const existsToday=items.some(it=>sourceKeyOf(it)===p.stationKey&&String(it.id)===sid);
+    if(existsToday||seenCarriedOnly.has(carryKey)) continue;
+    if(!hasCarryoverSkip(prevItemDataMap[carryKey])) continue;
+    seenCarriedOnly.add(carryKey);
+    allCarriedOnlyItems.push({
+      id:p.itemId,name:p.itemName||`Позиция #${p.itemId}`,ingredients:[],
+      __sourceStationKey:p.stationKey,__visualItemKey:p.stationKey+'-'+p.itemId
+    });
   }
   // Определяем "выполнено через карryover-блок" по prev- ключам
-  const isCarryoverDone=(itemId)=>{
-    const lineMap=prevItemDataMap[String(itemId)]||{};
+  const isCarryoverDone=(item)=>{
+    const itemId=item.id;
+    const lineMap=prevItemDataMap[carryKeyOf(sourceKeyOf(item),itemId)]||{};
     const skipEntries=Object.entries(lineMap).filter(([k,p])=>k!=='__itemLevel'&&(p.status==='skipped'||p.status==='partial'));
     if(skipEntries.length===0) return false;
-    return skipEntries.every(([li])=>!!shift.doneFlags[`prev-${station.key}-${itemId}-pl-${li}`]);
+    const originalStationKey=lineMap.__stationKey||station.key;
+    return skipEntries.every(([li])=>!!shift.doneFlags[`prev-${originalStationKey}-${itemId}-pl-${li}`]);
   };
-  const carriedItems=allCarriedItems.filter(it=>!isCarryoverDone(it.id));
-  const carriedOnlyItems=allCarriedOnlyItems.filter(it=>!isCarryoverDone(it.id));
+  const carriedItems=allCarriedItems.filter(it=>!isCarryoverDone(it));
+  const carriedOnlyItems=allCarriedOnlyItems.filter(it=>!isCarryoverDone(it));
   // Во «Выполнено» позиция может быть двумя карточками: сегодняшняя (обычная)
   // и вчерашний закрытый долг (carryover) — это разные задания
   const carriedDoneItems=[
-    ...allCarriedItems.filter(it=>isCarryoverDone(it.id)),
-    ...allCarriedOnlyItems.filter(it=>isCarryoverDone(it.id)),
+    ...allCarriedItems.filter(isCarryoverDone),
+    ...allCarriedOnlyItems.filter(isCarryoverDone),
   ];
   // Обычные невыполненные — без карryover-позиций (они в "Прошлая смена")
   const todoRegular=todoItems; // все позиции сегодняшней техкарты — в "Надо выполнить"
@@ -7921,12 +8000,12 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robok
   const visibleItems=filterItems(statusTab==='todo'?todoItems:doneItems);
 
   const renderItem=(item,prevLineData=null)=>{
-    const sinking=sinkingIds.has(item.id);
-    const settled=settledIds.has(item.id);
+    const sinking=sinkingIds.has(visualKeyOf(item));
+    const settled=settledIds.has(visualKeyOf(item));
     return e('div',{
-      key:item.id,
+      key:visualKeyOf(item),
       className:'item-wrapper'+(sinking?' sinking':'')+(settled?' settled':'')
-    }, e(ItemCard,{item,stationKey:station.key,shift,onShiftChange,shopEmployees,prevLineData}));
+    }, e(ItemCard,{item,stationKey:sourceKeyOf(item),shift,onShiftChange,shopEmployees,prevLineData}));
   };
 
   const togglePrecut=(itemId)=>{
@@ -7938,13 +8017,13 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robok
 
   // Рендер карточки Робокопа с кнопкой предобработки (только в обычном режиме)
   const renderRobokopItem=(item,prevLineData=null,opts={})=>{
-    const sinking=sinkingIds.has(item.id);
-    const settled=settledIds.has(item.id);
+    const sinking=sinkingIds.has(visualKeyOf(item));
+    const settled=settledIds.has(visualKeyOf(item));
     const inPrecut=precutConfig.has(item.id);
     const showToggle=isRobokop && !shopParam && onPrecutConfigChange;
-    const card=e(ItemCard,{item,stationKey:station.key,shift,onShiftChange,shopEmployees,prevLineData});
-    if(!showToggle) return e('div',{key:item.id,className:'item-wrapper'+(sinking?' sinking':'')+(settled?' settled':'')},card);
-    return e('div',{key:item.id,className:'item-wrapper'+(sinking?' sinking':'')+(settled?' settled':''),style:{position:'relative'}},
+    const card=e(ItemCard,{item,stationKey:sourceKeyOf(item),shift,onShiftChange,shopEmployees,prevLineData});
+    if(!showToggle) return e('div',{key:visualKeyOf(item),className:'item-wrapper'+(sinking?' sinking':'')+(settled?' settled':'')},card);
+    return e('div',{key:visualKeyOf(item),className:'item-wrapper'+(sinking?' sinking':'')+(settled?' settled':''),style:{position:'relative'}},
       card,
       e('div',{style:{position:'absolute',top:20,right:12,zIndex:10},
         onMouseEnter:ev=>{const t=ev.currentTarget.querySelector('.precut-tip');if(t)t.style.display='block';},
@@ -7984,31 +8063,32 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robok
     });
   };
   const renderCarried=(item)=>{
-    const lineMap=prevItemDataMap[String(item.id)]||{};
+    const lineMap=prevItemDataMap[carryKeyOf(sourceKeyOf(item),item.id)]||{};
     // Во вкладке «Прошлая смена» показываем ВЧЕРАШНИЕ строки фасовки (долг),
     // а не сегодняшние — их состав и количество могут отличаться
     const synPackLines=buildPrevPackLines(lineMap);
-    return e('div',{key:item.id,className:'item-wrapper'},
-      e(ItemCard,{item:carryItem(item),stationKey:station.key,shift,onShiftChange,shopEmployees,prevLineData:lineMap,
+    const originalStationKey=lineMap.__stationKey||sourceKeyOf(item);
+    return e('div',{key:'prev-'+visualKeyOf(item),className:'item-wrapper'},
+      e(ItemCard,{item:carryItem(item),stationKey:originalStationKey,shift,onShiftChange,shopEmployees,prevLineData:lineMap,
         overridePackLines:synPackLines.length>0?synPackLines:null,keyPrefix:'prev-'}));
   };
   // Для позиций переноса без сегодняшней техкарты — синтетические packLines из prevSkips
   const renderCarriedOnly=(synItem)=>{
-    const lineMap=prevItemDataMap[String(synItem.id)]||{};
+    const lineMap=prevItemDataMap[carryKeyOf(sourceKeyOf(synItem),synItem.id)]||{};
     const synPackLines=buildPrevPackLines(lineMap);
-    const fullPrev=prevItemFor(synItem.id);
+    const fullPrev=prevItemFor(synItem);
     return e('div',{key:synItem.id,className:'item-wrapper'},
-      e(ItemCard,{item:fullPrev||synItem,stationKey:station.key,shift,onShiftChange,shopEmployees,
+      e(ItemCard,{item:fullPrev||synItem,stationKey:lineMap.__stationKey||sourceKeyOf(synItem),shift,onShiftChange,shopEmployees,
         prevLineData:lineMap,overridePackLines:synPackLines.length>0?synPackLines:null,keyPrefix:'prev-'}));
   };
   const renderCarriedDone=(item)=>{
-    const lineMap=prevItemDataMap[String(item.id)]||{};
+    const lineMap=prevItemDataMap[carryKeyOf(sourceKeyOf(item),item.id)]||{};
     const synPackLines=buildPrevPackLines(lineMap);
     // Всегда показываем вчерашние строки — это карточка вчерашнего долга,
     // и key с префиксом, чтобы не конфликтовать с сегодняшней карточкой той же позиции
     const hasOverride=synPackLines.length>0;
     return e('div',{key:'prev-'+item.id,className:'item-wrapper'},
-      e(ItemCard,{item:carryItem(item),stationKey:station.key,shift,onShiftChange,shopEmployees,
+      e(ItemCard,{item:carryItem(item),stationKey:lineMap.__stationKey||sourceKeyOf(item),shift,onShiftChange,shopEmployees,
         prevLineData:lineMap,overridePackLines:hasOverride?synPackLines:null,keyPrefix:'prev-'}));
   };
   const renderRegular=(item)=>renderItem(item,null);
@@ -8146,7 +8226,7 @@ function KitchenShopPage({shopGroup, shift, onShiftChange, allEmployees, onBack,
   const stations=shopGroup.stations||[];
   const [stationIdx,setStationIdx]=useState(0);
   const station=stations[stationIdx]||stations[0];
-  const shopEmployees=useMemo(()=>getShopEmployees(shopGroup.shop,allEmployees),[shopGroup.shop,allEmployees]);
+  const shopEmployees=useMemo(()=>getShopEmployees(shopGroup._sourceShops||shopGroup.shop,allEmployees),[shopGroup,allEmployees]);
   // Заготовки Робокопа передаём в Ручную нарезку
   const robokopItems=useMemo(()=>{
     const st=stations.find(s=>s.key===ROBOKOP_KEY);
@@ -8163,7 +8243,7 @@ function KitchenShopPage({shopGroup, shift, onShiftChange, allEmployees, onBack,
     },
       shopGroups.map(g=>{
         const isActive=g.shop===shopGroup.shop;
-        const gDone=g.stations.reduce((s,st)=>s+(st.items||[]).filter(it=>shift.doneFlags[`${st.key}-${it.id}`]).length,0);
+        const gDone=g.stations.reduce((s,st)=>s+(st.items||[]).filter(it=>shift.doneFlags[`${it.__sourceStationKey||st.key}-${it.id}`]).length,0);
         const gTotal=g.stations.reduce((s,st)=>s+(st.items||[]).length,0);
         const pct=gTotal>0?Math.round(gDone/gTotal*100):null;
         return e('button',{
@@ -8182,7 +8262,7 @@ function KitchenShopPage({shopGroup, shift, onShiftChange, allEmployees, onBack,
     // Station tabs
     e('div',{className:'station-tabs'},
       stations.map((st,i)=>{
-        const stDone=(st.items||[]).filter(it=>shift.doneFlags[`${st.key}-${it.id}`]).length;
+        const stDone=(st.items||[]).filter(it=>shift.doneFlags[`${it.__sourceStationKey||st.key}-${it.id}`]).length;
         const stTotal=(st.items||[]).length;
         const label=st.name.replace(shopGroup.shop+' / ','');
         return e('button',{
@@ -8213,7 +8293,7 @@ function WorkshopSelector({shopGroups, shift, onSelect}) {
       shopGroups.map(g=>{
         const totalItems=g.stations.reduce((s,st)=>s+(st.items||[]).length,0);
         const totalDone=g.stations.reduce((s,st)=>{
-          return s+(st.items||[]).filter(it=>shift.doneFlags[`${st.key}-${it.id}`]).length;
+          return s+(st.items||[]).filter(it=>shift.doneFlags[`${it.__sourceStationKey||st.key}-${it.id}`]).length;
         },0);
         const pct=totalItems>0?Math.round(totalDone/totalItems*100):0;
         const done=totalDone===totalItems&&totalItems>0;
@@ -9491,7 +9571,7 @@ function TechcardsTab({shift, allTechcards, activeTcEE, activeTcUD, onApplyTechc
 // ============================================================
 // MANAGER PAGE
 // ============================================================
-function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesChange, archiveIndex, onOpenArchiveDate, allTechcards, activeTcEE, activeTcUD, onApplyTechcard, onDeactivate, onRefreshTechcards, shopGroups, globalStationConfig, onStationConfigChange, precutConfig, onPrecutConfigChange}) {
+function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesChange, archiveIndex, onOpenArchiveDate, allTechcards, activeTcEE, activeTcUD, onApplyTechcard, onDeactivate, onRefreshTechcards, shopGroups, workshopGroups, globalStationConfig, onStationConfigChange, precutConfig, onPrecutConfigChange}) {
   const activeTechcard = activeTcEE || activeTcUD; // для обратной совместимости
   const [tab,setTab]=useState('dashboard');
   const [selectedShop,setSelectedShop]=useState(null);
@@ -9524,14 +9604,14 @@ function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesCh
       selectedShop
         ? e(KitchenShopPage,{
             shopGroup:selectedShop, shift, onShiftChange, allEmployees,
-            isManager:true, shopGroups,
+            isManager:true, shopGroups:workshopGroups,
             precutConfig, onPrecutConfigChange,
             onBack:(targetGroup)=>{
               if(targetGroup) setSelectedShop(targetGroup);
               else setSelectedShop(null);
             }
           })
-        : e(WorkshopSelector,{shopGroups, shift, onSelect:setSelectedShop})
+        : e(WorkshopSelector,{shopGroups:workshopGroups, shift, onSelect:setSelectedShop})
     ),
     tab==='employees' && e(EmployeesTab,{employees:allEmployees,onSave:onEmployeesChange}),
     tab==='shifts' && e(ShiftsTab,{archiveIndex,globalStationConfig,onStationConfigChange,shopGroups}),
@@ -12302,17 +12382,23 @@ function App() {
   };
 
   const catalog=useMemo(()=>getCatalogForDate(viewDate,activeTcEE,activeTcUD),[viewDate,activeTcEE,activeTcUD]);
+  // Keep this raw collection for manager/reporting; only workshop presentation
+  // receives the date-aware merged view.
   const shopGroups=useMemo(()=>getStationGroups(catalog),[catalog]);
+  const workshopGroups=useMemo(
+    ()=>mergeWorkshopGroups(shopGroups,viewDate,today),
+    [shopGroups,viewDate,today]
+  );
 
   // Tablet mode: auto-select locked shop when catalog is ready
   useEffect(()=>{
     if(!shopParam||selectedShop) return;
-    const found=shopGroups.find(g=>
-      g.stations.some(s=>s.key===shopParam) ||
-      g.shop.toLowerCase().replace(/\s/g,'_')===shopParam.toLowerCase()
+    const found=workshopGroups.find(g=>
+      g.stations.some(s=>s.key===shopParam || (s._sourceKeys||[]).includes(shopParam)) ||
+      (g._sourceShops||[g.shop]).some(shop=>shop.toLowerCase().replace(/\s/g,'_')===shopParam.toLowerCase())
     );
     if(found) setSelectedShop(found);
-  },[shopParam,shopGroups,selectedShop]);
+  },[shopParam,workshopGroups,selectedShop]);
 
   // Роли технолога и продуктовой команды — рендерим сразу, без загрузки смены
   if(isTechnologist) return e('div',null,
@@ -12373,7 +12459,7 @@ function App() {
 
     // CONTENT
     mode==='home' && e(WorkshopSelector,{
-      shopGroups,shift,
+      shopGroups:workshopGroups,shift,
       onSelect:(g)=>{setSelectedShop(g);setMode('kitchen');}
     }),
 
@@ -12383,7 +12469,7 @@ function App() {
       onShiftChange:persistShift,
       allEmployees,
       isManager,
-      shopGroups: (shopParam||!isManager) ? null : shopGroups,
+      shopGroups: (shopParam||!isManager) ? null : workshopGroups,
       precutConfig,
       onPrecutConfigChange: async(newSet)=>{
         setPrecutConfig(newSet);
@@ -12410,6 +12496,7 @@ function App() {
       onDeactivate:deactivateTechcard,
       onRefreshTechcards:refreshTechcards,
       shopGroups,
+      workshopGroups,
       globalStationConfig,
       onStationConfigChange:setGlobalStationConfig,
       precutConfig,
