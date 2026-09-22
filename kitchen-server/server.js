@@ -28,6 +28,7 @@ app.use('/api/precut',    require('./routes/precut'));
 app.use('/api/quality',  require('./routes/quality'));
 app.use('/api/acts',     require('./routes/acts'));
 app.use('/api/prorabotki', require('./routes/prorabotki'));
+app.use('/api/technologist-tasks', require('./routes/technologist-tasks'));
 const objectStorage = require('./lib/objectStorage');
 app.get('/uploads/:filename', async (req, res) => {
   const filename = path.basename(req.params.filename);

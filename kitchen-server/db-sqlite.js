@@ -51,6 +51,28 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS shift_station_start (
   PRIMARY KEY (shift_date, station_key)
 )`);
 
+sqlite.exec(`CREATE TABLE IF NOT EXISTS technologist_tasks (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  title               TEXT NOT NULL,
+  planned_date        TEXT NOT NULL,
+  actual_completed_at TEXT,
+  description         TEXT NOT NULL DEFAULT '',
+  result              TEXT,
+  cancel_reason       TEXT,
+  cancelled_at        TEXT,
+  status              TEXT NOT NULL DEFAULT 'new'
+                      CHECK (status IN ('new', 'completed', 'cancelled')),
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+{
+  const cols = sqlite.prepare('PRAGMA table_info(technologist_tasks)').all();
+  if (!cols.some(c => c.name === 'cancelled_at')) {
+    sqlite.exec('ALTER TABLE technologist_tasks ADD COLUMN cancelled_at TEXT');
+  }
+}
+sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_tt_status_date ON technologist_tasks(status, planned_date)`);
+
 // Добавляем company к techcards если нет
 {
   const cols = sqlite.prepare('PRAGMA table_info(techcards)').all();

@@ -8717,7 +8717,7 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
     ),
     // Filters + table
     e('div',{className:'card',style:{padding:0}},
-      e('div',{style:{position:'sticky',top:54,zIndex:20,background:'var(--card)',borderRadius:'12px 12px 0 0',padding:'14px 16px 10px',borderBottom:'1px solid var(--border)'}},
+      e('div',{style:{position:'sticky',top:54,zIndex:20,background:'var(--surface)',borderRadius:'12px 12px 0 0',padding:'14px 16px 10px',borderBottom:'1px solid var(--border)'}},
         e('div',{style:{display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:10,marginBottom:10}},
           e('p',{style:{fontWeight:700,fontSize:15,margin:0}},'Детализация ('+filtered.length+' позиций)'),
           e('button',{className:'btn-secondary',onClick:exportXlsx,style:{display:'flex',alignItems:'center',gap:8}},
@@ -9594,6 +9594,8 @@ function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesCh
         e(SvgUpload,{size:16}),' Техкарты'),
       e('button',{className:'mgr-tab'+(tab==='technologist'?' active':''),onClick:()=>switchTab('technologist')},
         '🔬 Технолог'),
+      e('button',{className:'mgr-tab'+(tab==='techTasks'?' active':''),onClick:()=>switchTab('techTasks')},
+        '📝 Задания технологу'),
       e('button',{className:'mgr-tab'+(tab==='product'?' active':''),onClick:()=>switchTab('product')},
         '📋 Журнал проверок ПК'),
       e('button',{className:'mgr-tab'+(tab==='acts'?' active':''),onClick:()=>switchTab('acts')},
@@ -9617,6 +9619,7 @@ function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesCh
     tab==='shifts' && e(ShiftsTab,{archiveIndex,globalStationConfig,onStationConfigChange,shopGroups}),
     tab==='upload' && e(TechcardsTab,{shift,allTechcards,activeTcEE,activeTcUD,onApplyTechcard,onDeactivate,onRefreshTechcards}),
     tab==='technologist' && e(TechnologistPage,{initialActId:actIdParam}),
+    tab==='techTasks' && e(ManagerTechnologistTasks),
     tab==='product' && e(ProductJournalPage,null),
     tab==='acts' && e(ActsPage,{isManager:true})
   );
@@ -10777,6 +10780,253 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
   );
 }
 
+const TECHNOLOGIST_TASK_STATUS = {
+  new: {label:'Новое',color:'#B45309',bg:'#FEF3C7'},
+  completed: {label:'Выполнено',color:'#166534',bg:'#DCFCE7'},
+  cancelled: {label:'Отменено',color:'#991B1B',bg:'#FEE2E2'},
+};
+function technologistTaskDate(value,withTime=false){
+  if(!value)return '—';
+  const d=new Date(withTime?value:value+'T00:00:00');
+  return isNaN(d)?value:d.toLocaleDateString('ru-RU',withTime
+    ?{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}
+    :{day:'2-digit',month:'2-digit',year:'numeric'});
+}
+function technologistTaskDeadlineMeta(value){
+  const today=todayISO();
+  if(value===today)return {note:'Сегодня',color:'#B45309',bg:'#FFF7ED',border:'#F59E0B'};
+  if(value<today)return {note:'Просрочено',color:'#B91C1C',bg:'#FEF2F2',border:'#EF4444'};
+  return {note:'Дедлайн',color:'var(--accent)',bg:'var(--bg-subtle)',border:'var(--accent)'};
+}
+function groupTechnologistTasksByDeadline(tasks){
+  const groups=[];
+  [...tasks].sort((a,b)=>a.planned_date.localeCompare(b.planned_date)||b.id-a.id).forEach(task=>{
+    let group=groups[groups.length-1];
+    if(!group||group.date!==task.planned_date){
+      group={date:task.planned_date,tasks:[]};
+      groups.push(group);
+    }
+    group.tasks.push(task);
+  });
+  return groups;
+}
+function TechnologistTaskDateGroups({tasks,renderTask}){
+  const ordered=[...tasks].sort((a,b)=>{
+    const statusOrder={completed:0,cancelled:1,new:0};
+    return (statusOrder[a.status]??0)-(statusOrder[b.status]??0)
+      ||a.planned_date.localeCompare(b.planned_date)
+      ||b.id-a.id;
+  });
+  return e('div',{style:{display:'flex',flexDirection:'column',gap:10}},ordered.map(renderTask));
+}
+async function technologistTaskRequest(path,role,options={}){
+  const response=await fetch('/api/technologist-tasks'+path,{
+    ...options,
+    headers:{'Content-Type':'application/json','X-User-Role':role,...(options.headers||{})}
+  });
+  const data=await response.json().catch(()=>({}));
+  if(!response.ok)throw new Error(data.error||'Не удалось выполнить запрос');
+  return data;
+}
+function TechnologistTaskSummary({task,actions=null,cornerAction=null}){
+  const meta=TECHNOLOGIST_TASK_STATUS[task.status]||TECHNOLOGIST_TASK_STATUS.new;
+  const deadline=technologistTaskDeadlineMeta(task.planned_date);
+  return e('div',{style:{position:'relative',border:'1.5px solid var(--border)',borderRadius:12,padding:16,background:'var(--surface)',display:'flex',flexDirection:'column',gap:10}},
+    cornerAction,
+    e('div',{style:{display:'flex',gap:10,justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',paddingRight:cornerAction?28:0}},
+      e('div',{style:{display:'flex',alignItems:'center',gap:9,flex:'1 1 280px',flexWrap:'wrap'}},
+        e('div',{style:{fontSize:17,fontWeight:750}},task.title),
+        e('span',{style:{padding:'4px 9px',borderRadius:999,fontSize:12,fontWeight:700,color:meta.color,background:meta.bg}},meta.label)
+      ),
+      e('div',{style:{padding:'5px 10px',borderRadius:8,border:`1px solid ${deadline.border}`,background:deadline.bg,fontSize:12,color:deadline.color,whiteSpace:'nowrap'}},
+        e('span',{style:{fontWeight:650}},'Дедлайн: '),
+        e('b',{style:{color:'var(--text)',fontSize:13}},technologistTaskDate(task.planned_date))
+      )
+    ),
+    e('div',{style:{whiteSpace:'pre-wrap',fontSize:14,lineHeight:1.5}},task.description),
+    task.status==='completed'&&e('div',{style:{padding:11,borderRadius:9,background:'#F0FDF4'}},
+      e('div',{style:{fontSize:12,fontWeight:700,color:'#166534',marginBottom:4}},'Результат'),
+      e('div',{style:{whiteSpace:'pre-wrap'}},task.result||'—'),
+      e('div',{style:{display:'inline-flex',alignItems:'center',gap:6,marginTop:9,padding:'5px 8px',borderRadius:7,border:'1px solid #86EFAC',background:'#DCFCE7',fontSize:12,color:'#166534'}},
+        e('b',null,'Дата выполнения:'),
+        e('span',{style:{color:'var(--text)',fontWeight:650}},technologistTaskDate(task.actual_completed_at,true))
+      )
+    ),
+    task.status==='cancelled'&&e('div',{style:{padding:11,borderRadius:9,background:'#FEF2F2'}},
+      e('div',{style:{fontSize:12,fontWeight:700,color:'#991B1B',marginBottom:4}},'Причина отмены'),
+      e('div',{style:{whiteSpace:'pre-wrap'}},task.cancel_reason||'—'),
+      e('div',{style:{display:'inline-flex',alignItems:'center',gap:6,marginTop:9,padding:'5px 8px',borderRadius:7,border:'1px solid #FCA5A5',background:'#FEE2E2',fontSize:12,color:'#991B1B'}},
+        e('b',null,'Дата отмены:'),
+        e('span',{style:{color:'var(--text)',fontWeight:650}},technologistTaskDate(task.cancelled_at,true))
+      )
+    ),
+    actions
+  );
+}
+function ManagerTechnologistTasks(){
+  const [tasks,setTasks]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [error,setError]=useState('');
+  const [saving,setSaving]=useState(false);
+  const [deleteTarget,setDeleteTarget]=useState(null);
+  const [deleting,setDeleting]=useState(false);
+  const [form,setForm]=useState({title:'',planned_date:todayISO(),description:''});
+  const load=async()=>{
+    setLoading(true);setError('');
+    try{const data=await technologistTaskRequest('/','manager');setTasks(data.tasks||[]);}
+    catch(err){setError(err.message);}
+    finally{setLoading(false);}
+  };
+  useEffect(()=>{load();},[]);
+  const create=async ev=>{
+    ev.preventDefault();setSaving(true);setError('');
+    try{
+      await technologistTaskRequest('/','manager',{method:'POST',body:JSON.stringify(form)});
+      setForm({title:'',planned_date:todayISO(),description:''});
+      await load();
+    }catch(err){setError(err.message);}
+    finally{setSaving(false);}
+  };
+  const remove=async()=>{
+    if(!deleteTarget)return;
+    const task=deleteTarget;
+    setDeleting(true);
+    setError('');
+    try{
+      await technologistTaskRequest(`/${task.id}`,'manager',{method:'DELETE'});
+      setTasks(prev=>prev.filter(item=>item.id!==task.id));
+      setDeleteTarget(null);
+    }catch(err){setError(err.message);}
+    finally{setDeleting(false);}
+  };
+  const newTasks=tasks.filter(task=>task.status==='new');
+  const closedTasks=tasks.filter(task=>task.status==='completed'||task.status==='cancelled');
+  const section=(title,items,emptyText)=>e('section',{style:{marginBottom:26}},
+    e('div',{style:{fontSize:17,fontWeight:800,marginBottom:10}},`${title} (${items.length})`),
+    items.length
+      ?e(TechnologistTaskDateGroups,{tasks:items,renderTask:task=>e(TechnologistTaskSummary,{
+          key:task.id,task,
+          cornerAction:task.status==='new'&&
+            e('button',{
+              onClick:()=>setDeleteTarget(task),
+              title:'Удалить задание',
+              'aria-label':'Удалить задание',
+              style:{position:'absolute',top:5,right:7,width:28,height:28,padding:0,
+                border:0,borderRadius:7,background:'transparent',
+                color:'var(--muted)',fontSize:24,fontWeight:400,lineHeight:1,cursor:'pointer',
+                display:'inline-flex',alignItems:'center',justifyContent:'center'}
+            },'×')
+        })})
+      :e('div',{style:{padding:'16px',textAlign:'center',color:'var(--muted)',fontSize:14,border:'1.5px dashed var(--border)',borderRadius:10}},emptyText)
+  );
+  return e('div',{style:{padding:'20px',maxWidth:960,margin:'0 auto'}},
+    e('h2',{style:{margin:'0 0 4px'}},'Задания технологу'),
+    e('p',{className:'page-sub',style:{marginBottom:18}},'Создавайте текстовые задания и отслеживайте их выполнение.'),
+    e('form',{onSubmit:create,style:{border:'1.5px solid var(--border)',borderRadius:14,padding:16,marginBottom:24,background:'var(--surface)'}},
+      e('div',{style:{display:'grid',gridTemplateColumns:'minmax(0,2fr) minmax(180px,1fr)',gap:12,marginBottom:12}},
+        e('label',{style:{fontSize:13,fontWeight:650}},'Заголовок',
+          e('input',{className:'filter-input',value:form.title,required:true,maxLength:200,
+            onChange:ev=>setForm({...form,title:ev.target.value}),style:{display:'block',width:'100%',marginTop:6},placeholder:'Что нужно сделать'})),
+        e('label',{style:{fontSize:13,fontWeight:650}},'Плановая дата выполнения',
+          e('input',{type:'date',className:'filter-input',value:form.planned_date,required:true,
+            onChange:ev=>setForm({...form,planned_date:ev.target.value}),style:{display:'block',width:'100%',marginTop:6}}))
+      ),
+      e('label',{style:{fontSize:13,fontWeight:650}},'Описание задачи',
+        e('textarea',{value:form.description,required:true,maxLength:5000,rows:5,
+          onChange:ev=>setForm({...form,description:ev.target.value}),
+          style:{display:'block',width:'100%',marginTop:6,padding:10,borderRadius:9,border:'1.5px solid var(--border)',background:'var(--bg)',color:'var(--text)',resize:'vertical'},
+          placeholder:'Подробно опишите задачу'})),
+      error&&e('div',{style:{color:'#B91C1C',fontSize:13,marginTop:10}},error),
+      e('button',{type:'submit',disabled:saving,style:{marginTop:12,padding:'9px 18px',border:0,borderRadius:9,background:'var(--accent)',color:'#fff',fontWeight:700,cursor:'pointer'}},saving?'Создание…':'Создать задание')
+    ),
+    loading?e('div',{className:'empty-state'},'Загрузка…'):
+      tasks.length===0?e('div',{className:'empty-state'},'Заданий пока нет'):
+      e(React.Fragment,null,
+        section('Новые задания',newTasks,'Новых заданий нет'),
+        section('Выполненные и отменённые',closedTasks,'Завершённых заданий нет')
+      ),
+    deleteTarget&&ReactDOM.createPortal(
+      e('div',{
+        onClick:()=>!deleting&&setDeleteTarget(null),
+        style:{position:'fixed',inset:0,zIndex:2147483646,background:'rgba(0,0,0,.62)',display:'flex',alignItems:'center',justifyContent:'center',padding:16,isolation:'isolate'}
+      },
+        e('div',{
+          onClick:ev=>ev.stopPropagation(),
+          style:{position:'relative',zIndex:2147483647,width:'100%',maxWidth:430,background:'#FFFFFF',color:'#1A1714',opacity:1,border:'1px solid #D8D2CB',borderRadius:14,padding:20,boxShadow:'0 24px 70px rgba(0,0,0,.5)'}
+        },
+          e('div',{style:{fontSize:19,fontWeight:800,marginBottom:8}},'Удалить задание?'),
+          e('div',{style:{fontSize:14,lineHeight:1.5,color:'#6E6862',marginBottom:18}},
+            'Задание «',e('b',{style:{color:'#1A1714'}},deleteTarget.title),'» будет удалено без возможности восстановления.'
+          ),
+          e('div',{style:{display:'flex',justifyContent:'flex-end',gap:9}},
+            e('button',{
+              onClick:()=>setDeleteTarget(null),disabled:deleting,
+              style:{padding:'9px 16px',border:'1px solid #D8D2CB',borderRadius:9,background:'#FFFFFF',color:'#1A1714',fontWeight:700,cursor:'pointer'}
+            },'Отмена'),
+            e('button',{
+              onClick:remove,disabled:deleting,
+              style:{padding:'9px 16px',border:0,borderRadius:9,background:'var(--danger)',color:'#fff',fontWeight:700,cursor:'pointer'}
+            },deleting?'Удаление…':'Удалить')
+          )
+        )
+      ),
+      document.body
+    )
+  );
+}
+function TechnologistManagerTasks(){
+  const [tasks,setTasks]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [error,setError]=useState('');
+  const [editing,setEditing]=useState(null);
+  const [text,setText]=useState('');
+  const load=async()=>{
+    setLoading(true);setError('');
+    try{const data=await technologistTaskRequest('/','technologist');setTasks(data.tasks||[]);}
+    catch(err){setError(err.message);}
+    finally{setLoading(false);}
+  };
+  useEffect(()=>{load();},[]);
+  const begin=(task,action)=>{setEditing({id:task.id,action});setText('');setError('');};
+  const submit=async()=>{
+    if(!editing||!text.trim()){setError(editing?.action==='cancel'?'Укажите причину отмены':'Укажите результат выполнения');return;}
+    try{
+      await technologistTaskRequest(`/${editing.id}/${editing.action}`,'technologist',{
+        method:'PATCH',body:JSON.stringify(editing.action==='complete'?{result:text}:{reason:text})
+      });
+      setEditing(null);setText('');await load();
+    }catch(err){setError(err.message);}
+  };
+  const active=tasks.filter(t=>t.status==='new');
+  const closed=tasks.filter(t=>t.status==='completed'||t.status==='cancelled');
+  const list=items=>e(TechnologistTaskDateGroups,{tasks:items,renderTask:task=>
+    e(TechnologistTaskSummary,{key:task.id,task,actions:task.status==='new'&&e(React.Fragment,null,
+      editing?.id===task.id
+        ?e('div',{style:{borderTop:'1px solid var(--border)',paddingTop:10}},
+            e('div',{style:{fontSize:13,fontWeight:700,marginBottom:6}},editing.action==='complete'?'Результат выполнения':'Причина отмены'),
+            e('textarea',{value:text,onChange:ev=>setText(ev.target.value),rows:4,autoFocus:true,
+              style:{width:'100%',padding:9,borderRadius:8,border:'1.5px solid var(--border)',background:'var(--bg)',color:'var(--text)',resize:'vertical'}}),
+            e('div',{style:{display:'flex',gap:8,marginTop:8}},
+              e('button',{onClick:submit,style:{padding:'8px 14px',border:0,borderRadius:8,background:editing.action==='complete'?'var(--ok)':'#B91C1C',color:'#fff',fontWeight:700}},'Подтвердить'),
+              e('button',{onClick:()=>{setEditing(null);setText('');},style:{padding:'8px 14px',border:'1px solid var(--border)',borderRadius:8,background:'transparent',color:'var(--text)'}},'Назад')
+            ))
+        :e('div',{style:{display:'flex',gap:8,borderTop:'1px solid var(--border)',paddingTop:10}},
+            e('button',{onClick:()=>begin(task,'complete'),style:{padding:'8px 14px',border:0,borderRadius:8,background:'var(--ok)',color:'#fff',fontWeight:700}},'Выполнить'),
+            e('button',{onClick:()=>begin(task,'cancel'),style:{padding:'8px 14px',border:'1px solid #DC2626',borderRadius:8,background:'transparent',color:'#B91C1C',fontWeight:700}},'Отменить')
+          )
+    )})
+  });
+  return e('div',null,
+    error&&e('div',{style:{color:'#B91C1C',fontSize:13,marginBottom:10}},error),
+    loading?e('div',{className:'empty-state'},'Загрузка…'):e(React.Fragment,null,
+      e('div',{style:{fontSize:17,fontWeight:750,marginBottom:10}},`Новые задания (${active.length})`),
+      active.length?list(active):e('div',{className:'empty-state',style:{marginBottom:22}},'Новых заданий нет'),
+      e('div',{style:{fontSize:17,fontWeight:750,margin:'24px 0 10px'}},`Выполненные и отменённые (${closed.length})`),
+      closed.length?list(closed):e('div',{className:'empty-state'},'Завершённых заданий нет')
+    )
+  );
+}
+
 // Страница технолога
 function TechnologistPage({initialActId=null}) {
   const [tab,setTab]=useState(initialActId?'acts':'tasks');
@@ -10886,6 +11136,7 @@ function TechnologistPage({initialActId=null}) {
     // Табы
     e('div',{className:'mgr-tabs',style:{marginBottom:20}},
       e('button',{className:'mgr-tab'+(tab==='tasks'?' active':''),onClick:()=>setTab('tasks')},'📋 Задания'),
+      e('button',{className:'mgr-tab'+(tab==='managerTasks'?' active':''),onClick:()=>setTab('managerTasks')},'📝 От управляющего'),
       e('button',{className:'mgr-tab'+(tab==='library'?' active':''),onClick:()=>setTab('library')},'📚 Библиотека эталонов'),
       e('button',{className:'mgr-tab'+(tab==='acts'?' active':''),onClick:()=>{setOpenActId(null);setTab('acts');}},'🧪 Акты проработки'),
       e('button',{className:'mgr-tab'+(tab==='prorabotki'?' active':''),onClick:()=>setTab('prorabotki')},'🔬 Проработки')
@@ -10958,6 +11209,7 @@ function TechnologistPage({initialActId=null}) {
         )
       )
     ),
+    tab==='managerTasks'&&e(TechnologistManagerTasks),
 
     // Вкладка Библиотека
     tab==='library'&&e(LibraryTab,{standards,onReload:async()=>{await reloadStandards();}}),
