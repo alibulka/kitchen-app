@@ -1,0 +1,125 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { buildData, buildRequests, targetFor, syncActSafely } = require('../lib/prorabotki-writeback');
+
+test('only result columns, correct boundaries and numeric masses', () => {
+  const fields = { material: 'Сырьё', name: 'Название', manufacturer: 'Производитель',
+    supplier: 'Поставщик', workDate: '2026-09-11', grossMass: 100, defrostMass: 80,
+    conclusion: 'Да', comment: 'Комментарий 1\nКомментарий 2', unrelated: 'ignored' };
+  const first = buildData('236716915:225', 'Мясо', fields);
+  const second = buildData('184249890:822', 'Другое', fields);
+  assert.deepEqual(first.map(x => x.range), ['B','D','G','H','N','O','P','R','V','X'].map(c=>`'Мясо'!${c}225`));
+  assert.deepEqual(second.map(x => x.range), ['C','D','E','K','M','N','O','Q','T'].map(c=>`'Другое'!${c}822`));
+  assert.equal(first[5].values[0][0], 100);
+  assert.equal(first[6].values[0][0], 80);
+  assert.equal(first[7].values[0][0], 0.2);
+  assert.equal(first[9].values[0][0], 'Комментарий 1\nКомментарий 2');
+  for (const [id, data, percentIndex] of [['236716915:225', first, 7], ['184249890:822', second, 6]]) {
+    const requests = buildRequests(id, data);
+    assert.equal(requests.length, data.length);
+    const pct = requests[percentIndex].updateCells;
+    assert.deepEqual(pct.rows[0].values[0], {
+      userEnteredValue: { numberValue: 0.2 },
+      userEnteredFormat: { numberFormat: { type: 'PERCENT', pattern: '0.00%' } },
+    });
+    assert.equal(pct.range.endRowIndex - pct.range.startRowIndex, 1);
+    assert.equal(pct.range.endColumnIndex - pct.range.startColumnIndex, 1);
+    assert.equal(requests[0].updateCells.fields, 'userEnteredValue');
+  }
+  assert.deepEqual(buildData('184249890:822', 'Другое', { conclusion: '', grossMass: null }), []);
+  for (const id of ['236716915:224', '184249890:821', '123:822', '822']) assert.throws(() => targetFor(id));
+});
+
+test('percentage handles zero net, missing masses and zero gross', () => {
+  const data = masses => buildData('236716915:225', 'Мясо', masses);
+  const pct = masses => data(masses).find(c => c.range.endsWith('!R225'))?.values[0][0];
+  assert.equal(pct({ grossMass: 100, defrostMass: 0 }), 1);
+  assert.equal(pct({ grossMass: 100, defrostMass: 100 }), 0);
+  assert.equal(pct({ grossMass: 0, defrostMass: 0 }), undefined);
+  assert.equal(pct({ grossMass: 100, defrostMass: null }), undefined);
+  assert.throws(() => data({ grossMass: 'bad', defrostMass: 80 }));
+});
+
+test('development write disabled before any database or Google calls', async () => {
+  const old = process.env.PRORABOTKI_WRITE_ENABLED;
+  delete process.env.PRORABOTKI_WRITE_ENABLED;
+  try {
+    assert.deepEqual(await syncActSafely({ query() { throw new Error('Must not query'); } }, 1), { status: 'disabled' });
+  } finally {
+    if (old === undefined) delete process.env.PRORABOTKI_WRITE_ENABLED;
+    else process.env.PRORABOTKI_WRITE_ENABLED = old;
+  }
+});
+
+test('renamed acts sync all comments; mismatched source rows block writes', async () => {
+  const { JWT } = require('google-auth-library');
+  const originalRequest = JWT.prototype.request;
+  const oldFlag = process.env.PRORABOTKI_WRITE_ENABLED;
+  process.env.PRORABOTKI_WRITE_ENABLED = 'true';
+  const act = { id: 42, source_row: '236716915:id:225', source_product_name: 'Старое название',
+    product_name: 'Новое название', raw_material: 'Сырьё', manufacturer: 'Завод',
+    supplier: 'Поставщик', gross_mass: 100, defrost_mass: 80, date: '2026-09-11', conclusion: 'Подходит' };
+  let sourceName = 'Старое название';
+  let moved = false;
+  let changedBeforeWrite = false;
+  const writes = [];
+  const dbUpdates = [];
+  let locks = 0;
+  const pool = { async query(sql, params) {
+    if (sql.includes('pg_advisory_xact_lock')) { locks++; return { rows: [] }; }
+    if (sql.startsWith('UPDATE acts')) { dbUpdates.push(params); return { rows: [] }; }
+    if (sql.includes('JOIN act_fields')) return { rows: [{ label: 'Вкус', value: 'Хороший' }, { label: 'Вид', value: 'Нормальный' }] };
+    return { rows: [act] };
+  } };
+  pool.connect = async () => pool;
+  pool.withTransaction = async fn => fn(pool);
+  JWT.prototype.request = async function(request) {
+    if (request.method === 'POST') { writes.push(request.data); return { data: {} }; }
+    assert.ok(locks > 0, 'Google access must run under a cross-instance lock');
+    if (request.url.includes('/values/')) {
+      const range = decodeURIComponent(request.url.split('/values/')[1]);
+      if (range.includes("'ни рыба ни мясо'")) return { data: { values: [] } };
+      if (/!A\d+:A$/.test(range)) return { data: { values: [[225]] } };
+      const row = [225]; row[3] = sourceName;
+      if (/!A\d+:Y\d+$/.test(range)) {
+        if (changedBeforeWrite) row[0] = 999;
+        return { data: { values: [row] } };
+      }
+      return { data: { values: moved ? [[], [], row] : [row] } };
+    }
+    return { data: { sheets: [
+      { properties: { sheetId: 236716915, title: 'Мясо / Рыба Проработки (с 2025года)' } },
+      { properties: { sheetId: 184249890, title: 'ни рыба ни мясо' } },
+    ] } };
+  };
+  try {
+    assert.deepEqual(await syncActSafely(pool, 42), { status: 'synced', cells: 10 });
+    assert.equal(writes[0].requests[1].updateCells.rows[0].values[0].userEnteredValue.stringValue, 'Новое название');
+    assert.equal(writes[0].requests[9].updateCells.rows[0].values[0].userEnteredValue.stringValue, 'Вкус: Хороший\nВид: Нормальный');
+    assert.deepEqual(dbUpdates, [['Новое название', 42]]);
+    moved = true;
+    // The raw ID column also moves, while the stable act key does not.
+    const previousRequest = JWT.prototype.request;
+    JWT.prototype.request = async function(request) {
+      if (request.url.includes('/values/') &&
+          decodeURIComponent(request.url).includes("'Мясо / Рыба Проработки (с 2025года)'!A225:A")) {
+        return { data: { values: [[], [], [225]] } };
+      }
+      return previousRequest.call(this, request);
+    };
+    assert.equal((await syncActSafely(pool, 42)).status, 'synced');
+    assert.equal(writes[1].requests[0].updateCells.range.startRowIndex, 226);
+    changedBeforeWrite = true;
+    assert.equal((await syncActSafely(pool, 42)).status, 'error');
+    assert.equal(writes.length, 2, 'A concurrent row move must not update another task');
+    changedBeforeWrite = false;
+    sourceName = 'Другое задание';
+    assert.equal((await syncActSafely(pool, 42)).status, 'error');
+    assert.equal(writes.length, 2);
+    assert.equal(locks, 4);
+  } finally {
+    JWT.prototype.request = originalRequest;
+    if (oldFlag === undefined) delete process.env.PRORABOTKI_WRITE_ENABLED;
+    else process.env.PRORABOTKI_WRITE_ENABLED = oldFlag;
+  }
+});

@@ -1,5 +1,3 @@
-run = "npm start"
-entrypoint = "server.js"
 modules = ["nodejs-20", "python-3.11", "postgresql-16"]
 
 [nix]
@@ -43,3 +41,18 @@ outputType = "webview"
 task = "shell.exec"
 args = "cd kitchen-server && PORT=5000 npm start"
 waitForPort = 5000
+
+[userenv]
+
+[userenv.production]
+FACTS_SHEETS_ENABLED = "true"
+PRORABOTKI_WRITE_ENABLED = "true"
+ACT_NOTIFICATIONS_ENABLED = "true"
+ACT_NOTIFICATION_ENDPOINT = "https://api-new.elementaree.ru/replit/notification/send"
+
+[userenv.development]
+ACT_NOTIFICATIONS_ENABLED = "true"
+ACT_NOTIFICATION_ENDPOINT = "https://frontapi.staging.elementaree.org/replit/notification/send"
+FACTS_SHEETS_ENABLED = "false"
+PRORABOTKI_WRITE_ENABLED = "false"
+DEV_FALLBACK_PORT = "3000"

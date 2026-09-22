@@ -51,6 +51,28 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS shift_station_start (
   PRIMARY KEY (shift_date, station_key)
 )`);
 
+sqlite.exec(`CREATE TABLE IF NOT EXISTS technologist_tasks (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  title               TEXT NOT NULL,
+  planned_date        TEXT NOT NULL,
+  actual_completed_at TEXT,
+  description         TEXT NOT NULL DEFAULT '',
+  result              TEXT,
+  cancel_reason       TEXT,
+  cancelled_at        TEXT,
+  status              TEXT NOT NULL DEFAULT 'new'
+                      CHECK (status IN ('new', 'completed', 'cancelled')),
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+{
+  const cols = sqlite.prepare('PRAGMA table_info(technologist_tasks)').all();
+  if (!cols.some(c => c.name === 'cancelled_at')) {
+    sqlite.exec('ALTER TABLE technologist_tasks ADD COLUMN cancelled_at TEXT');
+  }
+}
+sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_tt_status_date ON technologist_tasks(status, planned_date)`);
+
 // Добавляем company к techcards если нет
 {
   const cols = sqlite.prepare('PRAGMA table_info(techcards)').all();
@@ -183,6 +205,16 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS quality_standard_photos (
     if (!cols.includes('product_name')) sqlite.exec("ALTER TABLE acts ADD COLUMN product_name TEXT NOT NULL DEFAULT ''");
     if (!cols.includes('manufacturer'))  sqlite.exec("ALTER TABLE acts ADD COLUMN manufacturer TEXT NOT NULL DEFAULT ''");
     if (!cols.includes('conclusion'))    sqlite.exec("ALTER TABLE acts ADD COLUMN conclusion TEXT NOT NULL DEFAULT ''");
+    if (!cols.includes('gross_mass'))    sqlite.exec('ALTER TABLE acts ADD COLUMN gross_mass REAL');
+    if (!cols.includes('defrost_mass'))  sqlite.exec('ALTER TABLE acts ADD COLUMN defrost_mass REAL');
+    if (!cols.includes('source_product_name')) sqlite.exec('ALTER TABLE acts ADD COLUMN source_product_name TEXT');
+    if (!cols.includes('supplier')) sqlite.exec("ALTER TABLE acts ADD COLUMN supplier TEXT NOT NULL DEFAULT ''");
+    if (!cols.includes('source_row')) sqlite.exec('ALTER TABLE acts ADD COLUMN source_row TEXT');
+    if (!cols.includes('source_sheet')) sqlite.exec('ALTER TABLE acts ADD COLUMN source_sheet TEXT');
+    if (!cols.includes('first_completed_at')) sqlite.exec('ALTER TABLE acts ADD COLUMN first_completed_at TEXT');
+    sqlite.exec("UPDATE acts SET first_completed_at=updated_at WHERE first_completed_at IS NULL AND status='done'");
+    sqlite.exec("UPDATE acts SET source_row='236716915' || substr(source_row, 10) WHERE source_row LIKE '750743492:%'");
+    sqlite.exec("UPDATE acts SET source_row='184249890' || substr(source_row, 10) WHERE source_row LIKE '255104827:%'");
   }
 }
 
