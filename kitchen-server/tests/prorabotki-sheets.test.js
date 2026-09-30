@@ -1,6 +1,33 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { SPREADSHEET_ID, SOURCES, parseTasks } = require('../lib/prorabotki-sheets');
+const { SPREADSHEET_ID, SOURCES, parseTasks, loadTasks } = require('../lib/prorabotki-sheets');
+
+test('opening tasks never writes IDs even with production writeback enabled', async () => {
+  const old = process.env.PRORABOTKI_WRITE_ENABLED;
+  process.env.PRORABOTKI_WRITE_ENABLED = 'true';
+  const calls = [];
+  const auth = { request: async ({ url, method }) => {
+    calls.push({ url, method });
+    if (!url.includes('/values/')) {
+      return { data: { sheets: SOURCES.map(s => ({ properties: { sheetId: s.gid, title: s.title } })) } };
+    }
+    const range = decodeURIComponent(url.split('/values/')[1]);
+    const source = SOURCES.find(s => range.includes(s.title));
+    if (range.endsWith(':A')) return { data: { values: [] } };
+    const row = [];
+    row[source.columns.name] = 'Задание без ID';
+    return { data: { values: [row] } };
+  } };
+  try {
+    const tasks = await loadTasks({ query: () => { throw new Error('Reading should not write to DB'); } }, { auth });
+    assert.equal(tasks.length, 2);
+    assert.deepEqual(tasks.map(t => t.sheetId), SOURCES.map(s => `${s.gid}:${s.startRow}`));
+    assert.ok(calls.every(c => !c.method || c.method === 'GET'));
+  } finally {
+    if (old === undefined) delete process.env.PRORABOTKI_WRITE_ENABLED;
+    else process.env.PRORABOTKI_WRITE_ENABLED = old;
+  }
+});
 
 test('only the two approved tabs in the replacement spreadsheet are configured', () => {
   assert.equal(SPREADSHEET_ID, '1wdclW96Z4YvdEv_syKILNrnUA-q3OnVayb0PHzQSNPA');

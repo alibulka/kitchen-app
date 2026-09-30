@@ -148,13 +148,11 @@ async function loadSnapshot(client, { writable = false, auth = createAuth(writab
   return { snapshots, auth, base };
 }
 
-async function loadTasks(pool) {
-  const writable = process.env.PRORABOTKI_WRITE_ENABLED === 'true';
-  const load = async client => {
-    const { snapshots } = await loadSnapshot(client, { writable });
-    return snapshots.flatMap(s => parseTasks(s.source, s.title, s.rows));
-  };
-  return writable ? withSpreadsheetLock(pool, load) : load(null);
+async function loadTasks(_pool, { auth } = {}) {
+  // Opening the task list is always read-only, including in production.
+  // Backfilling IDs and writing results are reserved for explicit act saves.
+  const { snapshots } = await loadSnapshot(null, { writable: false, ...(auth ? { auth } : {}) });
+  return snapshots.flatMap(s => parseTasks(s.source, s.title, s.rows));
 }
 
 module.exports = { loadTasks, parseTasks, SPREADSHEET_ID, SOURCES, loadSnapshot, withSpreadsheetLock };

@@ -32,15 +32,25 @@ function makeFilename(originalname) {
 }
 
 // One image may be used both in a check and in its standard.
-async function deletePhotoFileIfUnused(filename) {
+async function deletePhotoFileIfUnused(filename, client = pool) {
   const [{ rows: taskPhotos }, { rows: standardPhotos }] = await Promise.all([
-    pool.query('SELECT filename FROM quality_photos WHERE filename=$1 LIMIT 1', [filename]),
-    pool.query('SELECT filename FROM quality_standard_photos WHERE filename=$1 LIMIT 1', [filename]),
+    client.query('SELECT filename FROM quality_photos WHERE filename=$1 LIMIT 1', [filename]),
+    client.query('SELECT filename FROM quality_standard_photos WHERE filename=$1 LIMIT 1', [filename]),
   ]);
   if (taskPhotos.length || standardPhotos.length) return;
   await objectStorage.deleteObject(filename);
   const fp = path.join(UPLOADS_DIR, filename);
   if (fs.existsSync(fp)) fs.unlinkSync(fp);
+}
+
+// Lock the filename across requests and autoscale instances while changing its links.
+async function withPhotoLock(filename, work) {
+  return pool.withTransaction(async client => {
+    if (process.env.DATABASE_URL) {
+      await client.query('SELECT pg_advisory_xact_lock(72843, hashtext($1))', [filename]);
+    }
+    return work(client);
+  });
 }
 
 // ─── Поиск заготовок из БД ────────────────────────────────────────────────────
@@ -623,18 +633,29 @@ router.post('/tasks/:id/photos/:photoId/reference', async (req, res) => {
       [photoId, taskId]
     );
     if (!photo) return res.status(404).json({ error: 'Фото не найдено в этом задании' });
-    const { rows: [reference] } = await pool.query(
-      `INSERT INTO quality_standard_photos(standard_id,filename)
-       SELECT $1,$2 WHERE NOT EXISTS (
-         SELECT 1 FROM quality_standard_photos WHERE standard_id=$1 AND filename=$2
-       ) RETURNING id,standard_id,filename`,
-      [photo.standard_id, photo.filename]
-    );
-    const existing = reference || (await pool.query(
-      'SELECT id,standard_id,filename FROM quality_standard_photos WHERE standard_id=$1 AND filename=$2',
-      [photo.standard_id, photo.filename]
-    )).rows[0];
-    res.json({ ok: true, photo: existing });
+    const reference = await withPhotoLock(photo.filename, async client => {
+      // The photo may have been deleted while waiting for the lock.
+      const { rows: [current] } = await client.query(
+        `SELECT qp.filename, qt.standard_id FROM quality_photos qp
+         JOIN quality_tasks qt ON qt.id=qp.task_id
+         WHERE qp.id=$1 AND qt.id=$2`,
+        [photoId, taskId]
+      );
+      if (!current) return null;
+      const { rows: [inserted] } = await client.query(
+        `INSERT INTO quality_standard_photos(standard_id,filename)
+         SELECT $1,$2 WHERE NOT EXISTS (
+           SELECT 1 FROM quality_standard_photos WHERE standard_id=$1 AND filename=$2
+         ) RETURNING id,standard_id,filename`,
+        [current.standard_id, current.filename]
+      );
+      return inserted || (await client.query(
+        'SELECT id,standard_id,filename FROM quality_standard_photos WHERE standard_id=$1 AND filename=$2',
+        [current.standard_id, current.filename]
+      )).rows[0];
+    });
+    if (!reference) return res.status(404).json({ error: 'Фото не найдено в этом задании' });
+    res.json({ ok: true, photo: reference });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -663,8 +684,10 @@ router.post('/standards/:id/photos', upload.array('photos', 10), async (req, res
 router.delete('/standard-photos/:filename', async (req, res) => {
   try {
     const { filename } = req.params;
-    await pool.query('DELETE FROM quality_standard_photos WHERE filename=$1', [filename]);
-    await deletePhotoFileIfUnused(filename);
+    await withPhotoLock(filename, async client => {
+      const { rows } = await client.query('DELETE FROM quality_standard_photos WHERE filename=$1 RETURNING filename', [filename]);
+      if (rows.length) await deletePhotoFileIfUnused(filename, client);
+    });
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -674,8 +697,10 @@ router.delete('/standard-photos/:filename', async (req, res) => {
 router.delete('/photos/:filename', async (req, res) => {
   try {
     const { filename } = req.params;
-    await pool.query('DELETE FROM quality_photos WHERE filename=$1', [filename]);
-    await deletePhotoFileIfUnused(filename);
+    await withPhotoLock(filename, async client => {
+      const { rows } = await client.query('DELETE FROM quality_photos WHERE filename=$1 RETURNING filename', [filename]);
+      if (rows.length) await deletePhotoFileIfUnused(filename, client);
+    });
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
