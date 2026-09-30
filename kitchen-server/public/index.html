@@ -10934,7 +10934,7 @@ function ManagerTechnologistTasks(){
       e('label',{style:{fontSize:13,fontWeight:650}},'Описание задачи',
         e('textarea',{value:form.description,required:true,maxLength:5000,rows:5,
           onChange:ev=>setForm({...form,description:ev.target.value}),
-          style:{display:'block',width:'100%',marginTop:6,padding:10,borderRadius:9,border:'1.5px solid var(--border)',background:'var(--bg)',color:'var(--text)',resize:'vertical'},
+          style:{display:'block',width:'100%',marginTop:6,padding:10,borderRadius:9,border:'1.5px solid var(--border)',background:'var(--bg)',color:'var(--text)',fontFamily:'inherit',fontSize:14,lineHeight:1.45,resize:'vertical'},
           placeholder:'Подробно опишите задачу'})),
       error&&e('div',{style:{color:'#B91C1C',fontSize:13,marginTop:10}},error),
       e('button',{type:'submit',disabled:saving,style:{marginTop:12,padding:'9px 18px',border:0,borderRadius:9,background:'var(--accent)',color:'#fff',fontWeight:700,cursor:'pointer'}},saving?'Создание…':'Создать задание')
