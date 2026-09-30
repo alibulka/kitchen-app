@@ -10615,7 +10615,7 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
     else { setSortCol(col); setSortDir(1); }
   };
 
-  // Google Sheets может вернуть ISO или локальный формат даты.
+  // Google Sheets может вернуть ISO или локальный формат даты с точками/дефисами.
   const parseDate=s=>{
     const value=String(s||'').trim();
     if(!value) return null;
@@ -10623,7 +10623,7 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
     let y,month,d;
     if(m) [,y,month,d]=m;
     else {
-      m=value.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})$/);
+      m=value.match(/^(\d{1,2})[.-](\d{1,2})[.-](\d{2}|\d{4})$/);
       if(!m) return null;
       [,d,month,y]=m;
       if(y.length===2) y='20'+y;
@@ -10690,11 +10690,13 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
     borderBottom:'1px solid var(--border)',verticalAlign:'middle',
     whiteSpace:'pre-wrap',overflowWrap:'anywhere',wordBreak:'break-word',lineHeight:1.35};
 
-  // Форматируем дату: "2026-09-03" → "03.09.2026", остальные оставляем как есть
+  // Показываем распознанные даты в едином формате; текст вроде «на складе» не меняем.
   const fmtDate=v=>{
     if(!v) return '';
-    const m=v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    return m ? `${m[3]}.${m[2]}.${m[1]}` : v;
+    const ts=parseDate(v);
+    if(ts===null) return v;
+    const date=new Date(ts);
+    return `${String(date.getUTCDate()).padStart(2,'0')}.${String(date.getUTCMonth()+1).padStart(2,'0')}.${date.getUTCFullYear()}`;
   };
 
   const deadlineColor=v=>{
