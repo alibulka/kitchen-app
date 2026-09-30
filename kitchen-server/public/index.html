@@ -9748,7 +9748,7 @@ function PhotoCarousel({photos, onOpen, size=200}) {
   );
 }
 
-function QualityChecklist({task, onSave, onClose}) {
+function QualityChecklist({task, onSave, onClose, onReferenceAdded, onPhotosChanged}) {
   const rawExtra=task.extra_fields||[];
   const fields=[...BASE_FIELDS,...rawExtra.map(f=>typeof f==='string'?f:f.name)];
   const extraDescMap=Object.fromEntries(rawExtra.map(f=>typeof f==='string'?[f,'']:[f.name,f.description||'']));
@@ -9757,7 +9757,9 @@ function QualityChecklist({task, onSave, onClose}) {
   const [vals,setVals]=useState(init);
   const [saving,setSaving]=useState(false);
   const [photos,setPhotos]=useState(task.photos||[]);
+  const [refPhotos,setRefPhotos]=useState(task.ref_photos||[]);
   const [uploading,setUploading]=useState(false);
+  const [promotingPhotoId,setPromotingPhotoId]=useState(null);
   const [lightbox,setLightbox]=useState(null); // {photos, index}
   const fileRef=useRef();
 
@@ -9794,17 +9796,39 @@ function QualityChecklist({task, onSave, onClose}) {
       for(const f of fileArr) fd.append('photos',f);
       const r=await fetch(`/api/quality/tasks/${task.id}/photos`,{method:'POST',body:fd});
       const d=await r.json();
-      if(d.files) setPhotos(prev=>[...prev,...d.files.map(fn=>({filename:fn}))]);
+      if(!r.ok||d.error) throw new Error(d.error||String(r.status));
+      if(d.photos) {
+        const next=[...photos,...d.photos];
+        setPhotos(next);
+        onPhotosChanged(task.id,next);
+      }
     } catch(e) {
-      console.error('Ошибка загрузки фото:',e);
+      alert('Ошибка загрузки фото: '+e.message);
     } finally {
       setUploading(false);
     }
   };
 
   const deletePhoto=async(filename)=>{
-    await fetch(`/api/quality/photos/${encodeURIComponent(filename)}`,{method:'DELETE'});
-    setPhotos(prev=>prev.filter(p=>p.filename!==filename));
+    try {
+      const r=await fetch(`/api/quality/photos/${encodeURIComponent(filename)}`,{method:'DELETE'});
+      if(!r.ok) throw new Error(String(r.status));
+      const next=photos.filter(p=>p.filename!==filename);
+      setPhotos(next);
+      onPhotosChanged(task.id,next);
+    } catch(e) { alert('Не удалось удалить фото: '+e.message); }
+  };
+
+  const addReference=async(photo)=>{
+    setPromotingPhotoId(photo.id);
+    try {
+      const r=await fetch(`/api/quality/tasks/${task.id}/photos/${photo.id}/reference`,{method:'POST'});
+      const d=await r.json();
+      if(!r.ok||d.error) throw new Error(d.error||String(r.status));
+      setRefPhotos(prev=>prev.some(p=>p.filename===d.photo.filename)?prev:[...prev,d.photo]);
+      onReferenceAdded(task.standard_id,d.photo);
+    } catch(e) { alert('Не удалось добавить фото в эталон: '+e.message); }
+    finally { setPromotingPhotoId(null); }
   };
 
   const stdVal=(field)=>{
@@ -9814,8 +9838,6 @@ function QualityChecklist({task, onSave, onClose}) {
     if(field==='Консистенция') return task.consistency;
     return extraDescMap[field]||null;
   };
-
-  const refPhotos=task.ref_photos||[];
 
   return e('div',{style:{paddingTop:12}},
     lightbox&&e(Lightbox,{photos:lightbox.photos,startIndex:lightbox.index,onClose:()=>setLightbox(null)}),
@@ -9871,14 +9893,21 @@ function QualityChecklist({task, onSave, onClose}) {
     e('div',{style:{marginTop:16,marginBottom:16}},
       e('div',{style:{fontWeight:600,fontSize:14,color:'var(--muted)',marginBottom:10}},'Фото проверки'),
       photos.length>0&&e('div',{style:{display:'flex',flexWrap:'wrap',gap:10,marginBottom:12}},
-        photos.map((p,i)=>e('div',{key:p.filename,style:{position:'relative'}},
+        photos.map((p,i)=>e('div',{key:p.filename,style:{position:'relative',width:140}},
           e('img',{src:`/uploads/${p.filename}`,onClick:()=>setLightbox({photos,index:i}),
-            style:{width:140,height:140,objectFit:'cover',borderRadius:10,cursor:'zoom-in',
+            style:{width:140,height:140,boxSizing:'border-box',objectFit:'cover',borderRadius:10,cursor:'zoom-in',
               border:'1.5px solid var(--border)',display:'block'}}),
           e('button',{onClick:()=>deletePhoto(p.filename),
             style:{position:'absolute',top:-6,right:-6,width:22,height:22,borderRadius:'50%',border:'none',
               background:'var(--danger)',color:'white',fontSize:11,cursor:'pointer',
-              display:'flex',alignItems:'center',justifyContent:'center'}},'✕')
+              display:'flex',alignItems:'center',justifyContent:'center'}},'✕'),
+          refPhotos.some(ref=>ref.filename===p.filename)
+            ? e('div',{style:{fontSize:11,color:'var(--ok)',marginTop:5,fontWeight:700}},'✓ В эталоне')
+            : e('button',{onClick:()=>addReference(p),disabled:!p.id||promotingPhotoId!==null,
+                style:{marginTop:5,width:'100%',padding:'5px 2px',borderRadius:7,
+                  border:'1px solid var(--accent)',background:'transparent',color:'var(--accent)',
+                  fontSize:11,cursor:'pointer'}},
+                promotingPhotoId===p.id?'Добавление…':'Сделать эталонным')
         ))
       ),
       e(PhotoPickerButton,{onFiles:handlePhoto,uploading,label:'+ Добавить фото'})
@@ -9900,7 +9929,7 @@ function QualityChecklist({task, onSave, onClose}) {
 }
 
 // Карточка задания
-function QualityTaskCard({task, isOpen, onToggle, onDelete, onSave, technologists, onAssign}) {
+function QualityTaskCard({task, isOpen, onToggle, onDelete, onSave, onReferenceAdded, onPhotosChanged, technologists, onAssign}) {
   const [lightbox,setLightbox]=useState(null);
   const doneCount=(task.results||[]).filter(r=>r.result).length;
   const totalFields=BASE_FIELDS.length+(task.extra_fields||[]).length;
@@ -9956,7 +9985,7 @@ function QualityTaskCard({task, isOpen, onToggle, onDelete, onSave, technologist
 
     // Чек-лист inline
     isOpen&&e('div',{style:{borderTop:'1px solid var(--border)',padding:'0 16px 16px'}},
-      e(QualityChecklist,{key:task.id+'-'+task.status, task, onSave, onClose:onToggle})
+      e(QualityChecklist,{key:task.id+'-'+task.status, task, onSave, onClose:onToggle,onReferenceAdded,onPhotosChanged})
     )
   );
 }
@@ -11115,6 +11144,22 @@ function TechnologistPage({initialActId=null}) {
   const onSave=(taskId,status,results,photos)=>{
     setTasks(prev=>prev.map(t=>t.id===taskId?{...t,status,results,...(photos!=null?{photos}:{})}:t));
   };
+  const onPhotosChanged=(taskId,photos)=>{
+    setTasks(prev=>prev.map(t=>t.id===taskId?{...t,photos}:t));
+    setCarryoverTasks(prev=>prev.map(t=>t.id===taskId?{...t,photos}:t));
+  };
+  const onReferenceAdded=(standardId,photo)=>{
+    const update=t=>t.standard_id!==standardId?t:{
+      ...t,ref_photos:(t.ref_photos||[]).some(p=>p.filename===photo.filename)
+        ?t.ref_photos:[...(t.ref_photos||[]),photo]
+    };
+    setTasks(prev=>prev.map(update));
+    setCarryoverTasks(prev=>prev.map(update));
+    setStandards(prev=>prev.map(s=>s.id!==standardId?s:{
+      ...s,ref_photos:(s.ref_photos||[]).some(p=>p.filename===photo.filename)
+        ?s.ref_photos:[...(s.ref_photos||[]),photo]
+    }));
+  };
 
   const todayStandardIds=new Set(tasks.map(t=>t.standard_id));
   const pending=tasks.filter(t=>t.status==='pending'||t.status==='overdue');
@@ -11160,7 +11205,7 @@ function TechnologistPage({initialActId=null}) {
                 e(QualityTaskCard,{key:t.id,task:t,
                   isOpen:openTaskId===t.id,
                   onToggle:()=>setOpenTaskId(v=>v===t.id?null:t.id),
-                  onDelete:deleteTask,onSave,
+                   onDelete:deleteTask,onSave,onReferenceAdded,onPhotosChanged,
                   technologists,onAssign:async(taskId,empId)=>{
                     await fetch(`/api/quality/tasks/${taskId}/assign`,{method:'PATCH',
                       headers:{'Content-Type':'application/json'},body:JSON.stringify({assigned_to:empId||null})});
@@ -11184,7 +11229,7 @@ function TechnologistPage({initialActId=null}) {
                 pending.map(t=>e(QualityTaskCard,{key:t.id,task:t,
                   isOpen:openTaskId===t.id,
                   onToggle:()=>setOpenTaskId(v=>v===t.id?null:t.id),
-                  onDelete:deleteTask,onSave,
+                   onDelete:deleteTask,onSave,onReferenceAdded,onPhotosChanged,
                   technologists,onAssign:async(taskId,empId)=>{
                     await fetch(`/api/quality/tasks/${taskId}/assign`,{method:'PATCH',
                       headers:{'Content-Type':'application/json'},body:JSON.stringify({assigned_to:empId||null})});
@@ -11197,7 +11242,7 @@ function TechnologistPage({initialActId=null}) {
             done.map(t=>e(QualityTaskCard,{key:t.id,task:t,
               isOpen:openTaskId===t.id,
               onToggle:()=>setOpenTaskId(v=>v===t.id?null:t.id),
-              onDelete:deleteTask,onSave,technologists,onAssign:async(taskId,empId)=>{
+               onDelete:deleteTask,onSave,onReferenceAdded,onPhotosChanged,technologists,onAssign:async(taskId,empId)=>{
                 await fetch(`/api/quality/tasks/${taskId}/assign`,{method:'PATCH',
                   headers:{'Content-Type':'application/json'},body:JSON.stringify({assigned_to:empId||null})});
                 await loadData(date);
@@ -11491,6 +11536,7 @@ function ProductJournalPage({initialActId=null}) {
   const [loading,setLoading]=useState(false);
   const [expanded,setExpanded]=useState(null);
   const [lightbox,setLightbox]=useState(null);
+  const [promotingPhotoId,setPromotingPhotoId]=useState(null);
 
   useEffect(()=>{
     fetch('/api/employees').then(r=>r.json()).then(d=>setEmployees(d.employees||[])).catch(()=>{});
@@ -11514,6 +11560,20 @@ function ProductJournalPage({initialActId=null}) {
   };
 
   useEffect(()=>{load();},[]);
+
+  const addReference=async(task,photo)=>{
+    setPromotingPhotoId(photo.id);
+    try {
+      const r=await fetch(`/api/quality/tasks/${task.id}/photos/${photo.id}/reference`,{method:'POST'});
+      const d=await r.json();
+      if(!r.ok||d.error) throw new Error(d.error||String(r.status));
+      setTasks(prev=>prev.map(t=>t.standard_id!==task.standard_id?t:{
+        ...t,ref_photos:(t.ref_photos||[]).some(p=>p.filename===d.photo.filename)
+          ?t.ref_photos:[...(t.ref_photos||[]),d.photo]
+      }));
+    } catch(e) { alert('Не удалось добавить фото в эталон: '+e.message); }
+    finally { setPromotingPhotoId(null); }
+  };
 
   const stdVal=(task,field)=>{
     if(field==='Внешний вид') return task.appearance;
@@ -11651,11 +11711,20 @@ function ProductJournalPage({initialActId=null}) {
               factPhotos.length>0&&e('div',null,
                 e('div',{style:{fontWeight:700,fontSize:12,color:'var(--muted)',textTransform:'uppercase',
                     letterSpacing:'0.04em',marginBottom:8}},'Фактически'),
-                e('div',{style:{display:'flex',flexWrap:'wrap',gap:8,maxWidth:200}},
-                  factPhotos.map((p,i)=>e('img',{key:p.filename,src:`/uploads/${p.filename}`,
-                    onClick:()=>setLightbox({photos:factPhotos,index:i}),
-                    style:{width:90,height:90,objectFit:'cover',borderRadius:8,cursor:'zoom-in',
-                      border:'1.5px solid var(--border)'}}))
+                e('div',{style:{display:'flex',flexWrap:'wrap',gap:8,maxWidth:240}},
+                  factPhotos.map((p,i)=>e('div',{key:p.filename,style:{width:110}},
+                    e('img',{src:`/uploads/${p.filename}`,
+                      onClick:()=>setLightbox({photos:factPhotos,index:i}),
+                      style:{width:110,height:110,boxSizing:'border-box',objectFit:'cover',borderRadius:8,cursor:'zoom-in',
+                        border:'1.5px solid var(--border)',display:'block'}}),
+                    refPhotos.some(ref=>ref.filename===p.filename)
+                      ? e('div',{style:{fontSize:11,color:'var(--ok)',marginTop:5,fontWeight:700}},'✓ В эталоне')
+                      : e('button',{onClick:()=>addReference(task,p),disabled:!p.id||promotingPhotoId!==null,
+                          style:{width:'100%',marginTop:5,padding:'5px 2px',borderRadius:7,
+                            border:'1px solid var(--accent)',background:'transparent',color:'var(--accent)',
+                            fontSize:11,cursor:'pointer'}},
+                          promotingPhotoId===p.id?'Добавление…':'Сделать эталонным')
+                  ))
                 )
               )
             )
