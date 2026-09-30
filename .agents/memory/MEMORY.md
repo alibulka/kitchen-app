@@ -1,3 +1,4 @@
 - [Дубли кода: корень vs kitchen-server](repo-dual-copies.md) — актуален только kitchen-server/; merge с Mac может переключить запуск на старую корневую копию.
 - [Password protected деплой](password-protected-deployment.md) — парольный режим публикации вешает fetch на телефонах; держать Public.
 - [Восстановление данных на проде](prod-data-recovery.md) — снимок смены через GET /api/shifts, replay через POST; в прод-SQL даты — TEXT, сравнивать строками.
+- [ID проработок при просмотре](prorabotki-id-timing.md) — пользователь одобрил отложенную запись пустых ID: просмотр только читает, сохранение связанного акта заполняет их.
