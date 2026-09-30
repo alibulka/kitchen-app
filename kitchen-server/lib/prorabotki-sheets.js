@@ -6,13 +6,13 @@ const SPREADSHEET_ID = '1wdclW96Z4YvdEv_syKILNrnUA-q3OnVayb0PHzQSNPA';
 const SOURCES = [
   { gid: 236716915, title: 'Мясо / Рыба Проработки (с 2025года)', startRow: 225, columns: {
     material: 1, purpose: 2, name: 3, productType: 4, manufacturer: 6,
-    supplier: 7, arrivalDate: 11, deadline: 12, workDate: 13,
-    grossMass: 14, defrostMass: 15, defrostPercent: 17, conclusion: 21, comment: 23,
+    supplier: 7, arrivalDate: 11, deadline: 13, workDate: 14, processingTask: 15,
+    grossMass: 16, defrostMass: 17, defrostPercent: 19, conclusion: 23, comment: 25,
   } },
   { gid: 184249890, title: 'ни рыба ни мясо', startRow: 822, columns: {
     purpose: 1, name: 2, manufacturer: 3, supplier: 4,
-    arrivalDate: 8, deadline: 9, workDate: 10,
-    grossMass: 12, defrostMass: 13, defrostPercent: 14, conclusion: 16, comment: 19,
+    arrivalDate: 8, deadline: 10, workDate: 11, processingTask: 12,
+    grossMass: 14, defrostMass: 15, defrostPercent: 16, conclusion: 18, comment: 21,
   } },
 ];
 
@@ -82,7 +82,7 @@ async function loadSnapshot(client, { writable = false, auth = createAuth(writab
     if (!sheet || sheet.title !== source.title) {
       throw new Error(`Не найдена разрешённая вкладка «${source.title}» (${source.gid})`);
     }
-    const range = `'${sheet.title.replace(/'/g, "''")}'!A${source.startRow}:Y`;
+    const range = `'${sheet.title.replace(/'/g, "''")}'!A${source.startRow}:Z`;
     const idRange = `'${sheet.title.replace(/'/g, "''")}'!A${source.startRow}:A`;
     const [response, idResponse] = await Promise.all([
       auth.request({ url: `${base}/values/${encodeURIComponent(range)}`, timeout: 20000 }),

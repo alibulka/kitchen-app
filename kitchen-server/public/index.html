@@ -10641,6 +10641,7 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
     let rows=q ? tasks.filter(t=>
       (t.material||'').toLowerCase().includes(q)||
       (t.name||'').toLowerCase().includes(q)||
+      (t.processingTask||'').toLowerCase().includes(q)||
       (t.type||'').toLowerCase().includes(q)||
       (t.supplier||'').toLowerCase().includes(q)||
       (t.manufacturer||'').toLowerCase().includes(q)
@@ -10668,6 +10669,7 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
     {key:'supplier',label:'Поставщик',w:'9%'},
     {key:'arrivalDate',label:'Приход',w:'7%'},
     {key:'deadline',label:'Дедлайн',w:'7%'},
+    {key:'processingTask',label:'Задача проработки',w:'16%'},
     {key:'grossMass',label:'Брутто',w:'6%'},
     {key:'defrostMass',label:'Нетто',w:'6%'},
     {key:'_defrostPct',label:'%дефр.',w:'5%'},
@@ -10717,7 +10719,7 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
     sorted.length===0
       ? e('div',{className:'empty-state'},'Нет заданий')
       : e('div',{style:{overflowX:'auto'}},
-          e('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:12,tableLayout:'fixed'}},
+          e('table',{style:{width:'100%',minWidth:1150,borderCollapse:'collapse',fontSize:12,tableLayout:'fixed'}},
             e('thead',null,
               e('tr',null,
                 ...cols.map(c=>e('th',{key:c.key,style:{...thStyle(c.key),width:c.w,
@@ -10751,7 +10753,7 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
                 return e('tr',{key:i,style:{background:i%2===0?'transparent':'var(--hover)'}},
                 ...cols.map(c=>e('td',{key:c.key,style:{
                   ...tdStyle,
-                  ...(['material','name'].includes(c.key)?{
+                  ...(['material','name','processingTask'].includes(c.key)?{
                     whiteSpace:'normal',
                     textOverflow:'clip',
                     overflow:'visible',

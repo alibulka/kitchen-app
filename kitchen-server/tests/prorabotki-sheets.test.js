@@ -23,10 +23,21 @@ test('inclusive cutoffs preserve physical row IDs, including blank rows', () => 
 });
 
 test('different tab layouts map supplier, dates and mass correctly', () => {
-  for (const source of SOURCES) {
+  const columns = [
+    { arrivalDate: 11, deadline: 13, workDate: 14, processingTask: 15,
+      grossMass: 16, defrostMass: 17, defrostPercent: 19, conclusion: 23, comment: 25 },
+    { arrivalDate: 8, deadline: 10, workDate: 11, processingTask: 12,
+      grossMass: 14, defrostMass: 15, defrostPercent: 16, conclusion: 18, comment: 21 },
+  ];
+  SOURCES.forEach((source, index) => {
+    for (const [field, column] of Object.entries(columns[index])) {
+      assert.equal(source.columns[field], column, `${source.title}: ${field}`);
+    }
     const row = [];
     for (const [key, col] of Object.entries(source.columns)) row[col] = key;
     const [task] = parseTasks(source, 'Вкладка', [row]);
     for (const key of Object.keys(source.columns)) assert.equal(task[key], key);
-  }
+    assert.equal(task.processingTask, 'processingTask');
+    assert.equal(task.comment, 'comment');
+  });
 });

@@ -8,8 +8,10 @@ test('only result columns, correct boundaries and numeric masses', () => {
     conclusion: 'Да', comment: 'Комментарий 1\nКомментарий 2', unrelated: 'ignored' };
   const first = buildData('236716915:225', 'Мясо', fields);
   const second = buildData('184249890:822', 'Другое', fields);
-  assert.deepEqual(first.map(x => x.range), ['B','D','G','H','N','O','P','R','V','X'].map(c=>`'Мясо'!${c}225`));
-  assert.deepEqual(second.map(x => x.range), ['C','D','E','K','M','N','O','Q','T'].map(c=>`'Другое'!${c}822`));
+  assert.deepEqual(first.map(x => x.range), ['B','D','G','H','O','Q','R','T','X','Z'].map(c=>`'Мясо'!${c}225`));
+  assert.deepEqual(second.map(x => x.range), ['C','D','E','L','O','P','Q','S','V'].map(c=>`'Другое'!${c}822`));
+  assert.ok(!first.some(x => /![MP]225$/.test(x.range)), 'New M/P columns must be untouched');
+  assert.ok(!second.some(x => /![JM]822$/.test(x.range)), 'New J/M columns must be untouched');
   assert.equal(first[5].values[0][0], 100);
   assert.equal(first[6].values[0][0], 80);
   assert.equal(first[7].values[0][0], 0.2);
@@ -32,7 +34,7 @@ test('only result columns, correct boundaries and numeric masses', () => {
 
 test('percentage handles zero net, missing masses and zero gross', () => {
   const data = masses => buildData('236716915:225', 'Мясо', masses);
-  const pct = masses => data(masses).find(c => c.range.endsWith('!R225'))?.values[0][0];
+  const pct = masses => data(masses).find(c => c.range.endsWith('!T225'))?.values[0][0];
   assert.equal(pct({ grossMass: 100, defrostMass: 0 }), 1);
   assert.equal(pct({ grossMass: 100, defrostMass: 100 }), 0);
   assert.equal(pct({ grossMass: 0, defrostMass: 0 }), undefined);
@@ -81,7 +83,7 @@ test('renamed acts sync all comments; mismatched source rows block writes', asyn
       if (range.includes("'ни рыба ни мясо'")) return { data: { values: [] } };
       if (/!A\d+:A$/.test(range)) return { data: { values: [[225]] } };
       const row = [225]; row[3] = sourceName;
-      if (/!A\d+:Y\d+$/.test(range)) {
+      if (/!A\d+:Z\d+$/.test(range)) {
         if (changedBeforeWrite) row[0] = 999;
         return { data: { values: [row] } };
       }
