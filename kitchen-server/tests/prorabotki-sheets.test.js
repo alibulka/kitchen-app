@@ -6,7 +6,7 @@ test('only the two approved tabs in the replacement spreadsheet are configured',
   assert.equal(SPREADSHEET_ID, '1wdclW96Z4YvdEv_syKILNrnUA-q3OnVayb0PHzQSNPA');
   assert.deepEqual(SOURCES.map(({ gid, title, startRow }) => ({ gid, title, startRow })), [
     { gid: 236716915, title: 'Мясо / Рыба Проработки (с 2025года)', startRow: 225 },
-    { gid: 184249890, title: 'ни рыба ни мясо', startRow: 822 },
+    { gid: 184249890, title: 'ни рыба ни мясо', startRow: 815 },
   ]);
 });
 
@@ -19,7 +19,7 @@ test('inclusive cutoffs preserve physical row IDs, including blank rows', () => 
     assert.equal(tasks[1].sourceRow, source.startRow + 2);
     assert.equal(tasks[1].sheetId, `${source.gid}:${source.startRow + 2}`);
   }
-  assert.deepEqual(SOURCES.map(s => s.startRow), [225, 822]);
+  assert.deepEqual(SOURCES.map(s => s.startRow), [225, 815]);
 });
 
 test('different tab layouts map supplier, dates and mass correctly', () => {

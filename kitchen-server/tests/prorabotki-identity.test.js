@@ -45,13 +45,31 @@ test('persistent task ID follows moved row; new task cannot reuse an act ID', ()
   ])[0].id, 1000);
 });
 
+test('rows 815–821 are included without changing existing ID on row 822', () => {
+  const source = SOURCES[1];
+  const rows = [
+    ...Array.from({ length: 7 }, (_, i) => rowFor(source, '', `Новое задание ${815 + i}`)),
+    rowFor(source, 822, 'Существующее задание'),
+  ];
+  const assignments = planIds(source, rows, [822, 4058, 4059]);
+  assert.deepEqual(assignments.map(a => a.row), [815, 816, 817, 818, 819, 820, 821]);
+  assert.ok(assignments.every(a => a.id > 4059), 'Existing IDs are not reused');
+  assert.equal(rows[7][0], 822, 'Planning never overwrites existing ID');
+  const tasks = parseTasks(source, source.title, rows);
+  assert.equal(tasks.length, 8);
+  assert.equal(tasks[0].sourceRow, 815);
+  assert.equal(tasks[7].sourceRow, 822);
+  assert.equal(tasks[7].sheetId, `${source.gid}:id:822`);
+  assert.equal(findTaskRow(source, rows, tasks[7].sheetId).row, 822);
+});
+
 test('duplicate IDs fail; missing IDs never resolve to a physical-row fallback', () => {
   const source = SOURCES[1];
   assert.throws(() => planIds(source, [rowFor(source, 12), rowFor(source, '12')], []), /Повторяющийся/);
   assert.throws(() => findTaskRow(source, [rowFor(source, '')], '184249890:id:822'), /не найден/);
-  assert.equal(findTaskRow(source, [rowFor(source, 12)], '184249890:id:12').row, 822);
+  assert.equal(findTaskRow(source, [rowFor(source, 12)], '184249890:id:12').row, 815);
   const key = taskKey(source, 'Особый ID');
-  assert.equal(findTaskRow(source, [rowFor(source, 'Особый ID')], key).row, 822);
+  assert.equal(findTaskRow(source, [rowFor(source, 'Особый ID')], key).row, 815);
 });
 
 test('legacy blank-ID task moved before initialization is reconciled unambiguously', () => {
@@ -117,7 +135,7 @@ test('production initialization changes only A; repeated loading is idempotent; 
     process.env.PRORABOTKI_WRITE_ENABLED = 'true';
     await loadSnapshot(client, { auth, writable: true });
     assert.equal(requests.length, 1);
-    assert.deepEqual(data.map(rows => rows[0][0]), [225, 822]);
+    assert.deepEqual(data.map(rows => rows[0][0]), [225, 815]);
     await loadSnapshot(client, { auth, writable: true });
     assert.equal(requests.length, 1, 'No second write for already filled IDs');
   } finally {

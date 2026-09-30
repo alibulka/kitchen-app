@@ -29,7 +29,8 @@ test('only result columns, correct boundaries and numeric masses', () => {
     assert.equal(requests[0].updateCells.fields, 'userEnteredValue');
   }
   assert.deepEqual(buildData('184249890:822', 'Другое', { conclusion: '', grossMass: null }), []);
-  for (const id of ['236716915:224', '184249890:821', '123:822', '822']) assert.throws(() => targetFor(id));
+  assert.equal(targetFor('184249890:815').row, 815);
+  for (const id of ['236716915:224', '184249890:814', '123:822', '822']) assert.throws(() => targetFor(id));
 });
 
 test('percentage handles zero net, missing masses and zero gross', () => {

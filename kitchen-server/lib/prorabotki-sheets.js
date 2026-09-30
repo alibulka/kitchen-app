@@ -9,7 +9,7 @@ const SOURCES = [
     supplier: 7, arrivalDate: 11, deadline: 13, workDate: 14, processingTask: 15,
     grossMass: 16, defrostMass: 17, defrostPercent: 19, conclusion: 23, comment: 25,
   } },
-  { gid: 184249890, title: 'ни рыба ни мясо', startRow: 822, columns: {
+  { gid: 184249890, title: 'ни рыба ни мясо', startRow: 815, columns: {
     purpose: 1, name: 2, manufacturer: 3, supplier: 4,
     arrivalDate: 8, deadline: 10, workDate: 11, processingTask: 12,
     grossMass: 14, defrostMass: 15, defrostPercent: 16, conclusion: 18, comment: 21,
