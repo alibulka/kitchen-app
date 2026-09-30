@@ -10688,7 +10688,7 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
 
   const tdStyle={padding:'7px 8px',fontSize:12,color:'var(--text)',
     borderBottom:'1px solid var(--border)',verticalAlign:'middle',
-    overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'};
+    whiteSpace:'pre-wrap',overflowWrap:'anywhere',wordBreak:'break-word',lineHeight:1.35};
 
   // Форматируем дату: "2026-09-03" → "03.09.2026", остальные оставляем как есть
   const fmtDate=v=>{
@@ -10753,14 +10753,6 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
                 return e('tr',{key:i,style:{background:i%2===0?'transparent':'var(--hover)'}},
                 ...cols.map(c=>e('td',{key:c.key,style:{
                   ...tdStyle,
-                  ...(['material','name','processingTask'].includes(c.key)?{
-                    whiteSpace:'normal',
-                    textOverflow:'clip',
-                    overflow:'visible',
-                    overflowWrap:'anywhere',
-                    wordBreak:'break-word',
-                    lineHeight:1.35,
-                  }:{}),
                   textAlign:c.key==='_act'?'center':tdStyle.textAlign,
                   color:c.key==='deadline'?deadlineColor(t[c.key]):tdStyle.color,
                   fontWeight:c.key==='deadline'&&t[c.key]?600:400,
