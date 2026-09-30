@@ -11963,7 +11963,7 @@ function ActForm({actId, templateId, onBack, onSaved}) {
     try {
       let aid = act?.id || actId;
       const date = values._date || new Date().toISOString().slice(0,10);
-      const rawMaterial = values._raw_material || template?.name || '';
+      const rawMaterial = values._raw_material || '';
       const productName = values._product_name || '';
       const manufacturer = values._manufacturer || '';
       const supplier = values._supplier || '';

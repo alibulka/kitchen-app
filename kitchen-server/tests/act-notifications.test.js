@@ -41,8 +41,15 @@ test('GET payload encodes exact fields, channel and create/update flags', async 
     }
   }
   assert.equal(notificationParams({ ...act, raw_material: '' }, false).get('source'), act.product_name);
+  assert.equal(notificationParams({ ...act, raw_material: '  ', template_name: 'Название шаблона' }, false).get('source'), act.product_name);
   assert.equal(notificationParams({ ...act, source_row: '236716915:225' }, true).get('isMeat'), '1');
   assert.equal(notificationParams({ ...act, source_row: null }, true).get('isMeat'), '1');
+});
+
+test('saving an act never substitutes the template name for empty raw material', () => {
+  const html = readFileSync(resolve(__dirname, '../public/index.html'), 'utf8');
+  assert.match(html, /const rawMaterial = values\._raw_material \|\| '';/);
+  assert.doesNotMatch(html, /const rawMaterial = values\._raw_material \|\| template\?\.name/);
 });
 
 test('production endpoint is selected only by explicit environment configuration', async () => {

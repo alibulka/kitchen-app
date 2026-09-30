@@ -9,7 +9,7 @@ function notificationParams(act, isNew) {
   if (isMeat === undefined) throw new Error('Акт связан с неизвестным источником');
   return new URLSearchParams({
     actNo: String(act.id),
-    source: String(act.raw_material || act.product_name || ''),
+    source: String(act.raw_material || '').trim() || String(act.product_name || '').trim(),
     producer: String(act.manufacturer || ''),
     provider: String(act.supplier || ''),
     date: String(act.date || '').slice(0, 10),
