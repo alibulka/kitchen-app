@@ -1,18 +1,19 @@
-const { JWT } = require('google-auth-library');
+let _JWT;
+function getJWT() { if (!_JWT) _JWT = require('google-auth-library').JWT; return _JWT; }
 const { cellId, taskKey, planIds, reconcileLegacy } = require('./prorabotki-identity');
 
-const SPREADSHEET_ID = '1WomFf4GOeRQta4MdzP_RnHqzv467FCnrs7uARsVF7I0';
+const SPREADSHEET_ID = '1wdclW96Z4YvdEv_syKILNrnUA-q3OnVayb0PHzQSNPA';
 // Inclusive physical row boundaries, identical in development and production.
 const SOURCES = [
-  { gid: 750743492, startRow: 225, columns: {
+  { gid: 236716915, title: 'Мясо / Рыба Проработки (с 2025года)', startRow: 225, columns: {
     material: 1, purpose: 2, name: 3, productType: 4, manufacturer: 6,
-    supplier: 7, arrivalDate: 11, deadline: 12, workDate: 13,
-    grossMass: 14, defrostMass: 15, defrostPercent: 17, conclusion: 21, comment: 23,
+    supplier: 7, arrivalDate: 11, deadline: 13, workDate: 14, processingTask: 15,
+    grossMass: 16, defrostMass: 17, defrostPercent: 19, conclusion: 23, comment: 25,
   } },
-  { gid: 255104827, startRow: 822, columns: {
+  { gid: 184249890, title: 'ни рыба ни мясо', startRow: 815, columns: {
     purpose: 1, name: 2, manufacturer: 3, supplier: 4,
-    arrivalDate: 8, deadline: 9, workDate: 10,
-    grossMass: 12, defrostMass: 13, defrostPercent: 14, conclusion: 16, comment: 19,
+    arrivalDate: 8, deadline: 10, workDate: 11, processingTask: 12,
+    grossMass: 14, defrostMass: 15, defrostPercent: 16, conclusion: 18, comment: 21,
   } },
 ];
 
@@ -43,7 +44,7 @@ function createAuth(writable) {
     throw new Error('Не настроен доступ к Google Таблице проработок');
   }
   const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
-  return new JWT({
+  return new (getJWT())({
     email: credentials.client_email,
     key: credentials.private_key,
     scopes: [writable ? 'https://www.googleapis.com/auth/spreadsheets'
@@ -79,8 +80,10 @@ async function loadSnapshot(client, { writable = false, auth = createAuth(writab
   });
   const snapshots = await Promise.all(SOURCES.map(async source => {
     const sheet = data.sheets.find(s => s.properties.sheetId === source.gid)?.properties;
-    if (!sheet) throw new Error(`Не найдена вкладка ${source.gid}`);
-    const range = `'${sheet.title.replace(/'/g, "''")}'!A${source.startRow}:Y`;
+    if (!sheet || sheet.title !== source.title) {
+      throw new Error(`Не найдена разрешённая вкладка «${source.title}» (${source.gid})`);
+    }
+    const range = `'${sheet.title.replace(/'/g, "''")}'!A${source.startRow}:Z`;
     const idRange = `'${sheet.title.replace(/'/g, "''")}'!A${source.startRow}:A`;
     const [response, idResponse] = await Promise.all([
       auth.request({ url: `${base}/values/${encodeURIComponent(range)}`, timeout: 20000 }),
@@ -146,13 +149,11 @@ async function loadSnapshot(client, { writable = false, auth = createAuth(writab
   return { snapshots, auth, base };
 }
 
-async function loadTasks(pool) {
-  const writable = process.env.PRORABOTKI_WRITE_ENABLED === 'true';
-  const load = async client => {
-    const { snapshots } = await loadSnapshot(client, { writable });
-    return snapshots.flatMap(s => parseTasks(s.source, s.title, s.rows));
-  };
-  return writable ? withSpreadsheetLock(pool, load) : load(null);
+async function loadTasks(_pool, { auth } = {}) {
+  // Opening the task list is always read-only, including in production.
+  // Backfilling IDs and writing results are reserved for explicit act saves.
+  const { snapshots } = await loadSnapshot(null, { writable: false, ...(auth ? { auth } : {}) });
+  return snapshots.flatMap(s => parseTasks(s.source, s.title, s.rows));
 }
 
-module.exports = { loadTasks, parseTasks, SOURCES, loadSnapshot, withSpreadsheetLock };
+module.exports = { loadTasks, parseTasks, SPREADSHEET_ID, SOURCES, loadSnapshot, withSpreadsheetLock };

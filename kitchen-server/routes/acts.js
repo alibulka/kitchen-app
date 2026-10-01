@@ -7,6 +7,7 @@ const { pool } = require('../db');
 const { generateTemplateDOCX, generateActDOCX } = require('../docx-gen');
 
 const { syncActSafely } = require('../lib/prorabotki-writeback');
+const { notifyActSafely } = require('../lib/act-notifications');
 
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -333,7 +334,8 @@ router.post('/acts', async (req, res) => {
 // Сохранить значения акта
 router.put('/acts/:id', async (req, res) => {
   try {
-    const { values = {}, status, date, raw_material, product_name, manufacturer, supplier, conclusion, gross_mass, defrost_mass } = req.body;
+    const { values = {}, status, date, raw_material, product_name, manufacturer, supplier,
+      conclusion, gross_mass, defrost_mass } = req.body;
     const normalizeMass = value => value == null || String(value).trim() === ''
       ? null : Number(String(value).replace(',', '.'));
     for (const mass of [gross_mass, defrost_mass]) {
@@ -345,37 +347,64 @@ router.put('/acts/:id', async (req, res) => {
     if (date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return res.status(400).json({ error: 'Неверный формат даты' });
     }
-    await pool.withTransaction(async (client) => {
+    const { savedAct, isFirstCompletion, hasChanges } = await pool.withTransaction(async (client) => {
+      const { rows: [beforeSave] } = await client.query(
+        'SELECT * FROM acts WHERE id=$1 FOR UPDATE', [req.params.id]);
+      if (!beforeSave) throw new Error('Акт не найден');
+      const isFirstCompletion = status === 'done' && !beforeSave.first_completed_at;
+      const { rows: existingValues } = await client.query(
+        'SELECT field_id,value FROM act_values WHERE act_id=$1', [req.params.id]);
+      const currentValues = new Map(existingValues.map(row => [String(row.field_id), row.value]));
       // Preserve the source name before editing, so renaming can safely write back.
       await client.query(`UPDATE acts SET source_product_name=product_name
         WHERE id=$1 AND source_row IS NOT NULL AND source_product_name IS NULL`, [req.params.id]);
       const sets = [];
       const params = [];
-      if (date !== undefined) { sets.push(`date=$${params.length+1}`); params.push(date); }
-      if (status) { sets.push(`status=$${params.length+1}`); params.push(status); }
-      if (raw_material !== undefined) { sets.push(`raw_material=$${params.length+1}`); params.push(raw_material); }
-      if (product_name !== undefined) { sets.push(`product_name=$${params.length+1}`); params.push(product_name); }
-      if (manufacturer !== undefined) { sets.push(`manufacturer=$${params.length+1}`); params.push(manufacturer); }
-      if (supplier !== undefined) { sets.push(`supplier=$${params.length+1}`); params.push(supplier); }
-      if (conclusion !== undefined) { sets.push(`conclusion=$${params.length+1}`); params.push(conclusion); }
-      if (gross_mass !== undefined) { sets.push(`gross_mass=$${params.length+1}`); params.push(normalizeMass(gross_mass)); }
-      if (defrost_mass !== undefined) { sets.push(`defrost_mass=$${params.length+1}`); params.push(normalizeMass(defrost_mass)); }
-      if (sets.length > 0) {
-        sets.push(`updated_at=(NOW()::text)`);
+      const same = (left, right) => left == null && right == null || String(left) === String(right);
+      const addChanged = (column, value, current) => {
+        if (value === undefined || same(value, current)) return;
+        sets.push(`${column}=$${params.length + 1}`);
+        params.push(value);
+      };
+      addChanged('date', date, beforeSave.date);
+      if (status) addChanged('status', status, beforeSave.status);
+      addChanged('raw_material', raw_material, beforeSave.raw_material);
+      addChanged('product_name', product_name, beforeSave.product_name);
+      addChanged('manufacturer', manufacturer, beforeSave.manufacturer);
+      addChanged('supplier', supplier, beforeSave.supplier);
+      addChanged('conclusion', conclusion, beforeSave.conclusion);
+      if (gross_mass !== undefined) addChanged('gross_mass', normalizeMass(gross_mass), beforeSave.gross_mass);
+      if (defrost_mass !== undefined) addChanged('defrost_mass', normalizeMass(defrost_mass), beforeSave.defrost_mass);
+      const changedValues = Object.entries(values).flatMap(([fieldId, value]) => {
+        const normalized = value == null ? null : String(value);
+        return same(normalized, currentValues.get(String(fieldId))) ? [] : [[fieldId, normalized]];
+      });
+      const hasChanges = sets.length > 0 || changedValues.length > 0;
+      if (hasChanges) {
+        sets.push(`updated_at=(clock_timestamp()::text)`);
+        if (isFirstCompletion) sets.push(`first_completed_at=(clock_timestamp()::text)`);
         params.push(req.params.id);
         await client.query(`UPDATE acts SET ${sets.join(',')} WHERE id=$${params.length}`, params);
       }
-      for (const [fieldId, value] of Object.entries(values)) {
+      for (const [fieldId, value] of changedValues) {
         await client.query(
           `INSERT INTO act_values(act_id,field_id,value) VALUES($1,$2,$3)
            ON CONFLICT(act_id,field_id) DO UPDATE SET value=$3`,
-          [req.params.id, fieldId, value == null ? null : String(value)]
+          [req.params.id, fieldId, value]
         );
       }
+      const { rows: [saved] } = await client.query('SELECT * FROM acts WHERE id=$1', [req.params.id]);
+      return { savedAct: saved, isFirstCompletion, hasChanges };
     });
 
-    const sheetSync = await syncActSafely(pool, req.params.id);
-    res.json({ ok: true, sheetSync });
+    const shouldNotify = hasChanges && savedAct.status === 'done';
+    const sheetSync = hasChanges
+      ? await syncActSafely(pool, req.params.id)
+      : { status: 'skipped', reason: 'unchanged' };
+    const notification = shouldNotify
+      ? await notifyActSafely(savedAct, isFirstCompletion)
+      : { status: 'skipped', reason: hasChanges ? 'draft' : 'unchanged' };
+    res.json({ ok: true, changed: hasChanges, sheetSync, notification });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

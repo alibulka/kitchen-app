@@ -318,6 +318,10 @@
     color: var(--muted); font-size: 15px; font-weight: 700; min-height: 46px;
   }
   .mgr-tab.active { background: var(--accent); color: white; border-color: var(--accent); }
+  .prorabotki-table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+  @media (max-width: 820px) {
+    .prorabotki-table { min-width: 860px; }
+  }
 
   /* ---- dashboard ---- */
   .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px,1fr)); gap: 14px; margin-bottom: 22px; }
@@ -6880,6 +6884,68 @@ function getStationGroups(catalog) {
   return groups;
 }
 
+// Workshop presentation only.  The raw groups above remain the source of truth
+// for reports, manager calculations and all persistence keys.
+function visibleStationName(station, shopName) {
+  const prefix = (station.shop || shopName || '') + ' / ';
+  return String(station.name || '').startsWith(prefix)
+    ? String(station.name).slice(prefix.length)
+    : String(station.name || '').replace(/^.+?\/\s*/, '');
+}
+function normalizedStationName(station, shopName) {
+  return visibleStationName(station, shopName).trim().toLocaleLowerCase('ru-RU');
+}
+function mergeWorkshopGroups(rawGroups, viewDate, today) {
+  if (!Array.isArray(rawGroups) || viewDate < (today || todayKey())) return rawGroups;
+  const pairs = [
+    ['Рыбный цех', 'Мясной цех', 'Рыбный/Мясной цех'],
+    ['Молочный цех', 'Соусный цех', 'Молочный/Соусный цех']
+  ];
+  const consumed = new Set();
+  const result = [];
+  rawGroups.forEach(group => {
+    if (consumed.has(group.shop)) return;
+    const pair = pairs.find(p => p[0] === group.shop || p[1] === group.shop);
+    if (!pair) { result.push(group); return; }
+    const first = rawGroups.find(g => g.shop === pair[0]);
+    const second = rawGroups.find(g => g.shop === pair[1]);
+    if (!first && !second) return;
+    const sources = [first, second].filter(Boolean);
+    const stations = [];
+    sources.forEach(source => (source.stations || []).forEach(station => {
+      const label = visibleStationName(station, source.shop);
+      const normalizedLabel = normalizedStationName(station, source.shop);
+      let target = stations.find(s => s._normalizedVisibleName === normalizedLabel);
+      if (!target) {
+        target = {
+          ...station,
+          key: station.key,
+          shop: pair[2],
+          name: pair[2] + ' / ' + label,
+          items: [],
+          _sourceKeys: [],
+          _visibleName: label,
+          _normalizedVisibleName: normalizedLabel
+        };
+        stations.push(target);
+      }
+      target._sourceKeys.push(station.key);
+      (station.items || []).forEach(item => target.items.push({
+        ...item,
+        __sourceStationKey: station.key,
+        __visualItemKey: station.key + '-' + item.id
+      }));
+    }));
+    const merged = {shop: pair[2], stations};
+    // Keep internal metadata non-presentational; employee union is resolved by
+    // getShopEmployees below from these source shop names.
+    Object.defineProperty(merged, '_sourceShops', {value: [pair[0], pair[1]], enumerable: false});
+    result.push(merged);
+    consumed.add(pair[0]); consumed.add(pair[1]);
+  });
+  return result;
+}
+
 // ============================================================
 // СОТРУДНИКИ ПО УМОЛЧАНИЮ
 // ============================================================
@@ -6919,9 +6985,12 @@ const INITIAL_EMPLOYEES = [
 const SAUCE_MILK_SHOPS = ['Соусный цех', 'Молочный цех'];
 
 function getShopEmployees(shopName, allEmployees) {
+  const sourceShops = Array.isArray(shopName)
+    ? shopName
+    : (shopName && shopName._sourceShops) || [shopName];
   return allEmployees.filter(e => {
     const s = Array.isArray(e.shops) && e.shops.length > 0 ? e.shops : (e.shop ? [e.shop] : []);
-    return s.includes(shopName);
+    return sourceShops.some(shop => s.includes(shop));
   });
 }
 
@@ -7708,6 +7777,9 @@ const OVOSHCH_FASOVKA_KEY = 'ovoshchnoj_tseh_fasovka';
 
 
 function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robokopItems=[], precutConfig=new Set(), onPrecutConfigChange, shopParam}) {
+  const sourceKeyOf=(item)=>item.__sourceStationKey||station.key;
+  const visualKeyOf=(item)=>item.__visualItemKey||(`${sourceKeyOf(item)}-${item.id}`);
+  const carryKeyOf=(stationKey,itemId)=>`${stationKey}:${itemId}`;
   const isRuchnaya = station.key === RUCHNAYA_KEY;
   const isRobokop  = station.key === ROBOKOP_KEY;
   const isZamesStation = station.key.startsWith('suhoj_tseh_') || station.key === OVOSHCH_FASOVKA_KEY;
@@ -7749,7 +7821,7 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robok
     if(!isZamesStation) return new Set();
     return new Set(zamesItems.filter(it=>shift.doneFlags[zamesKey(it.id)]&&!shift.doneFlags[`${station.key}-${it.id}`]).map(it=>it.id));
   },[isZamesStation,zamesItems,shift.doneFlags,station.key]);
-  const doneCount=items.filter(it=>shift.doneFlags[`${station.key}-${it.id}`]).length;
+  const doneCount=items.filter(it=>shift.doneFlags[`${sourceKeyOf(it)}-${it.id}`]).length;
   const pct=items.length>0?Math.round(doneCount/items.length*100):0;
   const pillColor=doneCount===items.length?'var(--ok)':'var(--warn)';
 
@@ -7760,10 +7832,10 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robok
     return ()=>window.removeEventListener('scroll',onScroll);
   },[]);
 
-  // displayOrder: current visual order of item IDs — done items изначально снизу
+  // displayOrder: current visual order of station+item keys — done items изначально снизу
   const [displayOrder,setDisplayOrder]=useState(()=>{
-    const todoIds=items.filter(i=>!shift.doneFlags[`${station.key}-${i.id}`]).map(i=>i.id);
-    const doneIds=items.filter(i=>!!shift.doneFlags[`${station.key}-${i.id}`]).map(i=>i.id);
+    const todoIds=items.filter(i=>!shift.doneFlags[`${sourceKeyOf(i)}-${i.id}`]).map(visualKeyOf);
+    const doneIds=items.filter(i=>!!shift.doneFlags[`${sourceKeyOf(i)}-${i.id}`]).map(visualKeyOf);
     return [...todoIds,...doneIds];
   });
   // sinkingIds: items currently in the fade-out phase before moving
@@ -7773,19 +7845,19 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robok
 
   // Инициализируем с текущим состоянием, чтобы уже выполненные позиции не мелькали в "Надо выполнить"
   const prevDoneRef=useRef(
-    Object.fromEntries(items.map(i=>[i.id,!!shift.doneFlags[`${station.key}-${i.id}`]]))
+    Object.fromEntries(items.map(i=>[visualKeyOf(i),!!shift.doneFlags[`${sourceKeyOf(i)}-${i.id}`]]))
   );
   const timersRef=useRef({});
 
   // Reset when station changes or items change (e.g. new techcard applied)
-  const itemsKey=items.map(i=>i.id).join(',');
+  const itemsKey=items.map(visualKeyOf).join(',');
   useEffect(()=>{
-    const todoIds=items.filter(i=>!shift.doneFlags[`${station.key}-${i.id}`]).map(i=>i.id);
-    const doneIds=items.filter(i=>!!shift.doneFlags[`${station.key}-${i.id}`]).map(i=>i.id);
+    const todoIds=items.filter(i=>!shift.doneFlags[`${sourceKeyOf(i)}-${i.id}`]).map(visualKeyOf);
+    const doneIds=items.filter(i=>!!shift.doneFlags[`${sourceKeyOf(i)}-${i.id}`]).map(visualKeyOf);
     setDisplayOrder([...todoIds,...doneIds]);
     setSinkingIds(new Set());
     setSettledIds(new Set());
-    prevDoneRef.current=Object.fromEntries(items.map(i=>[i.id,!!shift.doneFlags[`${station.key}-${i.id}`]]));
+    prevDoneRef.current=Object.fromEntries(items.map(i=>[visualKeyOf(i),!!shift.doneFlags[`${sourceKeyOf(i)}-${i.id}`]]));
     Object.values(timersRef.current).forEach(clearTimeout);
     timersRef.current={};
   },[station.key,itemsKey]);
@@ -7793,55 +7865,61 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robok
   // Watch done flag changes
   useEffect(()=>{
     items.forEach(item=>{
-      const ik=`${station.key}-${item.id}`;
+      const ik=`${sourceKeyOf(item)}-${item.id}`;
       const nowDone=!!shift.doneFlags[ik];
-      const wasDone=!!prevDoneRef.current[item.id];
+      const wasDone=!!prevDoneRef.current[visualKeyOf(item)];
 
       if(nowDone&&!wasDone){
         // Phase 1: start sinking (fade out)
-        setSinkingIds(prev=>{const n=new Set(prev);n.add(item.id);return n;});
+        setSinkingIds(prev=>{const n=new Set(prev);n.add(visualKeyOf(item));return n;});
         // Phase 2: after delay, move to bottom
-        timersRef.current[item.id]=setTimeout(()=>{
-          setSinkingIds(prev=>{const n=new Set(prev);n.delete(item.id);return n;});
-          setDisplayOrder(prev=>[...prev.filter(id=>id!==item.id), item.id]);
+        const visualKey=visualKeyOf(item);
+        timersRef.current[visualKey]=setTimeout(()=>{
+          setSinkingIds(prev=>{const n=new Set(prev);n.delete(visualKeyOf(item));return n;});
+          setDisplayOrder(prev=>[...prev.filter(id=>id!==visualKeyOf(item)), visualKeyOf(item)]);
           // Play settle animation briefly
-          setSettledIds(prev=>{const n=new Set(prev);n.add(item.id);return n;});
-          setTimeout(()=>setSettledIds(prev=>{const n=new Set(prev);n.delete(item.id);return n;}),500);
+          setSettledIds(prev=>{const n=new Set(prev);n.add(visualKeyOf(item));return n;});
+          setTimeout(()=>setSettledIds(prev=>{const n=new Set(prev);n.delete(visualKeyOf(item));return n;}),500);
         },SINK_DELAY);
       } else if(!nowDone&&wasDone){
         // Unchecked: cancel pending sink, move back above done items immediately
-        clearTimeout(timersRef.current[item.id]);
-        setSinkingIds(prev=>{const n=new Set(prev);n.delete(item.id);return n;});
+        const visualKey=visualKeyOf(item);
+        clearTimeout(timersRef.current[visualKey]);
+        setSinkingIds(prev=>{const n=new Set(prev);n.delete(visualKeyOf(item));return n;});
         setDisplayOrder(prev=>{
-          const without=prev.filter(id=>id!==item.id);
+          const without=prev.filter(id=>id!==visualKey);
           // insert before first done item
-          const firstDoneIdx=without.findIndex(id=>!!shift.doneFlags[`${station.key}-${id}`]);
-          if(firstDoneIdx===-1){return [...without,item.id];}
+          const firstDoneIdx=without.findIndex(id=>{
+            const found=itemById[id];
+            return found && !!shift.doneFlags[`${sourceKeyOf(found)}-${found.id}`];
+          });
+          if(firstDoneIdx===-1){return [...without,visualKeyOf(item)];}
           const result=[...without];
-          result.splice(firstDoneIdx,0,item.id);
+          result.splice(firstDoneIdx,0,visualKeyOf(item));
           return result;
         });
       }
     });
     prevDoneRef.current=Object.fromEntries(
-      items.map(i=>[i.id,!!shift.doneFlags[`${station.key}-${i.id}`]])
+      items.map(i=>[visualKeyOf(i),!!shift.doneFlags[`${sourceKeyOf(i)}-${i.id}`]])
     );
   },[shift.doneFlags]);
 
   const [statusTab,setStatusTab]=useState('todo');
   const [search,setSearch]=useState('');
-  const itemById=Object.fromEntries(items.map(i=>[i.id,i]));
+  const itemById=Object.fromEntries(items.map(i=>[visualKeyOf(i),i]));
   const orderedItems=displayOrder.map(id=>itemById[id]).filter(Boolean);
   // sinking items stay in todo while animating, then move to done
-  const todoItems=orderedItems.filter(it=>!shift.doneFlags[`${station.key}-${it.id}`]||sinkingIds.has(it.id));
-  const doneItems=orderedItems.filter(it=>!!shift.doneFlags[`${station.key}-${it.id}`]&&!sinkingIds.has(it.id));
+  const todoItems=orderedItems.filter(it=>!shift.doneFlags[`${sourceKeyOf(it)}-${it.id}`]||sinkingIds.has(visualKeyOf(it)));
+  const doneItems=orderedItems.filter(it=>!!shift.doneFlags[`${sourceKeyOf(it)}-${it.id}`]&&!sinkingIds.has(visualKeyOf(it)));
 
-  // Перенос из прошлой смены: prevItemDataMap[itemId][lineIdx] = {status, skipReason, yesterdayFact, volume, packName, planQty}
+  // Перенос из прошлой смены: prevItemDataMap[stationKey:itemId][lineIdx] = данные строки.
   const prevItemDataMap={};
   for(const p of (shift.prevSkips||[])){
-    if(p.stationKey!==station.key) continue;
-    const id=String(p.itemId);
+    if(!(station._sourceKeys||[station.key]).includes(p.stationKey)) continue;
+    const id=carryKeyOf(p.stationKey,p.itemId);
     if(!prevItemDataMap[id]) prevItemDataMap[id]={};
+    prevItemDataMap[id].__stationKey=p.stationKey;
     if(p.lineIdx!=null){
       prevItemDataMap[id][p.lineIdx]={status:p.status,skipReason:p.skipReason,skipAt:p.skipAt,yesterdayFact:p.yesterdayFact,
         volume:p.volume,packName:p.packName,planQty:p.planQty};
@@ -7849,8 +7927,6 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robok
       prevItemDataMap[id].__itemLevel={status:p.status||'skipped',skipReason:p.skipReason,skipAt:p.skipAt};
     }
   }
-  const todayItemIds=new Set(items.map(it=>String(it.id)));
-
   // Вчерашняя техкарта — для карточек переноса берём из неё ингредиенты/подзаготовки
   // (сегодняшние количества могут сильно отличаться от вчерашнего долга)
   const [prevCatalogItems,setPrevCatalogItems]=useState(null);
@@ -7866,48 +7942,55 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robok
       const cat=getCatalogForDate('prev',ee,ud);
       const map={};
       for(const st of cat){
-        if(st.key!==station.key) continue;
-        for(const it of st.items) map[String(it.id)]=it;
+        if(!(station._sourceKeys||[station.key]).includes(st.key)) continue;
+        for(const it of st.items) map[carryKeyOf(st.key,it.id)]=it;
       }
       setPrevCatalogItems(map);
     })();
     return ()=>{alive=false;};
   },[shift.prevTechcardId,shift.prevUdTechcardId,station.key]);
-  const prevItemFor=(id)=>(prevCatalogItems||{})[String(id)]||null;
+  const prevItemFor=(item)=>(prevCatalogItems||{})[carryKeyOf(sourceKeyOf(item),item.id)]||null;
   // Карточка переноса: подменяем ингредиенты/подзаготовки на вчерашние (если нашли)
   const carryItem=(item)=>{
-    const pi=prevItemFor(item.id);
+    const pi=prevItemFor(item);
     return pi?{...item,ingredients:pi.ingredients,subPreps:pi.subPreps,yieldAmount:pi.yieldAmount,yieldUnit:pi.yieldUnit}:item;
   };
   // Items с хотя бы одной skipped/partial строкой (done-only не показываем как перенос)
   const hasCarryoverSkip=(d)=>d&&Object.values(d).some(p=>p.status==='skipped'||p.status==='partial');
   // Берём из всех позиций дня (не только невыполненных): сегодняшняя галочка не должна скрывать вчерашний долг
-  const allCarriedItems=orderedItems.filter(it=>hasCarryoverSkip(prevItemDataMap[String(it.id)]));
+  const allCarriedItems=orderedItems.filter(it=>hasCarryoverSkip(prevItemDataMap[carryKeyOf(sourceKeyOf(it),it.id)]));
   // Позиции переноса, которых НЕТ в сегодняшней техкарте
   const allCarriedOnlyItems=[];
   const seenCarriedOnly=new Set();
   for(const p of (shift.prevSkips||[])){
-    if(p.stationKey!==station.key) continue;
+    if(!(station._sourceKeys||[station.key]).includes(p.stationKey)) continue;
     const sid=String(p.itemId);
-    if(todayItemIds.has(sid)||seenCarriedOnly.has(sid)) continue;
-    if(!hasCarryoverSkip(prevItemDataMap[sid])) continue;
-    seenCarriedOnly.add(sid);
-    allCarriedOnlyItems.push({id:p.itemId,name:p.itemName||`Позиция #${p.itemId}`,ingredients:[]});
+    const carryKey=carryKeyOf(p.stationKey,p.itemId);
+    const existsToday=items.some(it=>sourceKeyOf(it)===p.stationKey&&String(it.id)===sid);
+    if(existsToday||seenCarriedOnly.has(carryKey)) continue;
+    if(!hasCarryoverSkip(prevItemDataMap[carryKey])) continue;
+    seenCarriedOnly.add(carryKey);
+    allCarriedOnlyItems.push({
+      id:p.itemId,name:p.itemName||`Позиция #${p.itemId}`,ingredients:[],
+      __sourceStationKey:p.stationKey,__visualItemKey:p.stationKey+'-'+p.itemId
+    });
   }
   // Определяем "выполнено через карryover-блок" по prev- ключам
-  const isCarryoverDone=(itemId)=>{
-    const lineMap=prevItemDataMap[String(itemId)]||{};
+  const isCarryoverDone=(item)=>{
+    const itemId=item.id;
+    const lineMap=prevItemDataMap[carryKeyOf(sourceKeyOf(item),itemId)]||{};
     const skipEntries=Object.entries(lineMap).filter(([k,p])=>k!=='__itemLevel'&&(p.status==='skipped'||p.status==='partial'));
     if(skipEntries.length===0) return false;
-    return skipEntries.every(([li])=>!!shift.doneFlags[`prev-${station.key}-${itemId}-pl-${li}`]);
+    const originalStationKey=lineMap.__stationKey||station.key;
+    return skipEntries.every(([li])=>!!shift.doneFlags[`prev-${originalStationKey}-${itemId}-pl-${li}`]);
   };
-  const carriedItems=allCarriedItems.filter(it=>!isCarryoverDone(it.id));
-  const carriedOnlyItems=allCarriedOnlyItems.filter(it=>!isCarryoverDone(it.id));
+  const carriedItems=allCarriedItems.filter(it=>!isCarryoverDone(it));
+  const carriedOnlyItems=allCarriedOnlyItems.filter(it=>!isCarryoverDone(it));
   // Во «Выполнено» позиция может быть двумя карточками: сегодняшняя (обычная)
   // и вчерашний закрытый долг (carryover) — это разные задания
   const carriedDoneItems=[
-    ...allCarriedItems.filter(it=>isCarryoverDone(it.id)),
-    ...allCarriedOnlyItems.filter(it=>isCarryoverDone(it.id)),
+    ...allCarriedItems.filter(isCarryoverDone),
+    ...allCarriedOnlyItems.filter(isCarryoverDone),
   ];
   // Обычные невыполненные — без карryover-позиций (они в "Прошлая смена")
   const todoRegular=todoItems; // все позиции сегодняшней техкарты — в "Надо выполнить"
@@ -7921,12 +8004,12 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robok
   const visibleItems=filterItems(statusTab==='todo'?todoItems:doneItems);
 
   const renderItem=(item,prevLineData=null)=>{
-    const sinking=sinkingIds.has(item.id);
-    const settled=settledIds.has(item.id);
+    const sinking=sinkingIds.has(visualKeyOf(item));
+    const settled=settledIds.has(visualKeyOf(item));
     return e('div',{
-      key:item.id,
+      key:visualKeyOf(item),
       className:'item-wrapper'+(sinking?' sinking':'')+(settled?' settled':'')
-    }, e(ItemCard,{item,stationKey:station.key,shift,onShiftChange,shopEmployees,prevLineData}));
+    }, e(ItemCard,{item,stationKey:sourceKeyOf(item),shift,onShiftChange,shopEmployees,prevLineData}));
   };
 
   const togglePrecut=(itemId)=>{
@@ -7938,13 +8021,13 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robok
 
   // Рендер карточки Робокопа с кнопкой предобработки (только в обычном режиме)
   const renderRobokopItem=(item,prevLineData=null,opts={})=>{
-    const sinking=sinkingIds.has(item.id);
-    const settled=settledIds.has(item.id);
+    const sinking=sinkingIds.has(visualKeyOf(item));
+    const settled=settledIds.has(visualKeyOf(item));
     const inPrecut=precutConfig.has(item.id);
     const showToggle=isRobokop && !shopParam && onPrecutConfigChange;
-    const card=e(ItemCard,{item,stationKey:station.key,shift,onShiftChange,shopEmployees,prevLineData});
-    if(!showToggle) return e('div',{key:item.id,className:'item-wrapper'+(sinking?' sinking':'')+(settled?' settled':'')},card);
-    return e('div',{key:item.id,className:'item-wrapper'+(sinking?' sinking':'')+(settled?' settled':''),style:{position:'relative'}},
+    const card=e(ItemCard,{item,stationKey:sourceKeyOf(item),shift,onShiftChange,shopEmployees,prevLineData});
+    if(!showToggle) return e('div',{key:visualKeyOf(item),className:'item-wrapper'+(sinking?' sinking':'')+(settled?' settled':'')},card);
+    return e('div',{key:visualKeyOf(item),className:'item-wrapper'+(sinking?' sinking':'')+(settled?' settled':''),style:{position:'relative'}},
       card,
       e('div',{style:{position:'absolute',top:20,right:12,zIndex:10},
         onMouseEnter:ev=>{const t=ev.currentTarget.querySelector('.precut-tip');if(t)t.style.display='block';},
@@ -7984,31 +8067,32 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robok
     });
   };
   const renderCarried=(item)=>{
-    const lineMap=prevItemDataMap[String(item.id)]||{};
+    const lineMap=prevItemDataMap[carryKeyOf(sourceKeyOf(item),item.id)]||{};
     // Во вкладке «Прошлая смена» показываем ВЧЕРАШНИЕ строки фасовки (долг),
     // а не сегодняшние — их состав и количество могут отличаться
     const synPackLines=buildPrevPackLines(lineMap);
-    return e('div',{key:item.id,className:'item-wrapper'},
-      e(ItemCard,{item:carryItem(item),stationKey:station.key,shift,onShiftChange,shopEmployees,prevLineData:lineMap,
+    const originalStationKey=lineMap.__stationKey||sourceKeyOf(item);
+    return e('div',{key:'prev-'+visualKeyOf(item),className:'item-wrapper'},
+      e(ItemCard,{item:carryItem(item),stationKey:originalStationKey,shift,onShiftChange,shopEmployees,prevLineData:lineMap,
         overridePackLines:synPackLines.length>0?synPackLines:null,keyPrefix:'prev-'}));
   };
   // Для позиций переноса без сегодняшней техкарты — синтетические packLines из prevSkips
   const renderCarriedOnly=(synItem)=>{
-    const lineMap=prevItemDataMap[String(synItem.id)]||{};
+    const lineMap=prevItemDataMap[carryKeyOf(sourceKeyOf(synItem),synItem.id)]||{};
     const synPackLines=buildPrevPackLines(lineMap);
-    const fullPrev=prevItemFor(synItem.id);
+    const fullPrev=prevItemFor(synItem);
     return e('div',{key:synItem.id,className:'item-wrapper'},
-      e(ItemCard,{item:fullPrev||synItem,stationKey:station.key,shift,onShiftChange,shopEmployees,
+      e(ItemCard,{item:fullPrev||synItem,stationKey:lineMap.__stationKey||sourceKeyOf(synItem),shift,onShiftChange,shopEmployees,
         prevLineData:lineMap,overridePackLines:synPackLines.length>0?synPackLines:null,keyPrefix:'prev-'}));
   };
   const renderCarriedDone=(item)=>{
-    const lineMap=prevItemDataMap[String(item.id)]||{};
+    const lineMap=prevItemDataMap[carryKeyOf(sourceKeyOf(item),item.id)]||{};
     const synPackLines=buildPrevPackLines(lineMap);
     // Всегда показываем вчерашние строки — это карточка вчерашнего долга,
     // и key с префиксом, чтобы не конфликтовать с сегодняшней карточкой той же позиции
     const hasOverride=synPackLines.length>0;
     return e('div',{key:'prev-'+item.id,className:'item-wrapper'},
-      e(ItemCard,{item:carryItem(item),stationKey:station.key,shift,onShiftChange,shopEmployees,
+      e(ItemCard,{item:carryItem(item),stationKey:lineMap.__stationKey||sourceKeyOf(item),shift,onShiftChange,shopEmployees,
         prevLineData:lineMap,overridePackLines:hasOverride?synPackLines:null,keyPrefix:'prev-'}));
   };
   const renderRegular=(item)=>renderItem(item,null);
@@ -8146,7 +8230,7 @@ function KitchenShopPage({shopGroup, shift, onShiftChange, allEmployees, onBack,
   const stations=shopGroup.stations||[];
   const [stationIdx,setStationIdx]=useState(0);
   const station=stations[stationIdx]||stations[0];
-  const shopEmployees=useMemo(()=>getShopEmployees(shopGroup.shop,allEmployees),[shopGroup.shop,allEmployees]);
+  const shopEmployees=useMemo(()=>getShopEmployees(shopGroup._sourceShops||shopGroup.shop,allEmployees),[shopGroup,allEmployees]);
   // Заготовки Робокопа передаём в Ручную нарезку
   const robokopItems=useMemo(()=>{
     const st=stations.find(s=>s.key===ROBOKOP_KEY);
@@ -8163,7 +8247,7 @@ function KitchenShopPage({shopGroup, shift, onShiftChange, allEmployees, onBack,
     },
       shopGroups.map(g=>{
         const isActive=g.shop===shopGroup.shop;
-        const gDone=g.stations.reduce((s,st)=>s+(st.items||[]).filter(it=>shift.doneFlags[`${st.key}-${it.id}`]).length,0);
+        const gDone=g.stations.reduce((s,st)=>s+(st.items||[]).filter(it=>shift.doneFlags[`${it.__sourceStationKey||st.key}-${it.id}`]).length,0);
         const gTotal=g.stations.reduce((s,st)=>s+(st.items||[]).length,0);
         const pct=gTotal>0?Math.round(gDone/gTotal*100):null;
         return e('button',{
@@ -8182,7 +8266,7 @@ function KitchenShopPage({shopGroup, shift, onShiftChange, allEmployees, onBack,
     // Station tabs
     e('div',{className:'station-tabs'},
       stations.map((st,i)=>{
-        const stDone=(st.items||[]).filter(it=>shift.doneFlags[`${st.key}-${it.id}`]).length;
+        const stDone=(st.items||[]).filter(it=>shift.doneFlags[`${it.__sourceStationKey||st.key}-${it.id}`]).length;
         const stTotal=(st.items||[]).length;
         const label=st.name.replace(shopGroup.shop+' / ','');
         return e('button',{
@@ -8213,7 +8297,7 @@ function WorkshopSelector({shopGroups, shift, onSelect}) {
       shopGroups.map(g=>{
         const totalItems=g.stations.reduce((s,st)=>s+(st.items||[]).length,0);
         const totalDone=g.stations.reduce((s,st)=>{
-          return s+(st.items||[]).filter(it=>shift.doneFlags[`${st.key}-${it.id}`]).length;
+          return s+(st.items||[]).filter(it=>shift.doneFlags[`${it.__sourceStationKey||st.key}-${it.id}`]).length;
         },0);
         const pct=totalItems>0?Math.round(totalDone/totalItems*100):0;
         const done=totalDone===totalItems&&totalItems>0;
@@ -8637,7 +8721,7 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
     ),
     // Filters + table
     e('div',{className:'card',style:{padding:0}},
-      e('div',{style:{position:'sticky',top:54,zIndex:20,background:'var(--card)',borderRadius:'12px 12px 0 0',padding:'14px 16px 10px',borderBottom:'1px solid var(--border)'}},
+      e('div',{style:{position:'sticky',top:54,zIndex:20,background:'var(--surface)',borderRadius:'12px 12px 0 0',padding:'14px 16px 10px',borderBottom:'1px solid var(--border)'}},
         e('div',{style:{display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:10,marginBottom:10}},
           e('p',{style:{fontWeight:700,fontSize:15,margin:0}},'Детализация ('+filtered.length+' позиций)'),
           e('button',{className:'btn-secondary',onClick:exportXlsx,style:{display:'flex',alignItems:'center',gap:8}},
@@ -9861,7 +9945,7 @@ function DXStorageTab({dateKey, shift, activeTcEE, activeTcUD, archiveIndex}) {
 // ============================================================
 // MANAGER PAGE
 // ============================================================
-function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesChange, archiveIndex, onOpenArchiveDate, allTechcards, activeTcEE, activeTcUD, onApplyTechcard, onDeactivate, onRefreshTechcards, shopGroups, globalStationConfig, onStationConfigChange, precutConfig, onPrecutConfigChange}) {
+function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesChange, archiveIndex, onOpenArchiveDate, allTechcards, activeTcEE, activeTcUD, onApplyTechcard, onDeactivate, onRefreshTechcards, shopGroups, workshopGroups, globalStationConfig, onStationConfigChange, precutConfig, onPrecutConfigChange}) {
   const activeTechcard = activeTcEE || activeTcUD; // для обратной совместимости
   const [tab,setTab]=useState('dashboard');
   const [selectedShop,setSelectedShop]=useState(null);
@@ -9884,6 +9968,8 @@ function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesCh
         e(SvgUpload,{size:16}),' Техкарты'),
       e('button',{className:'mgr-tab'+(tab==='technologist'?' active':''),onClick:()=>switchTab('technologist')},
         '🔬 Технолог'),
+      e('button',{className:'mgr-tab'+(tab==='techTasks'?' active':''),onClick:()=>switchTab('techTasks')},
+        '📝 Задания технологу'),
       e('button',{className:'mgr-tab'+(tab==='product'?' active':''),onClick:()=>switchTab('product')},
         '📋 Журнал проверок ПК'),
       e('button',{className:'mgr-tab'+(tab==='acts'?' active':''),onClick:()=>switchTab('acts')},
@@ -9896,19 +9982,20 @@ function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesCh
       selectedShop
         ? e(KitchenShopPage,{
             shopGroup:selectedShop, shift, onShiftChange, allEmployees,
-            isManager:true, shopGroups,
+            isManager:true, shopGroups:workshopGroups,
             precutConfig, onPrecutConfigChange,
             onBack:(targetGroup)=>{
               if(targetGroup) setSelectedShop(targetGroup);
               else setSelectedShop(null);
             }
           })
-        : e(WorkshopSelector,{shopGroups, shift, onSelect:setSelectedShop})
+        : e(WorkshopSelector,{shopGroups:workshopGroups, shift, onSelect:setSelectedShop})
     ),
     tab==='employees' && e(EmployeesTab,{employees:allEmployees,onSave:onEmployeesChange}),
     tab==='shifts' && e(ShiftsTab,{archiveIndex,globalStationConfig,onStationConfigChange,shopGroups}),
     tab==='upload' && e(TechcardsTab,{shift,allTechcards,activeTcEE,activeTcUD,onApplyTechcard,onDeactivate,onRefreshTechcards}),
     tab==='technologist' && e(TechnologistPage,{initialActId:actIdParam}),
+    tab==='techTasks' && e(ManagerTechnologistTasks),
     tab==='product' && e(ProductJournalPage,null),
     tab==='acts' && e(ActsPage,{isManager:true}),
     tab==='dh-storage' && e(DXStorageTab,{dateKey,shift,activeTcEE,activeTcUD,archiveIndex})
@@ -10038,7 +10125,7 @@ function PhotoCarousel({photos, onOpen, size=200}) {
   );
 }
 
-function QualityChecklist({task, onSave, onClose}) {
+function QualityChecklist({task, onSave, onClose, onReferenceAdded, onPhotosChanged}) {
   const rawExtra=task.extra_fields||[];
   const fields=[...BASE_FIELDS,...rawExtra.map(f=>typeof f==='string'?f:f.name)];
   const extraDescMap=Object.fromEntries(rawExtra.map(f=>typeof f==='string'?[f,'']:[f.name,f.description||'']));
@@ -10047,7 +10134,9 @@ function QualityChecklist({task, onSave, onClose}) {
   const [vals,setVals]=useState(init);
   const [saving,setSaving]=useState(false);
   const [photos,setPhotos]=useState(task.photos||[]);
+  const [refPhotos,setRefPhotos]=useState(task.ref_photos||[]);
   const [uploading,setUploading]=useState(false);
+  const [promotingPhotoId,setPromotingPhotoId]=useState(null);
   const [lightbox,setLightbox]=useState(null); // {photos, index}
   const fileRef=useRef();
 
@@ -10084,17 +10173,39 @@ function QualityChecklist({task, onSave, onClose}) {
       for(const f of fileArr) fd.append('photos',f);
       const r=await fetch(`/api/quality/tasks/${task.id}/photos`,{method:'POST',body:fd});
       const d=await r.json();
-      if(d.files) setPhotos(prev=>[...prev,...d.files.map(fn=>({filename:fn}))]);
+      if(!r.ok||d.error) throw new Error(d.error||String(r.status));
+      if(d.photos) {
+        const next=[...photos,...d.photos];
+        setPhotos(next);
+        onPhotosChanged(task.id,next);
+      }
     } catch(e) {
-      console.error('Ошибка загрузки фото:',e);
+      alert('Ошибка загрузки фото: '+e.message);
     } finally {
       setUploading(false);
     }
   };
 
   const deletePhoto=async(filename)=>{
-    await fetch(`/api/quality/photos/${encodeURIComponent(filename)}`,{method:'DELETE'});
-    setPhotos(prev=>prev.filter(p=>p.filename!==filename));
+    try {
+      const r=await fetch(`/api/quality/photos/${encodeURIComponent(filename)}`,{method:'DELETE'});
+      if(!r.ok) throw new Error(String(r.status));
+      const next=photos.filter(p=>p.filename!==filename);
+      setPhotos(next);
+      onPhotosChanged(task.id,next);
+    } catch(e) { alert('Не удалось удалить фото: '+e.message); }
+  };
+
+  const addReference=async(photo)=>{
+    setPromotingPhotoId(photo.id);
+    try {
+      const r=await fetch(`/api/quality/tasks/${task.id}/photos/${photo.id}/reference`,{method:'POST'});
+      const d=await r.json();
+      if(!r.ok||d.error) throw new Error(d.error||String(r.status));
+      setRefPhotos(prev=>prev.some(p=>p.filename===d.photo.filename)?prev:[...prev,d.photo]);
+      onReferenceAdded(task.standard_id,d.photo);
+    } catch(e) { alert('Не удалось добавить фото в эталон: '+e.message); }
+    finally { setPromotingPhotoId(null); }
   };
 
   const stdVal=(field)=>{
@@ -10104,8 +10215,6 @@ function QualityChecklist({task, onSave, onClose}) {
     if(field==='Консистенция') return task.consistency;
     return extraDescMap[field]||null;
   };
-
-  const refPhotos=task.ref_photos||[];
 
   return e('div',{style:{paddingTop:12}},
     lightbox&&e(Lightbox,{photos:lightbox.photos,startIndex:lightbox.index,onClose:()=>setLightbox(null)}),
@@ -10161,14 +10270,21 @@ function QualityChecklist({task, onSave, onClose}) {
     e('div',{style:{marginTop:16,marginBottom:16}},
       e('div',{style:{fontWeight:600,fontSize:14,color:'var(--muted)',marginBottom:10}},'Фото проверки'),
       photos.length>0&&e('div',{style:{display:'flex',flexWrap:'wrap',gap:10,marginBottom:12}},
-        photos.map((p,i)=>e('div',{key:p.filename,style:{position:'relative'}},
+        photos.map((p,i)=>e('div',{key:p.filename,style:{position:'relative',width:140}},
           e('img',{src:`/uploads/${p.filename}`,onClick:()=>setLightbox({photos,index:i}),
-            style:{width:140,height:140,objectFit:'cover',borderRadius:10,cursor:'zoom-in',
+            style:{width:140,height:140,boxSizing:'border-box',objectFit:'cover',borderRadius:10,cursor:'zoom-in',
               border:'1.5px solid var(--border)',display:'block'}}),
           e('button',{onClick:()=>deletePhoto(p.filename),
             style:{position:'absolute',top:-6,right:-6,width:22,height:22,borderRadius:'50%',border:'none',
               background:'var(--danger)',color:'white',fontSize:11,cursor:'pointer',
-              display:'flex',alignItems:'center',justifyContent:'center'}},'✕')
+              display:'flex',alignItems:'center',justifyContent:'center'}},'✕'),
+          refPhotos.some(ref=>ref.filename===p.filename)
+            ? e('div',{style:{fontSize:11,color:'var(--ok)',marginTop:5,fontWeight:700}},'✓ В эталоне')
+            : e('button',{onClick:()=>addReference(p),disabled:!p.id||promotingPhotoId!==null,
+                style:{marginTop:5,width:'100%',padding:'5px 2px',borderRadius:7,
+                  border:'1px solid var(--accent)',background:'transparent',color:'var(--accent)',
+                  fontSize:11,cursor:'pointer'}},
+                promotingPhotoId===p.id?'Добавление…':'Сделать эталонным')
         ))
       ),
       e(PhotoPickerButton,{onFiles:handlePhoto,uploading,label:'+ Добавить фото'})
@@ -10190,7 +10306,7 @@ function QualityChecklist({task, onSave, onClose}) {
 }
 
 // Карточка задания
-function QualityTaskCard({task, isOpen, onToggle, onDelete, onSave, technologists, onAssign}) {
+function QualityTaskCard({task, isOpen, onToggle, onDelete, onSave, onReferenceAdded, onPhotosChanged, technologists, onAssign}) {
   const [lightbox,setLightbox]=useState(null);
   const doneCount=(task.results||[]).filter(r=>r.result).length;
   const totalFields=BASE_FIELDS.length+(task.extra_fields||[]).length;
@@ -10246,7 +10362,7 @@ function QualityTaskCard({task, isOpen, onToggle, onDelete, onSave, technologist
 
     // Чек-лист inline
     isOpen&&e('div',{style:{borderTop:'1px solid var(--border)',padding:'0 16px 16px'}},
-      e(QualityChecklist,{key:task.id+'-'+task.status, task, onSave, onClose:onToggle})
+      e(QualityChecklist,{key:task.id+'-'+task.status, task, onSave, onClose:onToggle,onReferenceAdded,onPhotosChanged})
     )
   );
 }
@@ -10835,6 +10951,7 @@ function ProrabotkaCreateActModal({task, onClose, onCreated}) {
       const d=await r.json();
       if(d.error) throw new Error(d.error);
       if(d.sheetSync?.status==='error') alert(d.sheetSync.message);
+      if(d.notification?.status==='error') alert(d.notification.message);
       onCreated(d.id||d.act?.id);
     } catch(err) {
       alert('Ошибка: '+err.message);
@@ -10904,14 +11021,24 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
     else { setSortCol(col); setSortDir(1); }
   };
 
-  // Парсим дату в формате dd.mm.yyyy или dd.mm.yy для сортировки
+  // Google Sheets может вернуть ISO или локальный формат даты с точками/дефисами.
   const parseDate=s=>{
-    if(!s) return 0;
-    const parts=s.split('.');
-    if(parts.length<3) return 0;
-    let [d,m,y]=parts;
-    if(y.length===2) y='20'+y;
-    return new Date(`${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`).getTime()||0;
+    const value=String(s||'').trim();
+    if(!value) return null;
+    let m=value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    let y,month,d;
+    if(m) [,y,month,d]=m;
+    else {
+      m=value.match(/^(\d{1,2})[.-](\d{1,2})[.-](\d{2}|\d{4})$/);
+      if(!m) return null;
+      [,d,month,y]=m;
+      if(y.length===2) y='20'+y;
+    }
+    const ts=Date.UTC(Number(y),Number(month)-1,Number(d));
+    const parsed=new Date(ts);
+    return parsed.getUTCFullYear()===Number(y)&&
+      parsed.getUTCMonth()===Number(month)-1&&parsed.getUTCDate()===Number(d)
+      ? ts : null;
   };
 
   const sorted=React.useMemo(()=>{
@@ -10920,6 +11047,7 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
     let rows=q ? tasks.filter(t=>
       (t.material||'').toLowerCase().includes(q)||
       (t.name||'').toLowerCase().includes(q)||
+      (t.processingTask||'').toLowerCase().includes(q)||
       (t.type||'').toLowerCase().includes(q)||
       (t.supplier||'').toLowerCase().includes(q)||
       (t.manufacturer||'').toLowerCase().includes(q)
@@ -10929,6 +11057,9 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
       let av=a[sortCol]||'', bv=b[sortCol]||'';
       if(dateFields.includes(sortCol)){
         av=parseDate(av); bv=parseDate(bv);
+        if(av===null&&bv===null) return 0;
+        if(av===null) return 1;
+        if(bv===null) return -1;
         return (av-bv)*sortDir;
       }
       return av.localeCompare(bv,'ru')*sortDir;
@@ -10937,38 +11068,41 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
   },[tasks,search,sortCol,sortDir]);
 
   const cols=[
-    {key:'material',label:'Сырьё',w:'8%'},
-    {key:'name',label:'Название',w:'13%'},
+    {key:'material',label:'Сырьё',w:'7%'},
+    {key:'name',label:'Название',w:'15%'},
     {key:'productType',label:'Тип',w:'5%'},
-    {key:'manufacturer',label:'Производитель',w:'10%'},
-    {key:'supplier',label:'Поставщик',w:'9%'},
+    {key:'manufacturer',label:'Производитель',w:'8%'},
+    {key:'supplier',label:'Поставщик',w:'8%'},
     {key:'arrivalDate',label:'Приход',w:'7%'},
     {key:'deadline',label:'Дедлайн',w:'7%'},
-    {key:'grossMass',label:'Брутто',w:'6%'},
-    {key:'defrostMass',label:'Нетто',w:'6%'},
-    {key:'_defrostPct',label:'%дефр.',w:'5%'},
-    {key:'_act',label:'Акт',w:'7%'},
+    {key:'processingTask',label:'Задача проработки',w:'18%'},
+    {key:'grossMass',label:'Брутто',w:'5%'},
+    {key:'defrostMass',label:'Нетто',w:'5%'},
+    {key:'_defrostPct',label:'%дефр.',w:'7%'},
+    {key:'_act',label:'Акт',w:'8%'},
   ];
 
   const sortArrow=col=>sortCol===col?(sortDir===1?' ↑':' ↓'):'';
 
   const thStyle=(col)=>({
-    padding:'7px 8px',textAlign:'left',fontWeight:700,fontSize:11,
+    padding:'7px 5px',textAlign:'left',fontWeight:700,fontSize:11,
     color:'var(--muted)',borderBottom:'2px solid var(--border)',
-    cursor:'pointer',userSelect:'none',whiteSpace:'nowrap',
+    cursor:'pointer',userSelect:'none',whiteSpace:'normal',overflowWrap:'anywhere',
     background:sortCol===col?'var(--hover)':'transparent',
     overflow:'hidden',
   });
 
-  const tdStyle={padding:'7px 8px',fontSize:12,color:'var(--text)',
+  const tdStyle={padding:'7px 5px',fontSize:12,color:'var(--text)',
     borderBottom:'1px solid var(--border)',verticalAlign:'middle',
-    overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'};
+    whiteSpace:'pre-wrap',overflowWrap:'anywhere',wordBreak:'break-word',lineHeight:1.35};
 
-  // Форматируем дату: "2026-09-03" → "03.09.2026", остальные оставляем как есть
+  // Показываем распознанные даты в едином формате; текст вроде «на складе» не меняем.
   const fmtDate=v=>{
     if(!v) return '';
-    const m=v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    return m ? `${m[3]}.${m[2]}.${m[1]}` : v;
+    const ts=parseDate(v);
+    if(ts===null) return v;
+    const date=new Date(ts);
+    return `${String(date.getUTCDate()).padStart(2,'0')}.${String(date.getUTCMonth()+1).padStart(2,'0')}.${date.getUTCFullYear()}`;
   };
 
   const deadlineColor=v=>{
@@ -10993,7 +11127,7 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
     sorted.length===0
       ? e('div',{className:'empty-state'},'Нет заданий')
       : e('div',{style:{overflowX:'auto'}},
-          e('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:12,tableLayout:'fixed'}},
+          e('table',{className:'prorabotki-table'},
             e('thead',null,
               e('tr',null,
                 ...cols.map(c=>e('th',{key:c.key,style:{...thStyle(c.key),width:c.w,
@@ -11045,6 +11179,253 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
         if(onActCreated) onActCreated(actId);
       }
     })
+  );
+}
+
+const TECHNOLOGIST_TASK_STATUS = {
+  new: {label:'Новое',color:'#B45309',bg:'#FEF3C7'},
+  completed: {label:'Выполнено',color:'#166534',bg:'#DCFCE7'},
+  cancelled: {label:'Отменено',color:'#991B1B',bg:'#FEE2E2'},
+};
+function technologistTaskDate(value,withTime=false){
+  if(!value)return '—';
+  const d=new Date(withTime?value:value+'T00:00:00');
+  return isNaN(d)?value:d.toLocaleDateString('ru-RU',withTime
+    ?{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}
+    :{day:'2-digit',month:'2-digit',year:'numeric'});
+}
+function technologistTaskDeadlineMeta(value){
+  const today=todayISO();
+  if(value===today)return {note:'Сегодня',color:'#B45309',bg:'#FFF7ED',border:'#F59E0B'};
+  if(value<today)return {note:'Просрочено',color:'#B91C1C',bg:'#FEF2F2',border:'#EF4444'};
+  return {note:'Дедлайн',color:'var(--accent)',bg:'var(--bg-subtle)',border:'var(--accent)'};
+}
+function groupTechnologistTasksByDeadline(tasks){
+  const groups=[];
+  [...tasks].sort((a,b)=>a.planned_date.localeCompare(b.planned_date)||b.id-a.id).forEach(task=>{
+    let group=groups[groups.length-1];
+    if(!group||group.date!==task.planned_date){
+      group={date:task.planned_date,tasks:[]};
+      groups.push(group);
+    }
+    group.tasks.push(task);
+  });
+  return groups;
+}
+function TechnologistTaskDateGroups({tasks,renderTask}){
+  const ordered=[...tasks].sort((a,b)=>{
+    const statusOrder={completed:0,cancelled:1,new:0};
+    return (statusOrder[a.status]??0)-(statusOrder[b.status]??0)
+      ||a.planned_date.localeCompare(b.planned_date)
+      ||b.id-a.id;
+  });
+  return e('div',{style:{display:'flex',flexDirection:'column',gap:10}},ordered.map(renderTask));
+}
+async function technologistTaskRequest(path,role,options={}){
+  const response=await fetch('/api/technologist-tasks'+path,{
+    ...options,
+    headers:{'Content-Type':'application/json','X-User-Role':role,...(options.headers||{})}
+  });
+  const data=await response.json().catch(()=>({}));
+  if(!response.ok)throw new Error(data.error||'Не удалось выполнить запрос');
+  return data;
+}
+function TechnologistTaskSummary({task,actions=null,cornerAction=null}){
+  const meta=TECHNOLOGIST_TASK_STATUS[task.status]||TECHNOLOGIST_TASK_STATUS.new;
+  const deadline=technologistTaskDeadlineMeta(task.planned_date);
+  return e('div',{style:{position:'relative',border:'1.5px solid var(--border)',borderRadius:12,padding:16,background:'var(--surface)',display:'flex',flexDirection:'column',gap:10}},
+    cornerAction,
+    e('div',{style:{display:'flex',gap:10,justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',paddingRight:cornerAction?28:0}},
+      e('div',{style:{display:'flex',alignItems:'center',gap:9,flex:'1 1 280px',flexWrap:'wrap'}},
+        e('div',{style:{fontSize:17,fontWeight:750}},task.title),
+        e('span',{style:{padding:'4px 9px',borderRadius:999,fontSize:12,fontWeight:700,color:meta.color,background:meta.bg}},meta.label)
+      ),
+      e('div',{style:{padding:'5px 10px',borderRadius:8,border:`1px solid ${deadline.border}`,background:deadline.bg,fontSize:12,color:deadline.color,whiteSpace:'nowrap'}},
+        e('span',{style:{fontWeight:650}},'Дедлайн: '),
+        e('b',{style:{color:'var(--text)',fontSize:13}},technologistTaskDate(task.planned_date))
+      )
+    ),
+    e('div',{style:{whiteSpace:'pre-wrap',fontSize:14,lineHeight:1.5}},task.description),
+    task.status==='completed'&&e('div',{style:{padding:11,borderRadius:9,background:'#F0FDF4'}},
+      e('div',{style:{fontSize:12,fontWeight:700,color:'#166534',marginBottom:4}},'Результат'),
+      e('div',{style:{whiteSpace:'pre-wrap'}},task.result||'—'),
+      e('div',{style:{display:'inline-flex',alignItems:'center',gap:6,marginTop:9,padding:'5px 8px',borderRadius:7,border:'1px solid #86EFAC',background:'#DCFCE7',fontSize:12,color:'#166534'}},
+        e('b',null,'Дата выполнения:'),
+        e('span',{style:{color:'var(--text)',fontWeight:650}},technologistTaskDate(task.actual_completed_at,true))
+      )
+    ),
+    task.status==='cancelled'&&e('div',{style:{padding:11,borderRadius:9,background:'#FEF2F2'}},
+      e('div',{style:{fontSize:12,fontWeight:700,color:'#991B1B',marginBottom:4}},'Причина отмены'),
+      e('div',{style:{whiteSpace:'pre-wrap'}},task.cancel_reason||'—'),
+      e('div',{style:{display:'inline-flex',alignItems:'center',gap:6,marginTop:9,padding:'5px 8px',borderRadius:7,border:'1px solid #FCA5A5',background:'#FEE2E2',fontSize:12,color:'#991B1B'}},
+        e('b',null,'Дата отмены:'),
+        e('span',{style:{color:'var(--text)',fontWeight:650}},technologistTaskDate(task.cancelled_at,true))
+      )
+    ),
+    actions
+  );
+}
+function ManagerTechnologistTasks(){
+  const [tasks,setTasks]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [error,setError]=useState('');
+  const [saving,setSaving]=useState(false);
+  const [deleteTarget,setDeleteTarget]=useState(null);
+  const [deleting,setDeleting]=useState(false);
+  const [form,setForm]=useState({title:'',planned_date:todayISO(),description:''});
+  const load=async()=>{
+    setLoading(true);setError('');
+    try{const data=await technologistTaskRequest('/','manager');setTasks(data.tasks||[]);}
+    catch(err){setError(err.message);}
+    finally{setLoading(false);}
+  };
+  useEffect(()=>{load();},[]);
+  const create=async ev=>{
+    ev.preventDefault();setSaving(true);setError('');
+    try{
+      await technologistTaskRequest('/','manager',{method:'POST',body:JSON.stringify(form)});
+      setForm({title:'',planned_date:todayISO(),description:''});
+      await load();
+    }catch(err){setError(err.message);}
+    finally{setSaving(false);}
+  };
+  const remove=async()=>{
+    if(!deleteTarget)return;
+    const task=deleteTarget;
+    setDeleting(true);
+    setError('');
+    try{
+      await technologistTaskRequest(`/${task.id}`,'manager',{method:'DELETE'});
+      setTasks(prev=>prev.filter(item=>item.id!==task.id));
+      setDeleteTarget(null);
+    }catch(err){setError(err.message);}
+    finally{setDeleting(false);}
+  };
+  const newTasks=tasks.filter(task=>task.status==='new');
+  const closedTasks=tasks.filter(task=>task.status==='completed'||task.status==='cancelled');
+  const section=(title,items,emptyText)=>e('section',{style:{marginBottom:26}},
+    e('div',{style:{fontSize:17,fontWeight:800,marginBottom:10}},`${title} (${items.length})`),
+    items.length
+      ?e(TechnologistTaskDateGroups,{tasks:items,renderTask:task=>e(TechnologistTaskSummary,{
+          key:task.id,task,
+          cornerAction:task.status==='new'&&
+            e('button',{
+              onClick:()=>setDeleteTarget(task),
+              title:'Удалить задание',
+              'aria-label':'Удалить задание',
+              style:{position:'absolute',top:5,right:7,width:28,height:28,padding:0,
+                border:0,borderRadius:7,background:'transparent',
+                color:'var(--muted)',fontSize:24,fontWeight:400,lineHeight:1,cursor:'pointer',
+                display:'inline-flex',alignItems:'center',justifyContent:'center'}
+            },'×')
+        })})
+      :e('div',{style:{padding:'16px',textAlign:'center',color:'var(--muted)',fontSize:14,border:'1.5px dashed var(--border)',borderRadius:10}},emptyText)
+  );
+  return e('div',{style:{padding:'20px',maxWidth:960,margin:'0 auto'}},
+    e('h2',{style:{margin:'0 0 4px'}},'Задания технологу'),
+    e('p',{className:'page-sub',style:{marginBottom:18}},'Создавайте текстовые задания и отслеживайте их выполнение.'),
+    e('form',{onSubmit:create,style:{border:'1.5px solid var(--border)',borderRadius:14,padding:16,marginBottom:24,background:'var(--surface)'}},
+      e('div',{style:{display:'grid',gridTemplateColumns:'minmax(0,2fr) minmax(180px,1fr)',gap:12,marginBottom:12}},
+        e('label',{style:{fontSize:13,fontWeight:650}},'Заголовок',
+          e('input',{className:'filter-input',value:form.title,required:true,maxLength:200,
+            onChange:ev=>setForm({...form,title:ev.target.value}),style:{display:'block',width:'100%',marginTop:6},placeholder:'Что нужно сделать'})),
+        e('label',{style:{fontSize:13,fontWeight:650}},'Плановая дата выполнения',
+          e('input',{type:'date',className:'filter-input',value:form.planned_date,required:true,
+            onChange:ev=>setForm({...form,planned_date:ev.target.value}),style:{display:'block',width:'100%',marginTop:6}}))
+      ),
+      e('label',{style:{fontSize:13,fontWeight:650}},'Описание задачи',
+        e('textarea',{value:form.description,required:true,maxLength:5000,rows:5,
+          onChange:ev=>setForm({...form,description:ev.target.value}),
+          style:{display:'block',width:'100%',marginTop:6,padding:10,borderRadius:9,border:'1.5px solid var(--border)',background:'var(--bg)',color:'var(--text)',fontFamily:'inherit',fontSize:14,lineHeight:1.45,resize:'vertical'},
+          placeholder:'Подробно опишите задачу'})),
+      error&&e('div',{style:{color:'#B91C1C',fontSize:13,marginTop:10}},error),
+      e('button',{type:'submit',disabled:saving,style:{marginTop:12,padding:'9px 18px',border:0,borderRadius:9,background:'var(--accent)',color:'#fff',fontWeight:700,cursor:'pointer'}},saving?'Создание…':'Создать задание')
+    ),
+    loading?e('div',{className:'empty-state'},'Загрузка…'):
+      tasks.length===0?e('div',{className:'empty-state'},'Заданий пока нет'):
+      e(React.Fragment,null,
+        section('Новые задания',newTasks,'Новых заданий нет'),
+        section('Выполненные и отменённые',closedTasks,'Завершённых заданий нет')
+      ),
+    deleteTarget&&ReactDOM.createPortal(
+      e('div',{
+        onClick:()=>!deleting&&setDeleteTarget(null),
+        style:{position:'fixed',inset:0,zIndex:2147483646,background:'rgba(0,0,0,.62)',display:'flex',alignItems:'center',justifyContent:'center',padding:16,isolation:'isolate'}
+      },
+        e('div',{
+          onClick:ev=>ev.stopPropagation(),
+          style:{position:'relative',zIndex:2147483647,width:'100%',maxWidth:430,background:'#FFFFFF',color:'#1A1714',opacity:1,border:'1px solid #D8D2CB',borderRadius:14,padding:20,boxShadow:'0 24px 70px rgba(0,0,0,.5)'}
+        },
+          e('div',{style:{fontSize:19,fontWeight:800,marginBottom:8}},'Удалить задание?'),
+          e('div',{style:{fontSize:14,lineHeight:1.5,color:'#6E6862',marginBottom:18}},
+            'Задание «',e('b',{style:{color:'#1A1714'}},deleteTarget.title),'» будет удалено без возможности восстановления.'
+          ),
+          e('div',{style:{display:'flex',justifyContent:'flex-end',gap:9}},
+            e('button',{
+              onClick:()=>setDeleteTarget(null),disabled:deleting,
+              style:{padding:'9px 16px',border:'1px solid #D8D2CB',borderRadius:9,background:'#FFFFFF',color:'#1A1714',fontWeight:700,cursor:'pointer'}
+            },'Отмена'),
+            e('button',{
+              onClick:remove,disabled:deleting,
+              style:{padding:'9px 16px',border:0,borderRadius:9,background:'var(--danger)',color:'#fff',fontWeight:700,cursor:'pointer'}
+            },deleting?'Удаление…':'Удалить')
+          )
+        )
+      ),
+      document.body
+    )
+  );
+}
+function TechnologistManagerTasks(){
+  const [tasks,setTasks]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [error,setError]=useState('');
+  const [editing,setEditing]=useState(null);
+  const [text,setText]=useState('');
+  const load=async()=>{
+    setLoading(true);setError('');
+    try{const data=await technologistTaskRequest('/','technologist');setTasks(data.tasks||[]);}
+    catch(err){setError(err.message);}
+    finally{setLoading(false);}
+  };
+  useEffect(()=>{load();},[]);
+  const begin=(task,action)=>{setEditing({id:task.id,action});setText('');setError('');};
+  const submit=async()=>{
+    if(!editing||!text.trim()){setError(editing?.action==='cancel'?'Укажите причину отмены':'Укажите результат выполнения');return;}
+    try{
+      await technologistTaskRequest(`/${editing.id}/${editing.action}`,'technologist',{
+        method:'PATCH',body:JSON.stringify(editing.action==='complete'?{result:text}:{reason:text})
+      });
+      setEditing(null);setText('');await load();
+    }catch(err){setError(err.message);}
+  };
+  const active=tasks.filter(t=>t.status==='new');
+  const closed=tasks.filter(t=>t.status==='completed'||t.status==='cancelled');
+  const list=items=>e(TechnologistTaskDateGroups,{tasks:items,renderTask:task=>
+    e(TechnologistTaskSummary,{key:task.id,task,actions:task.status==='new'&&e(React.Fragment,null,
+      editing?.id===task.id
+        ?e('div',{style:{borderTop:'1px solid var(--border)',paddingTop:10}},
+            e('div',{style:{fontSize:13,fontWeight:700,marginBottom:6}},editing.action==='complete'?'Результат выполнения':'Причина отмены'),
+            e('textarea',{value:text,onChange:ev=>setText(ev.target.value),rows:4,autoFocus:true,
+              style:{width:'100%',padding:9,borderRadius:8,border:'1.5px solid var(--border)',background:'var(--bg)',color:'var(--text)',resize:'vertical'}}),
+            e('div',{style:{display:'flex',gap:8,marginTop:8}},
+              e('button',{onClick:submit,style:{padding:'8px 14px',border:0,borderRadius:8,background:editing.action==='complete'?'var(--ok)':'#B91C1C',color:'#fff',fontWeight:700}},'Подтвердить'),
+              e('button',{onClick:()=>{setEditing(null);setText('');},style:{padding:'8px 14px',border:'1px solid var(--border)',borderRadius:8,background:'transparent',color:'var(--text)'}},'Назад')
+            ))
+        :e('div',{style:{display:'flex',gap:8,borderTop:'1px solid var(--border)',paddingTop:10}},
+            e('button',{onClick:()=>begin(task,'complete'),style:{padding:'8px 14px',border:0,borderRadius:8,background:'var(--ok)',color:'#fff',fontWeight:700}},'Выполнить'),
+            e('button',{onClick:()=>begin(task,'cancel'),style:{padding:'8px 14px',border:'1px solid #DC2626',borderRadius:8,background:'transparent',color:'#B91C1C',fontWeight:700}},'Отменить')
+          )
+    )})
+  });
+  return e('div',null,
+    error&&e('div',{style:{color:'#B91C1C',fontSize:13,marginBottom:10}},error),
+    loading?e('div',{className:'empty-state'},'Загрузка…'):e(React.Fragment,null,
+      e('div',{style:{fontSize:17,fontWeight:750,marginBottom:10}},`Новые задания (${active.length})`),
+      active.length?list(active):e('div',{className:'empty-state',style:{marginBottom:22}},'Новых заданий нет'),
+      e('div',{style:{fontSize:17,fontWeight:750,margin:'24px 0 10px'}},`Выполненные и отменённые (${closed.length})`),
+      closed.length?list(closed):e('div',{className:'empty-state'},'Завершённых заданий нет')
+    )
   );
 }
 
@@ -11140,6 +11521,22 @@ function TechnologistPage({initialActId=null}) {
   const onSave=(taskId,status,results,photos)=>{
     setTasks(prev=>prev.map(t=>t.id===taskId?{...t,status,results,...(photos!=null?{photos}:{})}:t));
   };
+  const onPhotosChanged=(taskId,photos)=>{
+    setTasks(prev=>prev.map(t=>t.id===taskId?{...t,photos}:t));
+    setCarryoverTasks(prev=>prev.map(t=>t.id===taskId?{...t,photos}:t));
+  };
+  const onReferenceAdded=(standardId,photo)=>{
+    const update=t=>t.standard_id!==standardId?t:{
+      ...t,ref_photos:(t.ref_photos||[]).some(p=>p.filename===photo.filename)
+        ?t.ref_photos:[...(t.ref_photos||[]),photo]
+    };
+    setTasks(prev=>prev.map(update));
+    setCarryoverTasks(prev=>prev.map(update));
+    setStandards(prev=>prev.map(s=>s.id!==standardId?s:{
+      ...s,ref_photos:(s.ref_photos||[]).some(p=>p.filename===photo.filename)
+        ?s.ref_photos:[...(s.ref_photos||[]),photo]
+    }));
+  };
 
   const todayStandardIds=new Set(tasks.map(t=>t.standard_id));
   const pending=tasks.filter(t=>t.status==='pending'||t.status==='overdue');
@@ -11153,10 +11550,11 @@ function TechnologistPage({initialActId=null}) {
 
   return e(React.Fragment,null,
 
-    e('div',{style:{padding:'16px',maxWidth:960,margin:'0 auto'}},
+    e('div',{style:{padding:'16px',maxWidth:tab==='prorabotki'?1600:960,margin:'0 auto'}},
     // Табы
     e('div',{className:'mgr-tabs',style:{marginBottom:20}},
       e('button',{className:'mgr-tab'+(tab==='tasks'?' active':''),onClick:()=>setTab('tasks')},'📋 Задания'),
+      e('button',{className:'mgr-tab'+(tab==='managerTasks'?' active':''),onClick:()=>setTab('managerTasks')},'📝 От управляющего'),
       e('button',{className:'mgr-tab'+(tab==='library'?' active':''),onClick:()=>setTab('library')},'📚 Библиотека эталонов'),
       e('button',{className:'mgr-tab'+(tab==='acts'?' active':''),onClick:()=>{setOpenActId(null);setTab('acts');}},'🧪 Акты проработки'),
       e('button',{className:'mgr-tab'+(tab==='prorabotki'?' active':''),onClick:()=>setTab('prorabotki')},'🔬 Проработки')
@@ -11184,7 +11582,7 @@ function TechnologistPage({initialActId=null}) {
                 e(QualityTaskCard,{key:t.id,task:t,
                   isOpen:openTaskId===t.id,
                   onToggle:()=>setOpenTaskId(v=>v===t.id?null:t.id),
-                  onDelete:deleteTask,onSave,
+                   onDelete:deleteTask,onSave,onReferenceAdded,onPhotosChanged,
                   technologists,onAssign:async(taskId,empId)=>{
                     await fetch(`/api/quality/tasks/${taskId}/assign`,{method:'PATCH',
                       headers:{'Content-Type':'application/json'},body:JSON.stringify({assigned_to:empId||null})});
@@ -11208,7 +11606,7 @@ function TechnologistPage({initialActId=null}) {
                 pending.map(t=>e(QualityTaskCard,{key:t.id,task:t,
                   isOpen:openTaskId===t.id,
                   onToggle:()=>setOpenTaskId(v=>v===t.id?null:t.id),
-                  onDelete:deleteTask,onSave,
+                   onDelete:deleteTask,onSave,onReferenceAdded,onPhotosChanged,
                   technologists,onAssign:async(taskId,empId)=>{
                     await fetch(`/api/quality/tasks/${taskId}/assign`,{method:'PATCH',
                       headers:{'Content-Type':'application/json'},body:JSON.stringify({assigned_to:empId||null})});
@@ -11221,7 +11619,7 @@ function TechnologistPage({initialActId=null}) {
             done.map(t=>e(QualityTaskCard,{key:t.id,task:t,
               isOpen:openTaskId===t.id,
               onToggle:()=>setOpenTaskId(v=>v===t.id?null:t.id),
-              onDelete:deleteTask,onSave,technologists,onAssign:async(taskId,empId)=>{
+               onDelete:deleteTask,onSave,onReferenceAdded,onPhotosChanged,technologists,onAssign:async(taskId,empId)=>{
                 await fetch(`/api/quality/tasks/${taskId}/assign`,{method:'PATCH',
                   headers:{'Content-Type':'application/json'},body:JSON.stringify({assigned_to:empId||null})});
                 await loadData(date);
@@ -11229,6 +11627,7 @@ function TechnologistPage({initialActId=null}) {
         )
       )
     ),
+    tab==='managerTasks'&&e(TechnologistManagerTasks),
 
     // Вкладка Библиотека
     tab==='library'&&e(LibraryTab,{standards,onReload:async()=>{await reloadStandards();}}),
@@ -11250,7 +11649,7 @@ function TechnologistPage({initialActId=null}) {
   );
 }
 
-// Просмотр актов проработки (только чтение — для технолога и продуктовой команды)
+// Просмотр актов проработки
 function ActsViewer({readOnly, initialActId=null}) {
   const [acts,setActs]=useState([]);
   const [templates,setTemplates]=useState([]);
@@ -11514,6 +11913,7 @@ function ProductJournalPage({initialActId=null}) {
   const [loading,setLoading]=useState(false);
   const [expanded,setExpanded]=useState(null);
   const [lightbox,setLightbox]=useState(null);
+  const [promotingPhotoId,setPromotingPhotoId]=useState(null);
 
   useEffect(()=>{
     fetch('/api/employees').then(r=>r.json()).then(d=>setEmployees(d.employees||[])).catch(()=>{});
@@ -11538,6 +11938,20 @@ function ProductJournalPage({initialActId=null}) {
 
   useEffect(()=>{load();},[]);
 
+  const addReference=async(task,photo)=>{
+    setPromotingPhotoId(photo.id);
+    try {
+      const r=await fetch(`/api/quality/tasks/${task.id}/photos/${photo.id}/reference`,{method:'POST'});
+      const d=await r.json();
+      if(!r.ok||d.error) throw new Error(d.error||String(r.status));
+      setTasks(prev=>prev.map(t=>t.standard_id!==task.standard_id?t:{
+        ...t,ref_photos:(t.ref_photos||[]).some(p=>p.filename===d.photo.filename)
+          ?t.ref_photos:[...(t.ref_photos||[]),d.photo]
+      }));
+    } catch(e) { alert('Не удалось добавить фото в эталон: '+e.message); }
+    finally { setPromotingPhotoId(null); }
+  };
+
   const stdVal=(task,field)=>{
     if(field==='Внешний вид') return task.appearance;
     if(field==='Цвет') return task.color;
@@ -11556,7 +11970,7 @@ function ProductJournalPage({initialActId=null}) {
       e('button',{className:'mgr-tab'+(tab==='acts'?' active':''),onClick:()=>{setOpenActId(null);setTab('acts');}},'🧪 Акты проработки'),
     ),
 
-    tab==='acts'&&e(ActsViewer,{readOnly:true,initialActId:openActId}),
+    tab==='acts'&&e(ActsViewer,{readOnly:false,initialActId:openActId}),
     tab==='journal'&&e(React.Fragment,null,
 
     // Фильтры
@@ -11674,11 +12088,20 @@ function ProductJournalPage({initialActId=null}) {
               factPhotos.length>0&&e('div',null,
                 e('div',{style:{fontWeight:700,fontSize:12,color:'var(--muted)',textTransform:'uppercase',
                     letterSpacing:'0.04em',marginBottom:8}},'Фактически'),
-                e('div',{style:{display:'flex',flexWrap:'wrap',gap:8,maxWidth:200}},
-                  factPhotos.map((p,i)=>e('img',{key:p.filename,src:`/uploads/${p.filename}`,
-                    onClick:()=>setLightbox({photos:factPhotos,index:i}),
-                    style:{width:90,height:90,objectFit:'cover',borderRadius:8,cursor:'zoom-in',
-                      border:'1.5px solid var(--border)'}}))
+                e('div',{style:{display:'flex',flexWrap:'wrap',gap:8,maxWidth:240}},
+                  factPhotos.map((p,i)=>e('div',{key:p.filename,style:{width:110}},
+                    e('img',{src:`/uploads/${p.filename}`,
+                      onClick:()=>setLightbox({photos:factPhotos,index:i}),
+                      style:{width:110,height:110,boxSizing:'border-box',objectFit:'cover',borderRadius:8,cursor:'zoom-in',
+                        border:'1.5px solid var(--border)',display:'block'}}),
+                    refPhotos.some(ref=>ref.filename===p.filename)
+                      ? e('div',{style:{fontSize:11,color:'var(--ok)',marginTop:5,fontWeight:700}},'✓ В эталоне')
+                      : e('button',{onClick:()=>addReference(task,p),disabled:!p.id||promotingPhotoId!==null,
+                          style:{width:'100%',marginTop:5,padding:'5px 2px',borderRadius:7,
+                            border:'1px solid var(--accent)',background:'transparent',color:'var(--accent)',
+                            fontSize:11,cursor:'pointer'}},
+                          promotingPhotoId===p.id?'Добавление…':'Сделать эталонным')
+                  ))
                 )
               )
             )
@@ -11986,7 +12409,7 @@ function ActForm({actId, templateId, onBack, onSaved}) {
     try {
       let aid = act?.id || actId;
       const date = values._date || new Date().toISOString().slice(0,10);
-      const rawMaterial = values._raw_material || template?.name || '';
+      const rawMaterial = values._raw_material || '';
       const productName = values._product_name || '';
       const manufacturer = values._manufacturer || '';
       const supplier = values._supplier || '';
@@ -12021,7 +12444,8 @@ function ActForm({actId, templateId, onBack, onSaved}) {
       const d = await r.json();
       if(d.error) return alert('Ошибка: '+d.error);
       if(onSaved) onSaved(aid, status);
-      if(d.sheetSync?.status==='error') { alert(d.sheetSync.message); return; }
+      const warnings = [d.sheetSync, d.notification].filter(x=>x?.status==='error').map(x=>x.message);
+      if(warnings.length) { alert(warnings.join('\n')); return; }
       if(status==='done') onBack();
     } finally{setSaving(false);}
   };
@@ -12652,17 +13076,23 @@ function App() {
   };
 
   const catalog=useMemo(()=>getCatalogForDate(viewDate,activeTcEE,activeTcUD),[viewDate,activeTcEE,activeTcUD]);
+  // Keep this raw collection for manager/reporting; only workshop presentation
+  // receives the date-aware merged view.
   const shopGroups=useMemo(()=>getStationGroups(catalog),[catalog]);
+  const workshopGroups=useMemo(
+    ()=>mergeWorkshopGroups(shopGroups,viewDate,today),
+    [shopGroups,viewDate,today]
+  );
 
   // Tablet mode: auto-select locked shop when catalog is ready
   useEffect(()=>{
     if(!shopParam||selectedShop) return;
-    const found=shopGroups.find(g=>
-      g.stations.some(s=>s.key===shopParam) ||
-      g.shop.toLowerCase().replace(/\s/g,'_')===shopParam.toLowerCase()
+    const found=workshopGroups.find(g=>
+      g.stations.some(s=>s.key===shopParam || (s._sourceKeys||[]).includes(shopParam)) ||
+      (g._sourceShops||[g.shop]).some(shop=>shop.toLowerCase().replace(/\s/g,'_')===shopParam.toLowerCase())
     );
     if(found) setSelectedShop(found);
-  },[shopParam,shopGroups,selectedShop]);
+  },[shopParam,workshopGroups,selectedShop]);
 
   // Роли технолога и продуктовой команды — рендерим сразу, без загрузки смены
   if(isTechnologist) return e('div',null,
@@ -12723,7 +13153,7 @@ function App() {
 
     // CONTENT
     mode==='home' && e(WorkshopSelector,{
-      shopGroups,shift,
+      shopGroups:workshopGroups,shift,
       onSelect:(g)=>{setSelectedShop(g);setMode('kitchen');}
     }),
 
@@ -12733,7 +13163,7 @@ function App() {
       onShiftChange:persistShift,
       allEmployees,
       isManager,
-      shopGroups: (shopParam||!isManager) ? null : shopGroups,
+      shopGroups: (shopParam||!isManager) ? null : workshopGroups,
       precutConfig,
       onPrecutConfigChange: async(newSet)=>{
         setPrecutConfig(newSet);
@@ -12760,6 +13190,7 @@ function App() {
       onDeactivate:deactivateTechcard,
       onRefreshTechcards:refreshTechcards,
       shopGroups,
+      workshopGroups,
       globalStationConfig,
       onStationConfigChange:setGlobalStationConfig,
       precutConfig,

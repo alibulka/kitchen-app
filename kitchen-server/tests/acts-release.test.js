@@ -21,6 +21,7 @@ test('release: create/edit act, retain values and photos when adding template fi
         CREATE TEMP TABLE acts(id SERIAL PRIMARY KEY,template_id INTEGER REFERENCES act_templates(id),date TEXT,
           raw_material TEXT,product_name TEXT,manufacturer TEXT,supplier TEXT,gross_mass REAL,defrost_mass REAL,
           source_row TEXT,source_sheet TEXT,source_product_name TEXT,conclusion TEXT,status TEXT DEFAULT 'draft',
+          first_completed_at TEXT,
           created_at TEXT DEFAULT NOW()::text,updated_at TEXT DEFAULT NOW()::text);
         CREATE TEMP TABLE act_values(id SERIAL PRIMARY KEY,act_id INTEGER REFERENCES acts(id) ON DELETE CASCADE,
           field_id INTEGER REFERENCES act_fields(id) ON DELETE CASCADE,value TEXT,UNIQUE(act_id,field_id));
@@ -36,6 +37,14 @@ test('release: create/edit act, retain values and photos when adding template fi
       };
       const dbPath = require.resolve('../db');
       require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: { pool } };
+      const notifications = [];
+      const notificationPath = require.resolve('../lib/act-notifications');
+      require.cache[notificationPath] = { id: notificationPath, filename: notificationPath, loaded: true,
+        exports: { notifyActSafely: async (saved, isNew) => {
+          assert.ok((await client.query('SELECT id FROM acts WHERE id=$1', [saved.id])).rows.length);
+          notifications.push({ saved, isNew });
+          return { status: 'error', message: 'Акт сохранён, тестовая ошибка уведомления' };
+        } } };
       const app = express();
       app.use(express.json());
       app.use('/api/acts', require('../routes/acts'));
@@ -56,14 +65,44 @@ test('release: create/edit act, retain values and photos when adding template fi
       const template = await request('POST', '/templates', original);
       const { rows: fields } = await client.query('SELECT id FROM act_fields ORDER BY id');
       const act = await request('POST', '/acts', { template_id: template.id, date: '2026-09-11',
-        product_name: 'Исходное название', sheet_id: '750743492:225', source_sheet: 'Мясо' });
+        product_name: 'Исходное название', sheet_id: '236716915:225', source_sheet: 'Мясо' });
       assert.equal(act.sheetSync.status, 'disabled');
-      const edited = await request('PUT', `/acts/${act.id}`, {
+      assert.equal(act.notification, undefined);
+      assert.equal(notifications.length, 0);
+      const draft = await request('PUT', `/acts/${act.id}`, {
+        status: 'draft',
         date: '2026-09-12', product_name: 'Новое название', gross_mass: '100,5', defrost_mass: 0,
         values: { [fields[0].id]: 'Вкус хороший', [fields[1].id]: 'Вид хороший' },
       });
+      assert.equal(draft.changed, true);
+      assert.deepEqual(draft.notification, { status: 'skipped', reason: 'draft' });
+      assert.equal(notifications.length, 0, 'Draft save does not notify');
+      const edited = await request('PUT', `/acts/${act.id}`, { status: 'done' });
       assert.equal(edited.sheetSync.status, 'disabled');
+      assert.equal(edited.notification.status, 'error');
+      assert.equal(notifications[0].isNew, true);
+      assert.equal(notifications[0].saved.product_name, 'Новое название');
+      assert.equal(notifications[0].saved.date, '2026-09-12');
+      const updated = await request('PUT', `/acts/${act.id}`, {
+        status: 'done', product_name: 'Ещё одно название',
+      });
+      assert.equal(updated.notification.status, 'error');
+      assert.equal(notifications[1].isNew, false);
+      assert.equal(notifications[1].saved.product_name, 'Ещё одно название');
       let saved = (await client.query('SELECT * FROM acts WHERE id=$1', [act.id])).rows[0];
+      const notificationCountAfterUpdate = notifications.length;
+      const updatedAtBeforeNoop = saved.updated_at;
+      const noop = await request('PUT', `/acts/${act.id}`, {
+        date: '2026-09-12', status: 'done', product_name: 'Ещё одно название',
+        gross_mass: 100.5, defrost_mass: 0,
+        values: { [fields[0].id]: 'Вкус хороший', [fields[1].id]: 'Вид хороший' },
+      });
+      assert.equal(noop.changed, false);
+      assert.deepEqual(noop.sheetSync, { status: 'skipped', reason: 'unchanged' });
+      assert.deepEqual(noop.notification, { status: 'skipped', reason: 'unchanged' });
+      assert.equal(notifications.length, notificationCountAfterUpdate);
+      assert.equal((await client.query('SELECT updated_at FROM acts WHERE id=$1', [act.id])).rows[0].updated_at,
+        updatedAtBeforeNoop, 'No-op save must not touch updated_at');
       assert.equal(saved.date, '2026-09-12');
       assert.equal(saved.gross_mass, 100.5);
       assert.equal(saved.defrost_mass, 0);
@@ -82,7 +121,9 @@ test('release: create/edit act, retain values and photos when adding template fi
       saved = (await client.query('SELECT * FROM acts WHERE id=$1', [act.id])).rows[0];
       assert.equal(saved.gross_mass, null);
       assert.equal(saved.defrost_mass, null);
+      const notificationCount = notifications.length;
       await request('PUT', `/acts/${act.id}`, { gross_mass: 'не число' }, 400);
+      assert.equal(notifications.length, notificationCount, 'Failed save does not notify');
       assert.equal((await client.query('SELECT COUNT(*)::int AS n FROM act_values')).rows[0].n, 2);
     } finally {
       if (server) await new Promise(resolve => server.close(resolve));

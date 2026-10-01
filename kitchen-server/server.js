@@ -28,6 +28,7 @@ app.use('/api/precut',    require('./routes/precut'));
 app.use('/api/quality',  require('./routes/quality'));
 app.use('/api/acts',     require('./routes/acts'));
 app.use('/api/prorabotki', require('./routes/prorabotki'));
+app.use('/api/technologist-tasks', require('./routes/technologist-tasks'));
 const objectStorage = require('./lib/objectStorage');
 app.get('/uploads/:filename', async (req, res) => {
   const filename = path.basename(req.params.filename);
@@ -55,11 +56,14 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-server.on('upgrade', (req, socket, head) => {
-  wss.handleUpgrade(req, socket, head, ws => {
-    wss.emit('connection', ws, req);
+function attachWebSocketUpgrade(httpServer) {
+  httpServer.on('upgrade', (req, socket, head) => {
+    wss.handleUpgrade(req, socket, head, ws => {
+      wss.emit('connection', ws, req);
+    });
   });
-});
+}
+attachWebSocketUpgrade(server);
 
 const PORT = process.env.PORT || 3000;
 server.keepAliveTimeout = 5000;
@@ -104,6 +108,14 @@ initDb()
     server.listen(PORT, () => {
       console.log(`Kitchen server running on http://localhost:${PORT}`);
       scheduleNightlySync();
+      const fallbackPort = Number(process.env.DEV_FALLBACK_PORT);
+      if (Number.isInteger(fallbackPort) && fallbackPort > 0 && fallbackPort !== Number(PORT)) {
+        const fallbackServer = http.createServer(app);
+        attachWebSocketUpgrade(fallbackServer);
+        fallbackServer.listen(fallbackPort, () => {
+          console.log(`Development fallback listening on http://localhost:${fallbackPort}`);
+        });
+      }
     });
   })
   .catch(err => {

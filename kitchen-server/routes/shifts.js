@@ -499,7 +499,7 @@ router.get('/:date/dh-storage', async (req, res) => {
 
 router.post('/:date/dh-storage', async (req, res) => {
   const { date } = req.params;
-  const { items } = req.body; // [{item_id, to_kitchen, to_storage, label_date}]
+  const { items } = req.body;
   if (!Array.isArray(items)) return res.status(400).json({ error: 'items required' });
   try {
     for (const it of items) {
@@ -514,6 +514,7 @@ router.post('/:date/dh-storage', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 module.exports = router;
 module.exports.syncFactsToSheet = syncFactsToSheet;

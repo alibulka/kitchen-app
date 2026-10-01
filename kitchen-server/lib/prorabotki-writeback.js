@@ -89,7 +89,7 @@ async function syncAct(pool, actId) {
       conclusion: act.conclusion, comment: comments.map(c => `${c.label}: ${c.value}`).join('\n'),
     });
     if (!data.length) return { status: 'unchanged' };
-    const targetRange = `'${title.replace(/'/g, "''")}'!A${row}:Y${row}`;
+    const targetRange = `'${title.replace(/'/g, "''")}'!A${row}:Z${row}`;
     const { data: checked } = await auth.request({
       url: `${base}/values/${encodeURIComponent(targetRange)}`,
       params: { valueRenderOption: 'UNFORMATTED_VALUE' }, timeout: 20000,
