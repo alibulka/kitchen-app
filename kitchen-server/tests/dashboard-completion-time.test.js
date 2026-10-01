@@ -123,11 +123,11 @@ test('both detail tables show a separate completion-time column today and in arc
     assert.equal(tables.length, 2);
     for (const table of tables) {
       const headings = nodes(table).filter(n => n.type === 'th');
-      const timeIndex = headings.findIndex(n => text(n) === 'Отметка выполнения');
+      const timeIndex = headings.findIndex(n => text(n) === 'Время отметки');
       const nameIndex = headings.findIndex(n => ['Заготовка', 'Позиция'].includes(text(n)));
       const statusIndex = headings.findIndex(n => text(n) === 'Статус');
-      assert.ok(timeIndex >= 0);
-      assert.ok(headings.some(n => text(n) === 'Длительность'));
+      assert.equal(timeIndex, headings.length - 1);
+      assert.ok(headings.some(n => text(n) === 'Время'));
       const body = table.children.find(n => n.type === 'tbody');
       for (const row of body.children) {
         assert.equal(row.children.length, headings.length);
@@ -152,8 +152,8 @@ test('Excel includes the same completion time and preserves column alignment', (
   const button = nodes(tree).find(n => n.type === 'button' && text(n).includes('Excel'));
   button.props.onClick();
   const [headings, ...rows] = context.exportRows;
-  const index = headings.indexOf('Отметка выполнения');
-  assert.ok(index >= 0);
+  const index = headings.indexOf('Время отметки');
+  assert.equal(index, headings.length - 1);
   for (const row of rows) {
     assert.equal(row.length, headings.length);
     if (row[8] === 'Да' && row[3] !== 'Старая без времени') assert.equal(row[index], expectedTime);

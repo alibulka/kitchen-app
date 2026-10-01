@@ -8651,13 +8651,13 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
   };
 
   const exportXlsx=()=>{
-    const hdr=["Дата","Цех","Станция","Заготовка","Объём","Упаковка","Кол-во","Статус","Выполнено","Отметка выполнения","Время (мин)","Уп/мин","Сотрудник"];
+    const hdr=["Дата","Цех","Станция","Заготовка","Объём","Упаковка","Кол-во","Статус","Выполнено","Время (мин)","Уп/мин","Сотрудник","Время отметки"];
     const data=filtered.map(r=>[
       formatDateRu(r.date),r.shop,r.station,r.name,r.volume||'',r.packName||'',r.planQty||0,
-      exportStatus(r),r.done?'Да':'Нет',formatDoneTime(r.done?r.doneAt:null),r.durationMin??'',r.minPerPack??'',r.employee
+      exportStatus(r),r.done?'Да':'Нет',r.durationMin??'',r.minPerPack??'',r.employee,formatDoneTime(r.done?r.doneAt:null)
     ]);
     const ws=XLSX.utils.aoa_to_sheet([hdr,...data]);
-    ws['!cols']=[10,16,24,38,20,10,8,14,10,20,10,8,18].map(w=>({wch:w}));
+    ws['!cols']=[10,16,24,38,20,10,8,14,10,10,8,18,16].map(w=>({wch:w}));
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb,ws,'Отчёт');
     XLSX.writeFile(wb,`otchet-${dateKey}.xlsx`);
@@ -8799,8 +8799,8 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
                   e('th',null,'Цех'),e('th',null,'Станция'),e('th',null,'Позиция'),
                   e('th',null,'Объём'),e('th',null,'Упаковка'),
                   e('th',{className:'num'},'Кол-во'),e('th',null,'Статус'),
-                   e('th',null,'Отметка выполнения'),
-                   e('th',{className:'num'},'Длительность'),e('th',{className:'num'},'Скорость'),e('th',null,'Сотрудник')
+                   e('th',{className:'num'},'Время'),e('th',{className:'num'},'Скорость'),e('th',null,'Сотрудник'),
+                   e('th',null,'Время отметки')
                 )
               ),
               e('tbody',null,
@@ -8815,10 +8815,10 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
                     e('td',null,r.packName||'—'),
                     e('td',{className:'num'},r.done?(r.factQty!=null&&r.factQty!==0?r.factQty:'—'):(r.effectivePlanQty!=null?r.effectivePlanQty:'—')),
                     e('td',null,e('span',{className:'badge '+bc},r.done?'✓ Готово':'Не готово')),
-                     doneTimeCell(r),
                     e('td',{className:'num',style:{whiteSpace:'nowrap'}},r.durationMin!=null?r.durationMin+' мин':'—'),
                     e('td',{className:'num'},r.minPerPack!=null?r.minPerPack+' уп/мин':'—'),
-                    e('td',null,r.employee)
+                     e('td',null,r.employee),
+                     doneTimeCell(r)
                   );
                 })
               )
@@ -8837,10 +8837,10 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
             thSort('packName','Упаковка'),
             thSort('planQty','Кол-во'),
             thSort('done','Статус'),
-             thSort('doneAt','Отметка выполнения'),
-             thSort('durationMin','Длительность'),
+             thSort('durationMin','Время'),
             thSort('minPerPack','Произв.'),
-            thSort('employee','Сотрудник')
+             thSort('employee','Сотрудник'),
+             thSort('doneAt','Время отметки')
           )),
           e('tbody',null,
             filtered.map((r,idx)=>{
@@ -8873,12 +8873,12 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
                 e('td',null,isSpecial?'—':r.packName||'—'),
                 e('td',{className:'num'},isSpecial?(r.factQty!=null?r.factQty+'г':'—'):(r.done&&r.factQty!=null?r.factQty:(r.planQty||'—'))),
                 e('td',null,statusCell),
-                 doneTimeCell(r),
                 e('td',{className:'num',style:{whiteSpace:'nowrap'}},
                   r.durationMin!=null?r.durationMin+' мин':'—'),
                 e('td',{className:'num'},
                   r.minPerPack!=null?r.minPerPack+' '+(r.productivityUnit||'уп/мин'):'—'),
-                e('td',null,r.employee)
+                 e('td',null,r.employee),
+                 doneTimeCell(r)
               );
             })
           )
