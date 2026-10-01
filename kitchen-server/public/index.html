@@ -7218,6 +7218,13 @@ function SvgSort({dir='none',size=12}) {
 // ============================================================
 // PACK TABLE
 // ============================================================
+function packLineDefaultFact(line, prevLine) {
+  const planQty=Number(line.qty)||0;
+  const yesterdayFact=prevLine?.yesterdayFact!=null?Number(prevLine.yesterdayFact):null;
+  return yesterdayFact!==null&&yesterdayFact<planQty
+    ?Math.max(0,planQty-yesterdayFact):planQty;
+}
+
 function PackTable({packLines, facts, onFactChange, itemKey,
                     doneFlags, doneBy, onLineEmp, shopEmployees,
                     skipReasons, skipTimes, onLineSkip, onLineClearSkip,
@@ -7283,7 +7290,7 @@ function PackTable({packLines, facts, onFactChange, itemKey,
           const isSkippedYesterday=prevLine?.status==='skipped';
           // companion = строка переноса без причины нехватки → нередактируемая
           const isCarryoverCompanion=!!prevLine&&!prevLine.skipReason&&!isSkippedYesterday&&!isPartialYesterday;
-          const defaultFact=(yesterdayFactNum!=null&&yesterdayFactNum<planQty)?Math.max(0,planQty-yesterdayFactNum):planQty;
+          const defaultFact=packLineDefaultFact(line,prevLine);
           const factVal=facts[k]!==undefined?facts[k]:defaultFact;
           const rowBg=isDoneYesterday?'var(--ok-bg)':lineDone?'var(--ok-bg)':lineSkip?'var(--danger-bg)':(isSkippedYesterday||isPartialYesterday)?'#FFFBEB':'var(--bg)';
           return [
@@ -7386,12 +7393,12 @@ function PackTable({packLines, facts, onFactChange, itemKey,
                       key:emp.id,
                       onClick:()=>{
                         if(!sel){
-                          const explicitFact=facts[k]!==undefined?Number(facts[k]):null;
-                          const totalPlan=planQty+(Number(line.fromWarehouse)||0);
-                          // Для строки переноса эффективный план = plan − yesterdayFact
-                          const effectivePlan=(isSkippedYesterday||isPartialYesterday)&&yesterdayFactNum!=null
-                            ?Math.max(0,totalPlan-yesterdayFactNum):totalPlan;
-                          if(explicitFact!==null&&explicitFact<effectivePlan&&!lineSkip){
+                           const explicitFact=Number(localFacts[k]!==undefined?localFacts[k]:factVal);
+                           // Проверяем тот же план, что показан в строке и используется
+                           // для автозаполнения факта. «Со склада» уже есть в наличии,
+                           // его не нужно производить повторно. Перенос учитывает вчерашний факт.
+                           const effectivePlan=defaultFact;
+                           if(Number.isFinite(explicitFact)&&explicitFact<effectivePlan&&!lineSkip){
                             setPickerFor(i);setPendingEmp({lineIdx:i,empId:emp.id});return;
                           }
                         }
@@ -7527,8 +7534,8 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, prevLi
       // Автозаполнение факта = план при первой отметке выполнения строки
       const newFacts={...prev.facts};
       if(!isRemoving&&!wasLineDone&&prev.facts[lineKey]===undefined){
-        const planQty=packLines[lineIdx]?.qty;
-        if(planQty!=null) newFacts[lineKey]=String(planQty);
+        const line=packLines[lineIdx];
+        if(line?.qty!=null) newFacts[lineKey]=String(packLineDefaultFact(line,prevLineData?.[lineIdx]));
       }
       return {...prev,doneFlags:newFlags,doneTimes:newDoneTimes,doneBy:{...prev.doneBy,[lineKey]:next},facts:newFacts};
     });
