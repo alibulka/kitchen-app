@@ -8322,6 +8322,13 @@ function WorkshopSelector({shopGroups, shift, onSelect}) {
 // ============================================================
 // MANAGER — DASHBOARD TAB
 // ============================================================
+function formatDoneTime(value) {
+  if(!value) return '—';
+  const date=new Date(value);
+  if(Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',hour12:false});
+}
+
 function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, activeTcUD, globalStationConfig, shopGroups, precutConfig}) {
   const catalog=useMemo(()=>getCatalogForDate(dateKey,activeTcEE,activeTcUD),[dateKey,activeTcEE,activeTcUD]);
   // periodMode: 'today' | 'date' | 'period'
@@ -8420,10 +8427,10 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
               const qty=(Number(l.qty)||0)+(Number(l.fromWarehouse)||0);
               const fv=parseFloat((s.facts||{})[lk]);
               const factQty=isDone?(isNaN(fv)?qty:fv):(isNaN(fv)?0:fv);
-              let durationMin=null,minPerPack=null,doneAt=null;
+              let durationMin=null,minPerPack=null;
               const ldat=(s.doneTimes||{})[lk];
+              const doneAt=isDone?(ldat||null):null;
               if(isDone&&ldat&&eid){
-                doneAt=ldat;
                 const doneMs=new Date(ldat).getTime();
                 const prev=(empTimeline[eid]||[]).filter(t=>t<ldat);
                 const prevMs=prev.length>0?new Date(prev[prev.length-1]).getTime():startDate.getTime();
@@ -8444,10 +8451,10 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
             const qty=item.packPlan?.qty||0;
             const fv=parseFloat((s.facts||{})[`${ik}-pl-0`]);
             const factQty=isDone?(isNaN(fv)?qty:fv):(isNaN(fv)?0:fv);
-            let durationMin=null,minPerPack=null,doneAt=null;
+            let durationMin=null,minPerPack=null;
             const idat=(s.doneTimes||{})[ik];
+            const doneAt=isDone?(idat||null):null;
             if(isDone&&idat&&eid){
-              doneAt=idat;
               const doneMs=new Date(idat).getTime();
               const prev=(empTimeline[eid]||[]).filter(t=>t<idat);
               const prevMs=prev.length>0?new Date(prev[prev.length-1]).getTime():startDate.getTime();
@@ -8507,7 +8514,7 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
             planQty,effectivePlanQty,yesterdayFact:yFact,factQty:cDone?cFactQty:(yFact??0),
             pct:planQty>0?(cDone?Math.round(cFactQty/planQty*100):(yFact!=null?Math.round(yFact/planQty*100):0)):0,
             done:cDone,employee:cEmpName,
-            durationMin:cDurationMin,minPerPack:cMinPerPack,doneAt:cDat,
+            durationMin:cDurationMin,minPerPack:cMinPerPack,doneAt:cDone?cDat:null,
             skipReason:p.skipReason,skipAt:p.skipAt,isCarriedOver:true,rowType:'regular'});
         });
 
@@ -8520,10 +8527,10 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
             const eid=(s.doneBy[zk]||[])[0];
             const empName=eid?(allEmployees.find(x=>x.id===eid)?.name||eid):'—';
             const weightG=(item.ingredients||[]).reduce((sum,ing)=>sum+(ing.planAmount||0),0)+(item.subPreps||[]).reduce((sum,sp)=>sum+(sp.usageAmount||0),0);
-            let durationMin=null,gramPerMin=null,doneAt=null;
+            let durationMin=null,gramPerMin=null;
             const dat=(s.doneTimes||{})[zk];
+            const doneAt=isDone?(dat||null):null;
             if(isDone&&dat&&eid){
-              doneAt=dat;
               const doneMs=new Date(dat).getTime();
               const prev=(globalEmpTimeline[eid]||[]).filter(t=>t<dat);
               const prevMs=prev.length>0?new Date(prev[prev.length-1]).getTime():startDate.getTime();
@@ -8549,7 +8556,7 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
               rows.push({date:dk,shop:shopName,station:station.name,name:item.name,
                 rowType:'precut',packName:'',volume:weightG?Math.round(weightG)+'г':'—',
                 planQty:null,factQty:null,
-                done:isDone,employee:'—',durationMin:null,minPerPack:null,productivityUnit:'г/мин',doneAt:dat||null,
+                done:isDone,employee:'—',durationMin:null,minPerPack:null,productivityUnit:'г/мин',doneAt:isDone?(dat||null):null,
                 skipReason:null,skipAt:null,isCarriedOver:false});
             } else {
               empIds.forEach(eid=>{
@@ -8569,7 +8576,7 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
                   rowType:'precut',packName:'',
                   volume:weightG?Math.round(weightG)+'г':'—',
                   planQty:null,factQty:empFactWeight,
-                  done:isDone,employee:empName,durationMin,minPerPack:gramPerMin,productivityUnit:'г/мин',doneAt:dat||null,
+                  done:isDone,employee:empName,durationMin,minPerPack:gramPerMin,productivityUnit:'г/мин',doneAt:isDone?(dat||null):null,
                   skipReason:null,skipAt:null,isCarriedOver:false});
               });
             }
@@ -8600,6 +8607,13 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
     if(sortCol){
       rows.sort((a,b)=>{
         let av=a[sortCol],bv=b[sortCol];
+        if(sortCol==='doneAt'){
+          av=av?new Date(av).getTime():NaN;
+          bv=bv?new Date(bv).getTime():NaN;
+          if(Number.isNaN(av)&&Number.isNaN(bv)) return 0;
+          if(Number.isNaN(av)) return 1;
+          if(Number.isNaN(bv)) return -1;
+        }
         if(typeof av==='string') av=av.toLowerCase(),bv=bv.toLowerCase();
         return sortDir==='asc'?(av>bv?1:av<bv?-1:0):(av<bv?1:av>bv?-1:0);
       });
@@ -8637,13 +8651,13 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
   };
 
   const exportXlsx=()=>{
-    const hdr=["Дата","Цех","Станция","Заготовка","Объём","Упаковка","Кол-во","Статус","Выполнено","Время (мин)","Уп/мин","Сотрудник"];
+    const hdr=["Дата","Цех","Станция","Заготовка","Объём","Упаковка","Кол-во","Статус","Выполнено","Отметка выполнения","Время (мин)","Уп/мин","Сотрудник"];
     const data=filtered.map(r=>[
       formatDateRu(r.date),r.shop,r.station,r.name,r.volume||'',r.packName||'',r.planQty||0,
-      exportStatus(r),r.done?'Да':'Нет',r.durationMin??'',r.minPerPack??'',r.employee
+      exportStatus(r),r.done?'Да':'Нет',formatDoneTime(r.done?r.doneAt:null),r.durationMin??'',r.minPerPack??'',r.employee
     ]);
     const ws=XLSX.utils.aoa_to_sheet([hdr,...data]);
-    ws['!cols']=[10,16,24,38,20,10,8,14,10,10,8,18].map(w=>({wch:w}));
+    ws['!cols']=[10,16,24,38,20,10,8,14,10,20,10,8,18].map(w=>({wch:w}));
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb,ws,'Отчёт');
     XLSX.writeFile(wb,`otchet-${dateKey}.xlsx`);
@@ -8652,6 +8666,8 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
   const thSort=(col,label)=>e('th',{className:col==='planQty'||col==='factQty'?'num':'',
     onClick:()=>toggleSort(col),style:{cursor:'pointer'}},
     label,e(SvgSort,{dir:sortCol===col?sortDir:'none'}));
+  const doneTimeCell=r=>e('td',{style:{whiteSpace:'nowrap'}},
+    formatDoneTime(r.done?r.doneAt:null));
 
   return e('div',null,
     // Period selector
@@ -8783,7 +8799,8 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
                   e('th',null,'Цех'),e('th',null,'Станция'),e('th',null,'Позиция'),
                   e('th',null,'Объём'),e('th',null,'Упаковка'),
                   e('th',{className:'num'},'Кол-во'),e('th',null,'Статус'),
-                  e('th',{className:'num'},'Время'),e('th',{className:'num'},'Скорость'),e('th',null,'Сотрудник')
+                   e('th',null,'Отметка выполнения'),
+                   e('th',{className:'num'},'Длительность'),e('th',{className:'num'},'Скорость'),e('th',null,'Сотрудник')
                 )
               ),
               e('tbody',null,
@@ -8798,6 +8815,7 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
                     e('td',null,r.packName||'—'),
                     e('td',{className:'num'},r.done?(r.factQty!=null&&r.factQty!==0?r.factQty:'—'):(r.effectivePlanQty!=null?r.effectivePlanQty:'—')),
                     e('td',null,e('span',{className:'badge '+bc},r.done?'✓ Готово':'Не готово')),
+                     doneTimeCell(r),
                     e('td',{className:'num',style:{whiteSpace:'nowrap'}},r.durationMin!=null?r.durationMin+' мин':'—'),
                     e('td',{className:'num'},r.minPerPack!=null?r.minPerPack+' уп/мин':'—'),
                     e('td',null,r.employee)
@@ -8819,7 +8837,8 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
             thSort('packName','Упаковка'),
             thSort('planQty','Кол-во'),
             thSort('done','Статус'),
-            thSort('durationMin','Время'),
+             thSort('doneAt','Отметка выполнения'),
+             thSort('durationMin','Длительность'),
             thSort('minPerPack','Произв.'),
             thSort('employee','Сотрудник')
           )),
@@ -8854,6 +8873,7 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
                 e('td',null,isSpecial?'—':r.packName||'—'),
                 e('td',{className:'num'},isSpecial?(r.factQty!=null?r.factQty+'г':'—'):(r.done&&r.factQty!=null?r.factQty:(r.planQty||'—'))),
                 e('td',null,statusCell),
+                 doneTimeCell(r),
                 e('td',{className:'num',style:{whiteSpace:'nowrap'}},
                   r.durationMin!=null?r.durationMin+' мин':'—'),
                 e('td',{className:'num'},
