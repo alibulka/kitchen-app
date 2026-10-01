@@ -192,6 +192,19 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS quality_standard_photos (
   }
 }
 
+sqlite.exec(`CREATE TABLE IF NOT EXISTS shift_dh_storage (
+  shift_date TEXT NOT NULL,
+  item_id INTEGER NOT NULL,
+  to_kitchen REAL NOT NULL DEFAULT 0,
+  to_storage REAL NOT NULL DEFAULT 0,
+  label_date TEXT,
+  PRIMARY KEY (shift_date, item_id)
+)`);
+{
+  const dhCols = sqlite.prepare('PRAGMA table_info(shift_dh_storage)').all().map(c => c.name);
+  if (!dhCols.includes('label_date')) sqlite.exec('ALTER TABLE shift_dh_storage ADD COLUMN label_date TEXT');
+}
+
 // ─── SQL: pg → SQLite ────────────────────────────────────────────────────────
 
 // Конвертируем подмножество pg-синтаксиса в SQLite.

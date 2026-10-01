@@ -485,5 +485,35 @@ router.post('/:date', async (req, res) => {
 });
 
 
+// ДХ / Склад — распределение по кухне и складу
+router.get('/:date/dh-storage', async (req, res) => {
+  const { date } = req.params;
+  try {
+    const { rows } = await pool.query(
+      'SELECT item_id, to_kitchen, to_storage, label_date FROM shift_dh_storage WHERE shift_date=$1', [date]);
+    res.json({ items: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/:date/dh-storage', async (req, res) => {
+  const { date } = req.params;
+  const { items } = req.body; // [{item_id, to_kitchen, to_storage, label_date}]
+  if (!Array.isArray(items)) return res.status(400).json({ error: 'items required' });
+  try {
+    for (const it of items) {
+      await pool.query(
+        `INSERT INTO shift_dh_storage(shift_date, item_id, to_kitchen, to_storage, label_date)
+         VALUES($1,$2,$3,$4,$5)
+         ON CONFLICT(shift_date, item_id) DO UPDATE SET to_kitchen=$3, to_storage=$4, label_date=$5`,
+        [date, it.item_id, it.to_kitchen ?? 0, it.to_storage ?? 0, it.label_date ?? null]);
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
 module.exports.syncFactsToSheet = syncFactsToSheet;

@@ -9489,6 +9489,376 @@ function TechcardsTab({shift, allTechcards, activeTcEE, activeTcUD, onApplyTechc
 }
 
 // ============================================================
+// ДХ / СКЛАД
+// ============================================================
+// Вспомогательная функция: суммарный факт по item_id из объекта shift.facts
+function calcFactTotals(facts) {
+  const totals = {};
+  Object.entries(facts || {}).forEach(([k, v]) => {
+    const m = k.match(/^.+-(\d+)-pl-\d+$/);
+    if (!m) return;
+    const itemId = Number(m[1]);
+    totals[itemId] = (totals[itemId] || 0) + (Number(v) || 0);
+  });
+  return totals;
+}
+
+// Вспомогательная функция: ДХ-позиции из каталога (уникальные по item.id)
+// itemPackLines — override из shift (от техкарты), может быть null
+function getDHItems(catalog, itemPackLines) {
+  const seen = new Set();
+  const result = [];
+  (catalog || []).forEach(station => {
+    (station.items || []).forEach(item => {
+      if (!item.name.startsWith('ДХ')) return;
+      if (seen.has(item.id)) return;
+      seen.add(item.id);
+      // pack lines: сначала override из техкарты, иначе packPlan из каталога
+      const lines = (itemPackLines && itemPackLines[item.id])
+        || (item.packPlan ? [item.packPlan] : []);
+      const plan = (Array.isArray(lines) ? lines : [lines])
+        .reduce((s, l) => s + (Number(l.qty) || 0), 0);
+      result.push({ stationKey: station.key, item, plan });
+    });
+  });
+  return result;
+}
+
+// Подвкладка "Факты смены"
+function DXFactsTab({dateKey, archiveIndex}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [selDate, setSelDate] = useState(dateKey || today);
+  const [shiftData, setShiftData] = useState(null);  // {shift, catalog, dhItems}
+  const [loading, setLoading] = useState(false);
+  const [factInputs, setFactInputs] = useState({}); // {item_id: string}
+  const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState('');
+
+  useEffect(() => {
+    if (!selDate) return;
+    setLoading(true);
+    setFactInputs({});
+    setSaveStatus('');
+    (async () => {
+      try {
+        const sr = await fetch(`/api/shifts/${selDate}`);
+        if (!sr.ok) { setShiftData(null); setLoading(false); return; }
+        const sd = await sr.json();
+        const sh = sd.shift;
+        if (!sh) { setShiftData(null); setLoading(false); return; }
+        let eeTc = null, udTc = null;
+        if (sh.techcardId) {
+          const tr = await fetch(`/api/techcards/${sh.techcardId}`);
+          if (tr.ok) { const td = await tr.json(); eeTc = td.techcard || td; }
+        }
+        if (sh.udTechcardId) {
+          const tr = await fetch(`/api/techcards/${sh.udTechcardId}`);
+          if (tr.ok) { const td = await tr.json(); udTc = td.techcard || td; }
+        }
+        const catalog = getCatalogForDate(selDate, eeTc, udTc);
+        const dhItems = getDHItems(catalog, sh.itemPackLines);
+        setShiftData({ shift: sh, dhItems });
+      } catch {}
+      setLoading(false);
+    })();
+  }, [selDate]);
+
+  const factTotals = useMemo(() => calcFactTotals(shiftData?.shift?.facts), [shiftData]);
+
+  const getFactVal = (itemId) =>
+    factInputs[itemId] !== undefined ? factInputs[itemId] : String(factTotals[itemId] ?? '');
+
+  const handleSaveFact = async () => {
+    if (!shiftData) return;
+    setSaving(true); setSaveStatus('');
+    try {
+      // Строим новый объект facts: обнуляем старые ДХ-записи, ставим новые
+      const dhIds = new Set((shiftData.dhItems || []).map(d => d.item.id));
+      const newFacts = {};
+      // копируем не-ДХ факты
+      Object.entries(shiftData.shift.facts || {}).forEach(([k, v]) => {
+        const m = k.match(/^.+-(\d+)-pl-\d+$/);
+        if (m && dhIds.has(Number(m[1]))) return;
+        newFacts[k] = v;
+      });
+      // записываем менеджерские значения для ДХ
+      (shiftData.dhItems || []).forEach(({ stationKey, item }) => {
+        const val = factInputs[item.id] !== undefined
+          ? Number(factInputs[item.id])
+          : (factTotals[item.id] ?? 0);
+        const k = `${stationKey}-${item.id}-pl-0`;
+        newFacts[k] = val;
+      });
+      const newShift = { ...shiftData.shift, facts: newFacts };
+      const r = await fetch(`/api/shifts/${selDate}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shift: newShift }),
+      });
+      if (r.ok) {
+        setShiftData(prev => ({ ...prev, shift: newShift }));
+        setFactInputs({});
+        setSaveStatus('ok');
+        setTimeout(() => setSaveStatus(''), 2500);
+      } else setSaveStatus('error');
+    } catch { setSaveStatus('error'); }
+    setSaving(false);
+  };
+
+  const dhItems = shiftData?.dhItems || [];
+
+  return e('div', {style:{padding:'16px 8px', maxWidth:820, margin:'0 auto'}},
+    e('div', {style:{display:'flex', alignItems:'center', gap:16, marginBottom:20, flexWrap:'wrap'}},
+      e('label', {style:{fontWeight:600, fontSize:14}}, 'Дата:'),
+      e('input', {
+        type: 'date', value: selDate,
+        max: today,
+        onChange: ev => setSelDate(ev.target.value),
+        style:{padding:'6px 10px', border:'1px solid var(--border,#d1d5db)',
+          borderRadius:8, fontSize:14, cursor:'pointer'}
+      }),
+    ),
+    loading && e('div', {style:{color:'var(--muted)', padding:24}}, 'Загрузка...'),
+    !loading && !shiftData && selDate &&
+      e('div', {style:{color:'var(--muted)', padding:24, textAlign:'center'}},
+        'Смена за выбранную дату не найдена'),
+    !loading && shiftData && dhItems.length === 0 &&
+      e('div', {style:{color:'var(--muted)', padding:24, textAlign:'center'}},
+        'Нет позиций с префиксом «ДХ» в техкарте этой смены'),
+    !loading && shiftData && dhItems.length > 0 && e('div', null,
+      e('div', {style:{overflowX:'auto'}},
+        e('table', {style:{width:'100%', borderCollapse:'collapse', fontSize:14}},
+          e('thead', null,
+            e('tr', {style:{background:'var(--header-bg,#f3f4f6)', textAlign:'left'}},
+              e('th', {style:{padding:'8px 12px', fontWeight:600}}, 'Позиция'),
+              e('th', {style:{padding:'8px 12px', fontWeight:600, textAlign:'right'}}, 'План, уп'),
+              e('th', {style:{padding:'8px 12px', fontWeight:600, textAlign:'right', minWidth:110}}, 'Факт, уп'),
+            )
+          ),
+          e('tbody', null,
+            dhItems.map(({ item, plan }) => {
+              const factVal = getFactVal(item.id);
+              const factNum = Number(factVal);
+              const planNum = Number(plan);
+              const done = planNum > 0 && factNum >= planNum;
+              return e('tr', {key: item.id, style:{borderBottom:'1px solid var(--border,#e5e7eb)',
+                  background: done ? 'var(--ok-bg,#f0fdf4)' : 'var(--bg)'}},
+                e('td', {style:{padding:'8px 12px'}}, item.name),
+                e('td', {style:{padding:'8px 12px', textAlign:'right', color:'var(--muted)'}},
+                  planNum || '—'),
+                e('td', {style:{padding:'8px 12px', textAlign:'right'}},
+                  e('input', {
+                    type: 'number', min: 0, step: 1, value: factVal,
+                    onFocus: ev => ev.target.select(),
+                    onChange: ev => setFactInputs(p => ({...p, [item.id]: ev.target.value})),
+                    style:{width:80, textAlign:'right', padding:'4px 6px',
+                      border:'1px solid var(--border,#d1d5db)', borderRadius:6, fontSize:14}
+                  })
+                ),
+              );
+            })
+          )
+        )
+      ),
+      e('div', {style:{marginTop:20, display:'flex', alignItems:'center', gap:12}},
+        e('button', {
+          onClick: handleSaveFact, disabled: saving,
+          style:{padding:'10px 28px', background:'var(--accent,#6d28d9)', color:'#fff',
+            border:'none', borderRadius:8, fontWeight:600, fontSize:15, cursor:'pointer'}
+        }, saving ? 'Сохранение...' : 'Сохранить факт'),
+        saveStatus==='ok' && e('span',{style:{color:'var(--ok,#16a34a)', fontWeight:600}},'✓ Сохранено'),
+        saveStatus==='error' && e('span',{style:{color:'var(--danger,#dc2626)'}},'Ошибка сохранения'),
+      )
+    )
+  );
+}
+
+// Подвкладка "Распределение ДХ"
+function DXDistributionTab({dateKey}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [selDate, setSelDate] = useState(dateKey || today);
+  const [shiftData, setShiftData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [saved, setSaved] = useState({});
+  const [inputs, setInputs] = useState({});     // {item_id: to_kitchen string}
+  const [labelDates, setLabelDates] = useState({}); // {item_id: date string}
+  const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState('');
+
+  useEffect(() => {
+    if (!selDate) return;
+    setLoading(true);
+    setInputs({}); setLabelDates({}); setSaveStatus('');
+    (async () => {
+      try {
+        const [sr, dr] = await Promise.all([
+          fetch(`/api/shifts/${selDate}`),
+          fetch(`/api/shifts/${selDate}/dh-storage`),
+        ]);
+        if (!sr.ok) { setShiftData(null); setSaved({}); setLoading(false); return; }
+        const sd = await sr.json();
+        const sh = sd.shift;
+        if (!sh) { setShiftData(null); setSaved({}); setLoading(false); return; }
+        let eeTc = null, udTc = null;
+        if (sh.techcardId) {
+          const tr = await fetch(`/api/techcards/${sh.techcardId}`);
+          if (tr.ok) { const td = await tr.json(); eeTc = td.techcard || td; }
+        }
+        if (sh.udTechcardId) {
+          const tr = await fetch(`/api/techcards/${sh.udTechcardId}`);
+          if (tr.ok) { const td = await tr.json(); udTc = td.techcard || td; }
+        }
+        const catalog = getCatalogForDate(selDate, eeTc, udTc);
+        const dhItems = getDHItems(catalog, sh.itemPackLines);
+        const factTotals = calcFactTotals(sh.facts);
+        setShiftData({ shift: sh, dhItems, factTotals });
+        if (dr.ok) {
+          const dd = await dr.json();
+          const m = {};
+          (dd.items || []).forEach(it => { m[it.item_id] = it; });
+          setSaved(m);
+        }
+      } catch {}
+      setLoading(false);
+    })();
+  }, [selDate]);
+
+  const dhItems = shiftData?.dhItems || [];
+  const factTotals = shiftData?.factTotals || {};
+
+  const getToKitchen = (itemId) => {
+    if (inputs[itemId] !== undefined) return inputs[itemId];
+    if (saved[itemId] !== undefined) return String(saved[itemId].to_kitchen);
+    return String(factTotals[itemId] || 0);
+  };
+  const getLabelDate = (itemId) => {
+    if (labelDates[itemId] !== undefined) return labelDates[itemId];
+    if (saved[itemId]?.label_date) return saved[itemId].label_date;
+    return selDate; // предзаполнение датой смены
+  };
+
+  const handleSave = async () => {
+    setSaving(true); setSaveStatus('');
+    try {
+      const items = dhItems.map(({ item }) => ({
+        item_id: item.id,
+        to_kitchen: Number(getToKitchen(item.id)) || 0,
+        to_storage: 0,
+        label_date: getLabelDate(item.id) || null,
+      }));
+      const r = await fetch(`/api/shifts/${selDate}/dh-storage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items }),
+      });
+      if (r.ok) {
+        const m = {};
+        items.forEach(it => { m[it.item_id] = it; });
+        setSaved(m); setInputs({}); setLabelDates({});
+        setSaveStatus('ok');
+        setTimeout(() => setSaveStatus(''), 2500);
+      } else setSaveStatus('error');
+    } catch { setSaveStatus('error'); }
+    setSaving(false);
+  };
+
+  return e('div', {style:{padding:'16px 8px', maxWidth:900, margin:'0 auto'}},
+    e('div', {style:{display:'flex', alignItems:'center', gap:16, marginBottom:20, flexWrap:'wrap'}},
+      e('label', {style:{fontWeight:600, fontSize:14}}, 'Дата:'),
+      e('input', {
+        type: 'date', value: selDate,
+        max: today,
+        onChange: ev => setSelDate(ev.target.value),
+        style:{padding:'6px 10px', border:'1px solid var(--border,#d1d5db)',
+          borderRadius:8, fontSize:14, cursor:'pointer'}
+      }),
+    ),
+    loading && e('div', {style:{color:'var(--muted)', padding:24}}, 'Загрузка...'),
+    !loading && !shiftData && selDate &&
+      e('div', {style:{color:'var(--muted)', padding:24, textAlign:'center'}},
+        'Смена за выбранную дату не найдена'),
+    !loading && shiftData && dhItems.length === 0 &&
+      e('div', {style:{color:'var(--muted)', padding:24, textAlign:'center'}},
+        'Нет позиций с префиксом «ДХ» в техкарте этой смены'),
+    !loading && shiftData && dhItems.length > 0 && e('div', null,
+      e('div', {style:{overflowX:'auto'}},
+        e('table', {style:{width:'100%', borderCollapse:'collapse', fontSize:14}},
+          e('thead', null,
+            e('tr', {style:{background:'var(--header-bg,#f3f4f6)', textAlign:'left'}},
+              e('th', {style:{padding:'8px 12px', fontWeight:600}}, 'Позиция'),
+              e('th', {style:{padding:'8px 12px', fontWeight:600, textAlign:'right'}}, 'Факт'),
+              e('th', {style:{padding:'8px 12px', fontWeight:600, textAlign:'right', minWidth:110}}, 'На кухне'),
+              e('th', {style:{padding:'8px 12px', fontWeight:600, minWidth:160}}, 'Дата наклейки'),
+            )
+          ),
+          e('tbody', null,
+            dhItems.map(({ item }) => {
+              const fact = factTotals[item.id] || 0;
+              const toKitchen = getToKitchen(item.id);
+              const lblDate = getLabelDate(item.id);
+              return e('tr', {key: item.id, style:{borderBottom:'1px solid var(--border,#e5e7eb)'}},
+                e('td', {style:{padding:'8px 12px'}}, item.name),
+                e('td', {style:{padding:'8px 12px', textAlign:'right', color:'var(--muted)'}},
+                  fact ? `${fact} уп` : '—'),
+                e('td', {style:{padding:'8px 12px', textAlign:'right'}},
+                  e('input', {
+                    type: 'number', min: 0, max: fact || undefined, step: 1,
+                    value: toKitchen,
+                    onFocus: ev => ev.target.select(),
+                    onChange: ev => setInputs(p => ({...p, [item.id]: ev.target.value})),
+                    style:{width:80, textAlign:'right', padding:'4px 6px',
+                      border:'1px solid var(--border,#d1d5db)', borderRadius:6, fontSize:14}
+                  })
+                ),
+                e('td', {style:{padding:'8px 12px'}},
+                  e('input', {
+                    type: 'date', value: lblDate,
+                    onChange: ev => setLabelDates(p => ({...p, [item.id]: ev.target.value})),
+                    style:{padding:'4px 8px', border:'1px solid var(--border,#d1d5db)',
+                      borderRadius:6, fontSize:13, cursor:'pointer'}
+                  })
+                ),
+              );
+            })
+          )
+        )
+      ),
+      e('div', {style:{marginTop:20, display:'flex', alignItems:'center', gap:12}},
+        e('button', {
+          onClick: handleSave, disabled: saving,
+          style:{padding:'10px 28px', background:'var(--accent,#6d28d9)', color:'#fff',
+            border:'none', borderRadius:8, fontWeight:600, fontSize:15, cursor:'pointer'}
+        }, saving ? 'Сохранение...' : 'Сохранить'),
+        saveStatus==='ok' && e('span',{style:{color:'var(--ok,#16a34a)', fontWeight:600}},'✓ Сохранено'),
+        saveStatus==='error' && e('span',{style:{color:'var(--danger,#dc2626)'}},'Ошибка сохранения'),
+      )
+    )
+  );
+}
+
+// Главная вкладка ДХ/Склад с двумя подразделами
+function DXStorageTab({dateKey, shift, activeTcEE, activeTcUD, archiveIndex}) {
+  const [subTab, setSubTab] = useState('facts');
+  const subTabStyle = (t) => ({
+    padding:'8px 20px', border:'none', borderRadius:'8px 8px 0 0', cursor:'pointer',
+    fontWeight:600, fontSize:14,
+    background: subTab===t ? 'var(--bg,#fff)' : 'var(--header-bg,#f3f4f6)',
+    color: subTab===t ? 'var(--accent,#6d28d9)' : 'var(--muted,#6b7280)',
+    borderBottom: subTab===t ? '2px solid var(--accent,#6d28d9)' : '2px solid transparent',
+  });
+
+  return e('div', {style:{paddingTop:8}},
+    e('div', {style:{display:'flex', gap:4, borderBottom:'1px solid var(--border,#e5e7eb)',
+        paddingLeft:16, marginBottom:0}},
+      e('button', {style:subTabStyle('facts'), onClick:()=>setSubTab('facts')}, '📊 Факты смены'),
+      e('button', {style:subTabStyle('dist'),  onClick:()=>setSubTab('dist')},  '📦 Распределение ДХ'),
+    ),
+    subTab==='facts' && e(DXFactsTab, {dateKey, archiveIndex}),
+    subTab==='dist'  && e(DXDistributionTab, {dateKey}),
+  );
+}
+
+// ============================================================
 // MANAGER PAGE
 // ============================================================
 function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesChange, archiveIndex, onOpenArchiveDate, allTechcards, activeTcEE, activeTcUD, onApplyTechcard, onDeactivate, onRefreshTechcards, shopGroups, globalStationConfig, onStationConfigChange, precutConfig, onPrecutConfigChange}) {
@@ -9518,6 +9888,8 @@ function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesCh
         '📋 Журнал проверок ПК'),
       e('button',{className:'mgr-tab'+(tab==='acts'?' active':''),onClick:()=>switchTab('acts')},
         '🧪 Акты проработки'),
+      e('button',{className:'mgr-tab'+(tab==='dh-storage'?' active':''),onClick:()=>switchTab('dh-storage')},
+        '📦 ДХ / Склад'),
     ),
     tab==='dashboard' && e(DashboardTab,{dateKey,shift,allEmployees,archiveIndex,activeTcEE,activeTcUD,globalStationConfig,shopGroups,precutConfig}),
     tab==='kitchen' && (
@@ -9538,7 +9910,8 @@ function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesCh
     tab==='upload' && e(TechcardsTab,{shift,allTechcards,activeTcEE,activeTcUD,onApplyTechcard,onDeactivate,onRefreshTechcards}),
     tab==='technologist' && e(TechnologistPage,{initialActId:actIdParam}),
     tab==='product' && e(ProductJournalPage,null),
-    tab==='acts' && e(ActsPage,{isManager:true})
+    tab==='acts' && e(ActsPage,{isManager:true}),
+    tab==='dh-storage' && e(DXStorageTab,{dateKey,shift,activeTcEE,activeTcUD,archiveIndex})
   );
 }
 

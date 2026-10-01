@@ -412,6 +412,18 @@ async function initDb(pool) {
   await q("INSERT INTO shops(name,sort_order) VALUES('Главный технолог',98) ON CONFLICT(name) DO NOTHING");
   await q("ALTER TABLE employees ADD COLUMN shops TEXT");
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS shift_dh_storage (
+      shift_date TEXT NOT NULL,
+      item_id    INTEGER NOT NULL,
+      to_kitchen REAL NOT NULL DEFAULT 0,
+      to_storage REAL NOT NULL DEFAULT 0,
+      label_date TEXT,
+      PRIMARY KEY (shift_date, item_id)
+    )
+  `);
+  await q('ALTER TABLE shift_dh_storage ADD COLUMN IF NOT EXISTS label_date TEXT');
+
   console.log(`DB ready (${process.env.DATABASE_URL ? 'PostgreSQL' : 'SQLite'})`);
 }
 
