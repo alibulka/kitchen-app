@@ -53,8 +53,9 @@ test('different tab layouts map supplier, dates and mass correctly', () => {
   const columns = [
     { arrivalDate: 11, deadline: 13, workDate: 14, processingTask: 15,
       grossMass: 16, defrostMass: 17, defrostPercent: 19, conclusion: 23, comment: 25 },
-    { arrivalDate: 8, deadline: 10, workDate: 11, processingTask: 12,
-      grossMass: 14, defrostMass: 15, defrostPercent: 16, conclusion: 18, comment: 21 },
+    { material: 1, purpose: 2, name: 3, manufacturer: 4, supplier: 5,
+      arrivalDate: 9, deadline: 11, workDate: 12, processingTask: 13,
+      grossMass: 15, defrostMass: 16, defrostPercent: 17, conclusion: 19, comment: 22 },
   ];
   SOURCES.forEach((source, index) => {
     for (const [field, column] of Object.entries(columns[index])) {
@@ -67,4 +68,32 @@ test('different tab layouts map supplier, dates and mass correctly', () => {
     assert.equal(task.processingTask, 'processingTask');
     assert.equal(task.comment, 'comment');
   });
+});
+
+test('the inserted Manage material column and all shifted fields are read from the physical sheet layout', () => {
+  const source = SOURCES.find(s => s.gid === 184249890);
+  const row = [
+    900, 'Сырьё Manage', 'Цель', 'Детальное наименование', 'Завод', 'Поставщик',
+    'ЕИ', 'Цена поставщика', 'Цена чистого веса', 'Дата прихода', 'Вес приёмки',
+    'Срок проработки', 'Дата проработки', 'Задача', 'Исполнитель',
+    100, 80, '20%', 'Результат финал', 'Результат П11', 'Результат ПК',
+    'Срок годности', 'Комментарии', 'Остаток',
+  ];
+  const [task] = parseTasks(source, source.title, [row]);
+  assert.equal(task.material, 'Сырьё Manage');
+  assert.equal(task.purpose, 'Цель');
+  assert.equal(task.name, 'Детальное наименование');
+  assert.equal(task.manufacturer, 'Завод');
+  assert.equal(task.supplier, 'Поставщик');
+  assert.equal(task.arrivalDate, 'Дата прихода');
+  assert.equal(task.deadline, 'Срок проработки');
+  assert.equal(task.workDate, 'Дата проработки');
+  assert.equal(task.processingTask, 'Задача');
+  assert.equal(task.grossMass, '100');
+  assert.equal(task.defrostMass, '80');
+  assert.equal(task.defrostPercent, '20%');
+  assert.equal(task.conclusion, 'Результат П11');
+  assert.equal(task.comment, 'Комментарии');
+  assert.equal(task.sheetId, '184249890:id:900');
+  assert.equal(task.sourceRow, 815);
 });
