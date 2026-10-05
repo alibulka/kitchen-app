@@ -319,8 +319,12 @@
   }
   .mgr-tab.active { background: var(--accent); color: white; border-color: var(--accent); }
   .prorabotki-table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+  .tech-prorabotki-standalone { width: calc(100% - 40px); }
   @media (max-width: 820px) {
     .prorabotki-table { min-width: 860px; }
+  }
+  @media (max-width: 600px) {
+    .tech-prorabotki-standalone { width: calc(100% - 24px); }
   }
 
   /* ---- dashboard ---- */
@@ -11084,7 +11088,7 @@ function TechnologistManagerTasks(){
 }
 
 // Страница технолога
-function TechnologistPage({initialActId=null}) {
+function TechnologistPage({initialActId=null,standalone=false}) {
   const [tab,setTab]=useState(initialActId?'acts':'tasks');
   const [date,setDate]=useState(todayISO);
   const [tasks,setTasks]=useState([]);
@@ -11204,7 +11208,8 @@ function TechnologistPage({initialActId=null}) {
 
   return e(React.Fragment,null,
 
-    e('div',{style:{padding:'16px',maxWidth:tab==='prorabotki'?1600:960,margin:'0 auto'}},
+    e('div',{className:standalone&&tab==='prorabotki'?'tech-prorabotki-standalone':'',
+      style:{padding:'16px',maxWidth:tab==='prorabotki'?1060:960,margin:'0 auto'}},
     // Табы
     e('div',{className:'mgr-tabs',style:{marginBottom:20}},
       e('button',{className:'mgr-tab'+(tab==='tasks'?' active':''),onClick:()=>setTab('tasks')},'📋 Задания'),
@@ -12770,7 +12775,7 @@ function App() {
       e('div',null,e('span',{className:'topnav-brand'},'🔬 Технолог')),
       e('div',{className:'topnav-right'},e('div',{className:'date-pill'},formatDateRu(today)))
     ),
-    e(TechnologistPage,{initialActId:actIdParam})
+    e(TechnologistPage,{initialActId:actIdParam,standalone:true})
   );
   if(isProduct) return e('div',null,
     e('div',{className:'topnav'},
