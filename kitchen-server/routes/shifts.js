@@ -474,11 +474,7 @@ router.post('/:date', async (req, res) => {
       wss.clients.forEach(c => { if (c.readyState === 1) c.send(msg); });
     }
     res.json({ ok: true });
-    // Асинхронно синхронизируем факты в Google Sheets
-    const factsKeys = shift.facts ? Object.keys(shift.facts) : [];
-    if (writeFacts && factsKeys.length > 0) {
-      syncFactsToSheet(date, shift.facts).catch(e => console.error('[facts-sheets]', e.message));
-    }
+    // Google Sheets receive the persisted daily facts only from the nightly job.
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
