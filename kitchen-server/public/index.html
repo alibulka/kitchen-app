@@ -12575,6 +12575,32 @@ function ActsPage({isManager=false, initialActId=null, onActDeleted}) {
 // ============================================================
 // APP ROOT
 // ============================================================
+async function loadTrackerInitialData(date) {
+  const stationConfig = (async () => {
+    try {
+      const r = await fetch('/api/config/stations');
+      if (r.ok) return (await r.json()).config || {};
+    } catch (_) {}
+    return {};
+  })();
+  const precutIds = (async () => {
+    try {
+      const r = await fetch('/api/precut');
+      if (r.ok) return (await r.json()).ids || [];
+    } catch (_) {}
+    return [];
+  })();
+  const [employees, archiveIndex, techcards, config, ids, existing] = await Promise.all([
+    loadEmployeesGlobal(), loadShiftIndex(), loadTechCards(), stationConfig, precutIds, loadShift(date),
+  ]);
+  const shift = existing || emptyShiftData(date);
+  const [tcEE, tcUD] = await Promise.all([
+    shift.techcardId ? loadTechCard(shift.techcardId) : null,
+    shift.udTechcardId ? loadTechCard(shift.udTechcardId) : null,
+  ]);
+  return { employees, archiveIndex, techcards, config, ids, shift, tcEE, tcUD };
+}
+
 function App() {
   // Tablet lock: ?shop=KEY pins this device to one workshop
   const shopParam=useMemo(()=>new URLSearchParams(location.search).get('shop'),[]);
@@ -12603,25 +12629,15 @@ function App() {
   // Load initial data
   useEffect(()=>{
     (async()=>{
-      const emps=await loadEmployeesGlobal();
-      setAllEmployees(emps);
-      const idx=await loadShiftIndex();
-      setArchiveIndex(idx);
-      const tcs=await loadTechCards();
-      setAllTechcards(tcs);
-      try{const r=await fetch('/api/config/stations');if(r.ok){const{config}=await r.json();setGlobalStationConfig(config||{});}}catch(_){}
-      try{const r=await fetch('/api/precut');if(r.ok){const{ids}=await r.json();setPrecutConfig(new Set(ids));}}catch(_){}
-      const existing=await loadShift(today);
-      let loadedShift=existing||emptyShiftData(today);
-      setShift(loadedShift);
-      if(loadedShift.techcardId){
-        const tc=await loadTechCard(loadedShift.techcardId);
-        if(tc) setActiveTcEE(tc);
-      }
-      if(loadedShift.udTechcardId){
-        const tc=await loadTechCard(loadedShift.udTechcardId);
-        if(tc) setActiveTcUD(tc);
-      }
+      const data=await loadTrackerInitialData(today);
+      setAllEmployees(data.employees);
+      setArchiveIndex(data.archiveIndex);
+      setAllTechcards(data.techcards);
+      setGlobalStationConfig(data.config);
+      setPrecutConfig(new Set(data.ids));
+      setShift(data.shift);
+      if(data.tcEE) setActiveTcEE(data.tcEE);
+      if(data.tcUD) setActiveTcUD(data.tcUD);
       setLoading(false);
     })();
   },[]);
