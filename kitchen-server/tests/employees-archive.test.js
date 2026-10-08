@@ -222,3 +222,74 @@ test('reading an old shift keeps the archived employee ID, completion timestamp 
   assert.equal(saved.doneTimes['meat-123-pl-0'], '2026-10-04T12:00:00Z');
   assert.equal(saved.facts['meat-123-pl-0'], 25);
 });
+
+test('real PostgreSQL archive/restore and edits preserve separate shop states without touching persistent data', {
+  skip: process.env.EMPLOYEE_DB_TESTS !== '1' || !process.env.DATABASE_URL,
+}, async t => {
+  const client = await pool.connect();
+  const originalQuery = pool.query;
+  let server;
+  t.after(async () => {
+    pool.query = originalQuery;
+    if (server) {
+      server.closeAllConnections();
+      await new Promise(resolve => server.close(resolve));
+    }
+    await client.query('ROLLBACK');
+    client.release();
+    await pool.end();
+  });
+  await client.query('BEGIN');
+  // PostgreSQL resolves this session's temporary table before public.employees.
+  // The real router SQL runs unchanged, but no existing employee is modified.
+  await client.query('CREATE TEMP TABLE employees (LIKE public.employees INCLUDING DEFAULTS INCLUDING INDEXES) ON COMMIT DROP');
+  pool.query = (sql, params) => client.query(sql, params);
+  const app = express();
+  app.use(express.json());
+  app.use('/api/employees', employeesRouter);
+  server = app.listen(0);
+  await new Promise(resolve => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${server.address().port}/api/employees`;
+  const request = async (suffix, body, method = 'PATCH', expectedStatus = 200) => {
+    const response = await fetch(base + suffix, {
+      method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const data = await response.json();
+    assert.equal(response.status, expectedStatus, JSON.stringify(data));
+    return data;
+  };
+  const id = 'postgres-archive-test';
+  const meat = 'Мясной цех', sauce = 'Соусный цех', fish = 'Рыбный цех';
+  await request('', { id, name: 'Тест PostgreSQL', shops: [meat, sauce] }, 'POST');
+  await request(`/${id}/archive`, { archived: true }, 'PATCH', 400);
+  await request(`/${id}/archive`, { archived: true, shop: fish }, 'PATCH', 400);
+  const archive = (shop, archived) => request(`/${id}/archive`, { shop, archived });
+  assert.deepEqual((await archive(meat, true)).employee.archivedShops, [meat]);
+  assert.equal((await archive(meat, true)).employee.active, 1);
+  const edited = await request(`/${id}`, { name: 'Новое имя', shops: [meat, sauce] }, 'PUT');
+  assert.deepEqual(edited.employee.archivedShops, [meat]);
+  await request('', { id, name: 'Новое имя', shops: [meat, sauce] }, 'POST');
+  const full = (await archive(sauce, true)).employee;
+  assert.equal(full.active, 0);
+  assert.deepEqual(new Set(full.archivedShops), new Set([meat, sauce]));
+  const partial = (await archive(meat, false)).employee;
+  assert.equal(partial.active, 1);
+  assert.deepEqual(partial.archivedShops, [sauce]);
+  const addedShop = await request(`/${id}`, { name: 'Новое имя', shops: [meat, sauce, fish] }, 'PUT');
+  assert.deepEqual(addedShop.employee.archivedShops, [sauce]);
+  const removedShop = await request(`/${id}`, { name: 'Новое имя', shops: [meat, fish] }, 'PUT');
+  assert.deepEqual(removedShop.employee.archivedShops, []);
+  // Old globally archived records remain archived until explicitly restored.
+  await client.query('UPDATE employees SET active=0, archived_shops=$1 WHERE id=$2', ['[]', id]);
+  const legacyRestored = (await archive(meat, false)).employee;
+  assert.equal(legacyRestored.id, id);
+  assert.deepEqual(legacyRestored.archivedShops, [fish]);
+  assert.equal(legacyRestored.active, 1);
+  // Production also contains the old single-shop format with shops=NULL.
+  await client.query('UPDATE employees SET shops=NULL, shop=$1, active=0, archived_shops=$2 WHERE id=$3', [fish, '[]', id]);
+  const oldSingleShop = (await archive(fish, false)).employee;
+  assert.deepEqual(oldSingleShop.shops, [fish]);
+  assert.deepEqual(oldSingleShop.archivedShops, []);
+  assert.equal(oldSingleShop.active, 1);
+  assert.equal((await client.query('SELECT count(*)::integer AS n FROM public.employees WHERE id=$1', [id])).rows[0].n, 0);
+});
