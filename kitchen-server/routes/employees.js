@@ -9,12 +9,28 @@ function parseShops(row) {
   return row.shop ? [row.shop] : [];
 }
 
+function serializeEmployee(row) {
+  return { id: row.id, name: row.name, shop: row.shop, shops: parseShops(row), active: Number(row.active) };
+}
+
+function notifyEmployeesChanged(req) {
+  const wss = req.app.get('wss');
+  if (!wss) return;
+  const message = JSON.stringify({ type: 'employees_updated' });
+  wss.clients.forEach(client => {
+    if (client.readyState === 1) {
+      try { client.send(message); } catch (_) { /* Another tablet may have disconnected. */ }
+    }
+  });
+}
+
 router.get('/', async (req, res) => {
   try {
+    const includeArchived = req.query.include_archived === '1';
     const { rows } = await pool.query(
-      'SELECT id, name, shop, shops FROM employees WHERE active = 1 ORDER BY name'
+      `SELECT id, name, shop, shops, active FROM employees${includeArchived ? '' : ' WHERE active = 1'} ORDER BY name`
     );
-    res.json({ employees: rows.map(r => ({ id: r.id, name: r.name, shop: r.shop, shops: parseShops(r) })) });
+    res.json({ employees: rows.map(serializeEmployee) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -33,9 +49,10 @@ router.post('/', async (req, res) => {
       INSERT INTO employees(id, name, shop, shops, active, updated_at)
       VALUES($1, $2, $3, $4, 1, NOW()::text)
       ON CONFLICT(id) DO UPDATE SET
-        name = $2, shop = $3, shops = $4, active = 1, updated_at = NOW()::text
+        name = $2, shop = $3, shops = $4, updated_at = NOW()::text
     `, [id, name.trim(), shopLegacy, JSON.stringify(shopsArr)]);
     res.json({ ok: true });
+    notifyEmployeesChanged(req);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -54,6 +71,26 @@ router.put('/:id', async (req, res) => {
       [name.trim(), shopLegacy, JSON.stringify(shopsArr), req.params.id]
     );
     res.json({ ok: true });
+    notifyEmployeesChanged(req);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/:id/archive', async (req, res) => {
+  const { archived } = req.body;
+  if (typeof archived !== 'boolean') return res.status(400).json({ error: 'archived must be a boolean' });
+  try {
+    const result = await pool.query(
+      'UPDATE employees SET active=$1, updated_at=NOW()::text WHERE id=$2',
+      [archived ? 0 : 1, req.params.id]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: 'Сотрудник не найден' });
+    const { rows: [employee] } = await pool.query(
+      'SELECT id, name, shop, shops, active FROM employees WHERE id=$1', [req.params.id]
+    );
+    res.json({ ok: true, employee: serializeEmployee(employee) });
+    notifyEmployeesChanged(req);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -66,6 +103,7 @@ router.delete('/:id', async (req, res) => {
       [req.params.id]
     );
     res.json({ ok: true });
+    notifyEmployeesChanged(req);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

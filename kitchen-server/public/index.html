@@ -6988,6 +6988,10 @@ const INITIAL_EMPLOYEES = [
 // Соусный цех и Молочный цех — общие сотрудники
 const SAUCE_MILK_SHOPS = ['Соусный цех', 'Молочный цех'];
 
+function isEmployeeActive(employee) {
+  return employee.active !== 0 && employee.active !== false && employee.active !== '0';
+}
+
 function getShopEmployees(shopName, allEmployees) {
   const sourceShops = Array.isArray(shopName)
     ? shopName
@@ -7046,23 +7050,18 @@ function startTimeToDate(dateKey, hhmm) {
 // STORAGE
 // ============================================================
 async function loadEmployeesGlobal() {
-  try {
-    const r = await fetch('/api/employees');
-    if (!r.ok) throw new Error('fetch failed');
-    const { employees } = await r.json();
-    if (employees && employees.length > 0) return employees;
-    await saveEmployeesGlobal(INITIAL_EMPLOYEES);
-    return INITIAL_EMPLOYEES;
-  } catch(e) { return [...INITIAL_EMPLOYEES]; }
+  // Keep archived identities for history; filter only the selectable controls.
+  const r = await fetch('/api/employees?include_archived=1');
+  if (!r.ok) throw new Error('Не удалось загрузить сотрудников');
+  const { employees } = await r.json();
+  if (!Array.isArray(employees)) throw new Error('Некорректный список сотрудников');
+  return employees;
 }
 async function addEmployeeToServer(emp) {
-  try {
-    await fetch('/api/employees', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(emp)
-    });
-  } catch(e) {}
+  const r = await fetch('/api/employees', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(emp)
+  });
+  if (!r.ok) throw new Error('Не удалось добавить сотрудника');
 }
 async function removeEmployeeFromServer(id) {
   try {
@@ -7070,13 +7069,17 @@ async function removeEmployeeFromServer(id) {
   } catch(e) {}
 }
 async function updateEmployeeOnServer(id, name, shops) {
-  try {
-    await fetch('/api/employees/'+id, {
-      method: 'PUT',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name, shops})
-    });
-  } catch(e) {}
+  const r = await fetch('/api/employees/'+encodeURIComponent(id), {
+    method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name, shops})
+  });
+  if (!r.ok) throw new Error('Не удалось сохранить сотрудника');
+}
+async function setEmployeeArchivedOnServer(id, archived) {
+  const r = await fetch('/api/employees/'+encodeURIComponent(id)+'/archive', {
+    method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({archived})
+  });
+  if (!r.ok) throw new Error('Не удалось '+(archived?'архивировать':'восстановить')+' сотрудника');
+  return (await r.json()).employee;
 }
 async function loadShopsFromServer() {
   try {
@@ -7391,8 +7394,12 @@ function PackTable({packLines, facts, onFactChange, itemKey,
                 borderTop:'none'
               }},
                 e('div',{style:{display:'flex',gap:6,flexWrap:'wrap'}},
-                  shopEmployees.map(emp=>{
+                  shopEmployees.filter(emp=>isEmployeeActive(emp)||lineEmpIds.includes(emp.id)).map(emp=>{
                     const sel=lineEmpIds.includes(emp.id);
+                    if(!isEmployeeActive(emp)) return e('span',{
+                      key:emp.id,className:'emp-archived-mark',
+                      style:{padding:'7px 12px',borderRadius:20,background:'var(--ok-bg)',color:'var(--ok)',fontSize:13}
+                    },emp.name+' (архив)');
                     return e('button',{
                       key:emp.id,
                       onClick:()=>{
@@ -7438,8 +7445,12 @@ function PackTable({packLines, facts, onFactChange, itemKey,
 // ============================================================
 function EmployeeToggles({employees, selectedIds, onToggle, warn}) {
   return e('div',{className:'emp-toggles'+(warn?' emp-warn':'')},
-    employees.map(emp=>{
+    employees.filter(emp=>isEmployeeActive(emp)||(selectedIds||[]).includes(emp.id)).map(emp=>{
       const sel=(selectedIds||[]).includes(emp.id);
+      if(!isEmployeeActive(emp)) return e('span',{
+        key:emp.id,className:'emp-archived-mark',
+        style:{padding:'7px 12px',borderRadius:20,background:'var(--ok-bg)',color:'var(--ok)',fontSize:13}
+      },emp.name+' (архив)');
       return e('button',{
         key:emp.id, className:'emp-toggle'+(sel?' selected':''),
         onClick:()=>onToggle(emp.id)
@@ -8925,99 +8936,151 @@ function EmployeesTab({employees, onSave}) {
   const [editingId, setEditingId]=useState(null);
   const [editName, setEditName]=useState('');
   const [editShops, setEditShops]=useState([]);
+  const [view,setView]=useState('active');
+  const [pendingId,setPendingId]=useState(null);
+  const [adding,setAdding]=useState(false);
+  const [savingEdit,setSavingEdit]=useState(false);
+  const [error,setError]=useState('');
+  const [shopsLoading,setShopsLoading]=useState(true);
 
   useEffect(()=>{
-    loadShopsFromServer().then(s=>{ setShops(s); });
+    loadShopsFromServer().then(s=>{ setShops(s); }).catch(()=>{
+      setError('Не удалось загрузить список цехов. Обновите страницу и попробуйте снова.');
+    }).finally(()=>setShopsLoading(false));
   },[]);
   useEffect(()=>{ setList([...employees]); },[employees]);
 
   const add=async()=>{
-    if(!newName.trim()||newShops.length===0) return;
-    const emp={id:'e_'+uid(),name:newName.trim(),shops:newShops,shop:newShops[0]};
-    const next=[...list,emp];
-    setList(next); setNewName(''); setNewShops([]);
-    await addEmployeeToServer(emp);
-    onSave(next);
+    if(adding||!newName.trim()||newShops.length===0) return;
+    setAdding(true); setError('');
+    const emp={id:'e_'+uid(),name:newName.trim(),shops:[...newShops],shop:newShops[0],active:1};
+    try {
+      await addEmployeeToServer(emp);
+      const next=[...list,emp];
+      setList(next); onSave(next);
+      setNewName(''); setNewShops([]);
+    } catch(err) {
+      setError('Не удалось добавить сотрудника. Проверьте соединение и попробуйте снова.');
+    } finally { setAdding(false); }
   };
 
   const startEdit=(emp)=>{
+    setError('');
     setEditingId(emp.id);
     setEditName(emp.name);
     setEditShops(Array.isArray(emp.shops)&&emp.shops.length>0 ? emp.shops : (emp.shop?[emp.shop]:[]));
   };
 
   const saveEdit=async()=>{
-    if(!editName.trim()||editShops.length===0) return;
-    const next=list.map(x=>x.id===editingId?{...x,name:editName.trim(),shops:editShops,shop:editShops[0]}:x);
-    setList(next); setEditingId(null);
-    await updateEmployeeOnServer(editingId, editName.trim(), editShops);
-    onSave(next);
+    if(savingEdit||!editName.trim()||editShops.length===0) return;
+    setSavingEdit(true); setError('');
+    try {
+      await updateEmployeeOnServer(editingId, editName.trim(), editShops);
+      const next=list.map(x=>x.id===editingId?{...x,name:editName.trim(),shops:[...editShops],shop:editShops[0]}:x);
+      setList(next); onSave(next); setEditingId(null);
+    } catch(err) {
+      setError('Не удалось сохранить изменения. Введённые данные сохранены в форме — попробуйте снова.');
+    } finally { setSavingEdit(false); }
   };
 
-  const remove=async(id)=>{
-    const next=list.filter(x=>x.id!==id);
-    setList(next);
-    await removeEmployeeFromServer(id);
-    onSave(next);
+  const changeArchiveState=async(emp,archived)=>{
+    if(pendingId!==null) return;
+    if(archived && !window.confirm(`Переместить сотрудника «${emp.name}» в архив? Его отметки и имя в истории сохранятся. Это не удаление.`)) return;
+    setPendingId(emp.id); setError('');
+    try {
+      const updated=await setEmployeeArchivedOnServer(emp.id,archived);
+      const next=list.map(x=>x.id===emp.id?{...x,...updated}:x);
+      setList(next); onSave(next);
+    } catch(err) {
+      setError(archived
+        ? 'Не удалось архивировать сотрудника. Список не изменён — попробуйте снова.'
+        : 'Не удалось восстановить сотрудника. Список не изменён — попробуйте снова.');
+    } finally { setPendingId(null); }
   };
 
+  const visibleList=list.filter(emp=>view==='active'?isEmployeeActive(emp):!isEmployeeActive(emp));
   // Group by shop; employee appears in each of their shops
   const grouped={};
   shops.forEach(s=>{grouped[s]=[];});
-  list.forEach(emp=>{
+  visibleList.forEach(emp=>{
     const empShops=Array.isArray(emp.shops)&&emp.shops.length>0?emp.shops:(emp.shop?[emp.shop]:[]);
-    empShops.forEach(s=>{ if(!grouped[s]) grouped[s]=[]; grouped[s].push(emp); });
+    if(empShops.length===0) {
+      if(!grouped['Цех не указан']) grouped['Цех не указан']=[];
+      grouped['Цех не указан'].push(emp);
+    } else {
+      empShops.forEach(s=>{ if(!grouped[s]) grouped[s]=[]; grouped[s].push(emp); });
+    }
   });
-  shops.forEach(s=>{ grouped[s].sort((a,b)=>a.name.localeCompare(b.name,'ru')); });
+  Object.keys(grouped).forEach(s=>{ grouped[s].sort((a,b)=>a.name.localeCompare(b.name,'ru')); });
 
   const renderEmpRow=(emp)=>{
     const empShops=Array.isArray(emp.shops)&&emp.shops.length>0?emp.shops:(emp.shop?[emp.shop]:[]);
     const isEditing=editingId===emp.id;
+    const isPending=pendingId===emp.id;
     return e('div',{key:emp.id,className:'emp-item',style:{flexDirection:'column',alignItems:'stretch',gap:8,marginBottom:4}},
       isEditing
         ? e('div',null,
             e('input',{className:'add-emp-input',style:{width:'100%',boxSizing:'border-box',marginBottom:6},
-              value:editName,onChange:ev=>setEditName(ev.target.value),autoFocus:true}),
+              value:editName,onChange:ev=>setEditName(ev.target.value),autoFocus:true,disabled:savingEdit}),
             shops.length>0 && e(ShopsCheckboxes,{shops,selected:editShops,onChange:setEditShops}),
             e('div',{style:{display:'flex',gap:8,marginTop:8}},
-              e('button',{className:'btn-primary',onClick:saveEdit,
-                style:{opacity:(!editName.trim()||editShops.length===0)?0.5:1}},'Сохранить'),
-              e('button',{className:'btn-secondary',onClick:()=>setEditingId(null)},'Отмена')
+              e('button',{className:'btn-primary',onClick:saveEdit,disabled:savingEdit||!editName.trim()||editShops.length===0,
+                style:{opacity:(savingEdit||!editName.trim()||editShops.length===0)?0.5:1}},savingEdit?'Сохранение…':'Сохранить'),
+              e('button',{className:'btn-secondary',onClick:()=>setEditingId(null),disabled:savingEdit},'Отмена')
             )
           )
-        : e('div',{style:{display:'flex',alignItems:'center',gap:8}},
-            e('div',{style:{flex:1}},
+        : e('div',{style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}},
+            e('div',{style:{flex:'1 1 160px',minWidth:0}},
               e('div',{className:'emp-item-name'},emp.name),
-              empShops.length>1 && e('div',{style:{fontSize:11,color:'var(--muted)'}},empShops.join(' · '))
+              e('div',{style:{fontSize:11,color:'var(--muted)'}},empShops.length>0?empShops.join(' · '):'Цех не указан'),
+              view==='archived' && e('div',{style:{fontSize:11,color:'var(--muted)',marginTop:3}},'В архиве · история сохранена')
             ),
             e('button',{className:'btn-secondary',onClick:()=>startEdit(emp),
-              style:{display:'flex',alignItems:'center',gap:4,padding:'4px 10px'}},'✏ Изменить'),
-            e('button',{className:'btn-danger',onClick:()=>remove(emp.id),
-              style:{display:'flex',alignItems:'center',gap:4}},
-              e(SvgTrash,{size:14}),' Удалить')
+              disabled:isPending||pendingId!==null,style:{display:'flex',alignItems:'center',gap:4,padding:'4px 10px'}},'Изменить'),
+            e('button',{className:view==='archived'?'btn-primary':'btn-secondary',
+              onClick:()=>changeArchiveState(emp,view!=='archived'),disabled:isPending||pendingId!==null,
+              style:{display:'flex',alignItems:'center',gap:4,padding:'4px 10px',opacity:(isPending||pendingId!==null)?0.55:1}},
+              isPending?(view==='archived'?'Восстановление…':'Архивирование…'):(view==='archived'?'Восстановить':'В архив'))
           )
     );
   };
 
   return e('div',null,
     e('h2',{className:'page-title',style:{marginBottom:4}},'Сотрудники'),
-    e('p',{className:'page-sub'},'Сотрудник может работать в нескольких цехах'),
+    e('p',{className:'page-sub'},'Сотрудник может работать в нескольких цехах. Архив скрывает его из новых отметок, сохраняя историю.'),
+    error && e('div',{role:'alert',style:{background:'var(--surface)',border:'1px solid var(--danger,#c65b54)',borderRadius:10,padding:'10px 12px',marginBottom:14,color:'var(--danger,#a83f38)'}},error),
 
     // Add form
     e('div',{style:{background:'var(--surface)',borderRadius:12,padding:16,marginBottom:20}},
       e('div',{style:{fontWeight:700,marginBottom:8}},'Новый сотрудник'),
       e('input',{className:'add-emp-input',placeholder:'Имя',style:{width:'100%',boxSizing:'border-box',marginBottom:8},
-        value:newName,onChange:ev=>setNewName(ev.target.value),
+        value:newName,onChange:ev=>setNewName(ev.target.value),disabled:adding,
         onKeyDown:ev=>ev.key==='Enter'&&add()}),
       shops.length>0 && e(ShopsCheckboxes,{shops,selected:newShops,onChange:setNewShops}),
-      e('button',{className:'btn-primary',onClick:add,
-        style:{marginTop:10,display:'flex',alignItems:'center',gap:8,opacity:(!newName.trim()||newShops.length===0)?0.5:1}},
-        e(SvgPlus,{size:18}),' Добавить')
+      shopsLoading
+        ? e('div',{style:{fontSize:12,color:'var(--muted)',marginTop:8}},'Загружаем список цехов…')
+        : shops.length===0
+          ? e('div',{style:{fontSize:12,color:'var(--muted)',marginTop:8}},'Нет доступных цехов')
+          : e('button',{className:'btn-primary',onClick:add,disabled:adding||!newName.trim()||newShops.length===0,
+            style:{marginTop:10,display:'flex',alignItems:'center',gap:8,opacity:(adding||!newName.trim()||newShops.length===0)?0.5:1}},
+            e(SvgPlus,{size:18}),adding?'Добавление…':' Добавить')
+    ),
+
+    e('div',{style:{display:'flex',gap:8,marginBottom:14}},
+      e('button',{className:view==='active'?'btn-primary':'btn-secondary',onClick:()=>{setView('active');setEditingId(null);setError('');}},
+        `Активные (${list.filter(isEmployeeActive).length})`),
+      e('button',{className:view==='archived'?'btn-primary':'btn-secondary',onClick:()=>{setView('archived');setEditingId(null);setError('');}},
+        `Архив (${list.filter(emp=>!isEmployeeActive(emp)).length})`)
     ),
 
     // Grouped by shop
     e('div',null,
-      shops.filter(s=>grouped[s]&&grouped[s].length>0).map(shop=>
+      shopsLoading
+        ? e('div',{className:'emp-list',style:{padding:16,color:'var(--muted)'}},'Загружаем сотрудников…')
+        : visibleList.length===0
+          ? e('div',{className:'emp-list',style:{padding:18,color:'var(--muted)'}},
+              view==='archived'?'В архиве пока нет сотрудников.':'Активных сотрудников пока нет.')
+          : Object.keys(grouped).filter(shop=>grouped[shop].length>0).map(shop=>
         e('div',{key:shop},
           e('div',{className:'shop-group-header'},shop+` (${grouped[shop].length})`),
           e('div',{className:'emp-list'}, grouped[shop].map(emp=>renderEmpRow(emp)))
@@ -12617,6 +12680,7 @@ function App() {
 
   const [loading,setLoading]=useState(true);
   const [today]=useState(todayKey);
+  const [initialError,setInitialError]=useState('');
   const [viewDate,setViewDate]=useState(todayKey);
   const [mode,setMode]=useState(shopParam?'kitchen':isManager?'manager':'home'); // home | kitchen | manager
   const [selectedShop,setSelectedShop]=useState(null);
@@ -12634,7 +12698,9 @@ function App() {
   // Load initial data
   useEffect(()=>{
     (async()=>{
-      const data=await loadTrackerInitialData(today);
+      let data;
+      try { data=await loadTrackerInitialData(today); }
+      catch(err) { setInitialError(err.message||'Не удалось загрузить трекер'); return; }
       setAllEmployees(data.employees);
       setArchiveIndex(data.archiveIndex);
       setAllTechcards(data.techcards);
@@ -12665,6 +12731,11 @@ function App() {
     ws.onmessage=(e)=>{
       try {
         const msg=JSON.parse(e.data);
+        if(msg.type==='employees_updated'){
+          loadEmployeesGlobal().then(setAllEmployees).catch(()=>{
+            setToast('Не удалось обновить сотрудников. Обновите страницу.');
+          });
+        }
         // Игнорируем собственные апдейты (clientId совпадает с нашим)
         if(msg.type==='shift_updated' && msg.date===shift.date && msg.clientId!==MY_CLIENT_ID){
           // Мержим входящий shift с локальным: true в doneFlags не откатывается назад,
@@ -12697,6 +12768,21 @@ function App() {
     return ()=>ws.close();
   },[shift.date]);
 
+  useEffect(()=>{
+    const refreshEmployees=()=>{
+      if(document.visibilityState==='hidden') return;
+      loadEmployeesGlobal().then(setAllEmployees).catch(()=>{
+        setToast('Не удалось обновить сотрудников. Обновите страницу.');
+      });
+    };
+    window.addEventListener('focus',refreshEmployees);
+    document.addEventListener('visibilitychange',refreshEmployees);
+    return ()=>{
+      window.removeEventListener('focus',refreshEmployees);
+      document.removeEventListener('visibilitychange',refreshEmployees);
+    };
+  },[]);
+
   // Expose persist to save bar
   persistShiftRef.fn=persistShift;
 
@@ -12711,7 +12797,7 @@ function App() {
 
   const handleEmployeesChange=(list)=>{
     setAllEmployees(list);
-    // Серверное сохранение делается в EmployeesTab напрямую (add/remove по отдельности)
+    // EmployeesTab persists individual changes; this catalog also retains archived names.
   };
 
   const openArchiveDate=async(dk)=>{
@@ -12785,6 +12871,9 @@ function App() {
     e(ProductJournalPage,{initialActId:actIdParam})
   );
 
+  if(initialError) return e('div',{className:'empty-state',style:{marginTop:60}},
+    e('div',{role:'alert',style:{color:'var(--danger)'}},initialError),
+    e('button',{className:'btn-secondary',onClick:()=>location.reload(),style:{marginTop:12}},'Повторить загрузку'));
   if(loading) return e('div',{className:'empty-state',style:{marginTop:60}},'Загрузка…');
 
   const isArchive=viewDate!==today;
