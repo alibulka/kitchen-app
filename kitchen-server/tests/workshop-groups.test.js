@@ -26,7 +26,7 @@ const workshopHelpers = loadFunctionRange(
   ['mergeWorkshopGroups']
 );
 const employeeHelpers = loadFunctionRange(
-  'function getShopEmployees',
+  'function getEmployeeShops',
   '// ============================================================\n// УТИЛИТЫ',
   ['getShopEmployees']
 );

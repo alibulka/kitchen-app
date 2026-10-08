@@ -6791,7 +6791,7 @@ function getStationsFromTc(tc, source) {
   if (tc.stations && tc.stations.length > 0) {
     return tc.stations.map(s => ({
       ...s,
-      items: s.items.map(i => ({ ...i, source }))
+      items: s.items.map(i => ({ ...i, source, __sourceShop:s.shop }))
     }));
   }
   if (!tc.items || Object.keys(tc.items).length === 0) return STATIONS_CATALOG_FROM_EXCEL;
@@ -6799,7 +6799,7 @@ function getStationsFromTc(tc, source) {
   return STATIONS_CATALOG_FROM_EXCEL
     .map(station => ({
       ...station,
-      items: station.items.filter(item => tcItemIds.has(String(item.id))).map(i => ({ ...i, source }))
+      items: station.items.filter(item => tcItemIds.has(String(item.id))).map(i => ({ ...i, source, __sourceShop:station.shop }))
     }))
     .filter(station => station.items.length > 0);
 }
@@ -6928,14 +6928,17 @@ function mergeWorkshopGroups(rawGroups, viewDate, today) {
           name: pair[2] + ' / ' + label,
           items: [],
           _sourceKeys: [],
+          _sourceShopByStationKey: {},
           _visibleName: label,
           _normalizedVisibleName: normalizedLabel
         };
         stations.push(target);
       }
       target._sourceKeys.push(station.key);
+      target._sourceShopByStationKey[station.key]=station.shop||source.shop;
       (station.items || []).forEach(item => target.items.push({
         ...item,
+        __sourceShop: station.shop || source.shop,
         __sourceStationKey: station.key,
         __visualItemKey: station.key + '-' + item.id
       }));
@@ -6988,18 +6991,43 @@ const INITIAL_EMPLOYEES = [
 // Соусный цех и Молочный цех — общие сотрудники
 const SAUCE_MILK_SHOPS = ['Соусный цех', 'Молочный цех'];
 
-function isEmployeeActive(employee) {
-  return employee.active !== 0 && employee.active !== false && employee.active !== '0';
+function getEmployeeShops(employee) {
+  return Array.isArray(employee.shops)&&employee.shops.length>0?employee.shops:(employee.shop?[employee.shop]:[]);
+}
+function isEmployeeActive(employee, shop) {
+  const globallyActive=employee.active !== 0 && employee.active !== false && employee.active !== '0';
+  if(shop) return globallyActive && getEmployeeShops(employee).includes(shop) &&
+    !(employee.archivedShops||[]).includes(shop);
+  if(typeof employee._activeInContext==='boolean') return employee._activeInContext;
+  return globallyActive && (getEmployeeShops(employee).length===0 ||
+    getEmployeeShops(employee).some(s=>!(employee.archivedShops||[]).includes(s)));
 }
 
 function getShopEmployees(shopName, allEmployees) {
   const sourceShops = Array.isArray(shopName)
     ? shopName
-    : (shopName && shopName._sourceShops) || [shopName];
-  return allEmployees.filter(e => {
-    const s = Array.isArray(e.shops) && e.shops.length > 0 ? e.shops : (e.shop ? [e.shop] : []);
-    return sourceShops.some(shop => s.includes(shop));
+    : (shopName && shopName._sourceShops) || [typeof shopName==='object'?shopName.shop:shopName];
+  const employees=allEmployees.filter(emp => sourceShops.some(shop=>getEmployeeShops(emp).includes(shop)))
+    .map(emp=>({...emp,_activeInContext:sourceShops.some(shop=>isEmployeeActive(emp,shop))}));
+  const sourceShopByStationKey={};
+  ((shopName&&shopName.stations)||[]).forEach(station=>{
+    sourceShopByStationKey[station.key]=station.shop;
+    Object.assign(sourceShopByStationKey,station._sourceShopByStationKey||{});
+    (station.items||[]).forEach(item=>{
+      if(item.__sourceStationKey&&item.__sourceShop) sourceShopByStationKey[item.__sourceStationKey]=item.__sourceShop;
+    });
   });
+  Object.defineProperty(employees,'sourceShopByStationKey',{value:sourceShopByStationKey});
+  return employees;
+}
+
+function getItemEmployees(item, stationKey, employees) {
+  const sourceShop=item.__sourceShop||employees.sourceShopByStationKey?.[stationKey];
+  // Preserve the existing shared employee pool for merged workshops, except
+  // when an employee's own membership is explicitly archived in this shop.
+  return sourceShop?employees.map(emp=>({...emp,_activeInContext:
+    getEmployeeShops(emp).includes(sourceShop)?isEmployeeActive(emp,sourceShop):isEmployeeActive(emp)
+  })):employees;
 }
 
 // ============================================================
@@ -7073,10 +7101,11 @@ async function updateEmployeeOnServer(id, name, shops) {
     method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name, shops})
   });
   if (!r.ok) throw new Error('Не удалось сохранить сотрудника');
+  return (await r.json()).employee;
 }
-async function setEmployeeArchivedOnServer(id, archived) {
+async function setEmployeeArchivedOnServer(id, archived, shop) {
   const r = await fetch('/api/employees/'+encodeURIComponent(id)+'/archive', {
-    method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({archived})
+    method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({archived,shop})
   });
   if (!r.ok) throw new Error('Не удалось '+(archived?'архивировать':'восстановить')+' сотрудника');
   return (await r.json()).employee;
@@ -7465,6 +7494,7 @@ function EmployeeToggles({employees, selectedIds, onToggle, warn}) {
 const SKIP_LABELS={'no_material':'Нет сырья','no_time':'Не успели'};
 
 function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, prevLineData, overridePackLines, keyPrefix, autoFillWeight, hideSkip}) {
+  shopEmployees=getItemEmployees(item,stationKey,shopEmployees);
   const itemKey=`${keyPrefix||''}${stationKey}-${item.id}`;
   const [noEmpWarn,setNoEmpWarn]=useState(false);
   const [showSkipPicker,setShowSkipPicker]=useState(false);
@@ -8252,7 +8282,7 @@ function KitchenShopPage({shopGroup, shift, onShiftChange, allEmployees, onBack,
   const stations=shopGroup.stations||[];
   const [stationIdx,setStationIdx]=useState(0);
   const station=stations[stationIdx]||stations[0];
-  const shopEmployees=useMemo(()=>getShopEmployees(shopGroup._sourceShops||shopGroup.shop,allEmployees),[shopGroup,allEmployees]);
+  const shopEmployees=useMemo(()=>getShopEmployees(shopGroup,allEmployees),[shopGroup,allEmployees]);
   // Заготовки Робокопа передаём в Ручную нарезку
   const robokopItems=useMemo(()=>{
     const st=stations.find(s=>s.key===ROBOKOP_KEY);
@@ -8975,20 +9005,22 @@ function EmployeesTab({employees, onSave}) {
     if(savingEdit||!editName.trim()||editShops.length===0) return;
     setSavingEdit(true); setError('');
     try {
-      await updateEmployeeOnServer(editingId, editName.trim(), editShops);
-      const next=list.map(x=>x.id===editingId?{...x,name:editName.trim(),shops:[...editShops],shop:editShops[0]}:x);
+      const updated=await updateEmployeeOnServer(editingId, editName.trim(), editShops);
+      const next=list.map(x=>x.id===editingId
+        ? {...x,...updated,name:updated?.name||editName.trim(),shops:Array.isArray(updated?.shops)?updated.shops:[...editShops],shop:updated?.shop||editShops[0]}
+        : x);
       setList(next); onSave(next); setEditingId(null);
     } catch(err) {
       setError('Не удалось сохранить изменения. Введённые данные сохранены в форме — попробуйте снова.');
     } finally { setSavingEdit(false); }
   };
 
-  const changeArchiveState=async(emp,archived)=>{
+  const changeArchiveState=async(emp,archived,shop)=>{
     if(pendingId!==null) return;
-    if(archived && !window.confirm(`Переместить сотрудника «${emp.name}» в архив? Его отметки и имя в истории сохранятся. Это не удаление.`)) return;
+    if(!window.confirm(`Сотрудник «${emp.name}» — цех «${shop}». ${archived?'Архивировать':'Восстановить'} только в этом цехе? В остальных цехах статус не изменится, отметки и история останутся без изменений.`)) return;
     setPendingId(emp.id); setError('');
     try {
-      const updated=await setEmployeeArchivedOnServer(emp.id,archived);
+      const updated=await setEmployeeArchivedOnServer(emp.id,archived,shop);
       const next=list.map(x=>x.id===emp.id?{...x,...updated}:x);
       setList(next); onSave(next);
     } catch(err) {
@@ -8998,28 +9030,39 @@ function EmployeesTab({employees, onSave}) {
     } finally { setPendingId(null); }
   };
 
-  const visibleList=list.filter(emp=>view==='active'?isEmployeeActive(emp):!isEmployeeActive(emp));
-  // Group by shop; employee appears in each of their shops
+  // Memberships, not the employee's aggregate status, determine each shop's list.
   const grouped={};
   shops.forEach(s=>{grouped[s]=[];});
-  visibleList.forEach(emp=>{
-    const empShops=Array.isArray(emp.shops)&&emp.shops.length>0?emp.shops:(emp.shop?[emp.shop]:[]);
+  const membershipsFor=(emp)=> {
+    const assigned=getEmployeeShops(emp);
+    return Array.isArray(assigned)&&assigned.length>0?assigned:(emp.shop?[emp.shop]:[]);
+  };
+  list.forEach(emp=>{
+    const empShops=membershipsFor(emp);
+    empShops.forEach(shop=>{
+      const activeHere=isEmployeeActive(emp,shop);
+      if((view==='active'&&activeHere)||(view==='archived'&&!activeHere)) {
+        if(!grouped[shop]) grouped[shop]=[];
+        grouped[shop].push(emp);
+      }
+    });
     if(empShops.length===0) {
-      if(!grouped['Цех не указан']) grouped['Цех не указан']=[];
-      grouped['Цех не указан'].push(emp);
-    } else {
-      empShops.forEach(s=>{ if(!grouped[s]) grouped[s]=[]; grouped[s].push(emp); });
+      const activeSomewhere=isEmployeeActive(emp);
+      if((view==='active'&&activeSomewhere)||(view==='archived'&&!activeSomewhere)) {
+        if(!grouped['Цех не указан']) grouped['Цех не указан']=[];
+        grouped['Цех не указан'].push(emp);
+      }
     }
   });
   Object.keys(grouped).forEach(s=>{ grouped[s].sort((a,b)=>a.name.localeCompare(b.name,'ru')); });
 
-  const renderEmpRow=(emp)=>{
-    const empShops=Array.isArray(emp.shops)&&emp.shops.length>0?emp.shops:(emp.shop?[emp.shop]:[]);
+  const renderEmpRow=(emp,shop)=>{
     const isEditing=editingId===emp.id;
     const isPending=pendingId===emp.id;
     return e('div',{key:emp.id,className:'emp-item',style:{flexDirection:'column',alignItems:'stretch',gap:8,marginBottom:4}},
       isEditing
         ? e('div',null,
+            e('div',{style:{fontSize:11,color:'var(--muted)',marginBottom:6}},'Редактирование · цех: '+shop),
             e('input',{className:'add-emp-input',style:{width:'100%',boxSizing:'border-box',marginBottom:6},
               value:editName,onChange:ev=>setEditName(ev.target.value),autoFocus:true,disabled:savingEdit}),
             shops.length>0 && e(ShopsCheckboxes,{shops,selected:editShops,onChange:setEditShops}),
@@ -9032,14 +9075,16 @@ function EmployeesTab({employees, onSave}) {
         : e('div',{style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}},
             e('div',{style:{flex:'1 1 160px',minWidth:0}},
               e('div',{className:'emp-item-name'},emp.name),
-              e('div',{style:{fontSize:11,color:'var(--muted)'}},empShops.length>0?empShops.join(' · '):'Цех не указан'),
-              view==='archived' && e('div',{style:{fontSize:11,color:'var(--muted)',marginTop:3}},'В архиве · история сохранена')
+              e('div',{style:{fontSize:11,color:'var(--muted)'}},'Цех: '+shop),
+              e('div',{style:{fontSize:11,color:'var(--muted)',marginTop:2}},
+                `Другие цеха: ${membershipsFor(emp).filter(s=>s!==shop).join(' · ')||'нет'}`),
+              view==='archived' && e('div',{style:{fontSize:11,color:'var(--muted)',marginTop:3}},'В архиве в этом цехе · история сохранена')
             ),
             e('button',{className:'btn-secondary',onClick:()=>startEdit(emp),
               disabled:isPending||pendingId!==null,style:{display:'flex',alignItems:'center',gap:4,padding:'4px 10px'}},'Изменить'),
             e('button',{className:view==='archived'?'btn-primary':'btn-secondary',
-              onClick:()=>changeArchiveState(emp,view!=='archived'),disabled:isPending||pendingId!==null,
-              style:{display:'flex',alignItems:'center',gap:4,padding:'4px 10px',opacity:(isPending||pendingId!==null)?0.55:1}},
+              onClick:()=>changeArchiveState(emp,view!=='archived',shop),disabled:isPending||pendingId!==null||shop==='Цех не указан',
+              style:{display:'flex',alignItems:'center',gap:4,padding:'4px 10px',opacity:(isPending||pendingId!==null||shop==='Цех не указан')?0.55:1}},
               isPending?(view==='archived'?'Восстановление…':'Архивирование…'):(view==='archived'?'Восстановить':'В архив'))
           )
     );
@@ -9068,22 +9113,23 @@ function EmployeesTab({employees, onSave}) {
 
     e('div',{style:{display:'flex',gap:8,marginBottom:14}},
       e('button',{className:view==='active'?'btn-primary':'btn-secondary',onClick:()=>{setView('active');setEditingId(null);setError('');}},
-        `Активные (${list.filter(isEmployeeActive).length})`),
+        `Активные (${list.filter(emp=>membershipsFor(emp).some(shop=>isEmployeeActive(emp,shop))||(!membershipsFor(emp).length&&isEmployeeActive(emp))).length})`),
       e('button',{className:view==='archived'?'btn-primary':'btn-secondary',onClick:()=>{setView('archived');setEditingId(null);setError('');}},
-        `Архив (${list.filter(emp=>!isEmployeeActive(emp)).length})`)
+        `Архив (${list.filter(emp=>membershipsFor(emp).some(shop=>!isEmployeeActive(emp,shop))||(!membershipsFor(emp).length&&!isEmployeeActive(emp))).length})`)
     ),
 
     // Grouped by shop
+    e('div',{style:{fontSize:11,color:'var(--muted)',marginBottom:8}},'Счётчики — уникальные сотрудники; один человек может учитываться и в активных, и в архиве, если статусы различаются по цехам.'),
     e('div',null,
       shopsLoading
         ? e('div',{className:'emp-list',style:{padding:16,color:'var(--muted)'}},'Загружаем сотрудников…')
-        : visibleList.length===0
+        : Object.values(grouped).every(rows=>rows.length===0)
           ? e('div',{className:'emp-list',style:{padding:18,color:'var(--muted)'}},
               view==='archived'?'В архиве пока нет сотрудников.':'Активных сотрудников пока нет.')
           : Object.keys(grouped).filter(shop=>grouped[shop].length>0).map(shop=>
         e('div',{key:shop},
           e('div',{className:'shop-group-header'},shop+` (${grouped[shop].length})`),
-          e('div',{className:'emp-list'}, grouped[shop].map(emp=>renderEmpRow(emp)))
+          e('div',{className:'emp-list'}, grouped[shop].map(emp=>renderEmpRow(emp,shop)))
         )
       )
     )

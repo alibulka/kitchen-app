@@ -10,8 +10,9 @@ const employeesRouter = require('../routes/employees');
 test('archive/restore retains identity, shops and historical shift records, with active-only and full catalog reads', async t => {
   const originalQuery = pool.query;
   const records = [
-    { id: 'archive-test', name: 'Тест истории', shop: 'Мясной цех', shops: '["Мясной цех","Соусный цех"]', active: 1 },
-    { id: 'active-test', name: 'Тест активный', shop: 'Мясной цех', shops: null, active: 1 },
+    { id: 'archive-test', name: 'Тест истории', shop: 'Мясной цех', shops: '["Мясной цех","Соусный цех"]', active: 1, archived_shops: '[]' },
+    { id: 'active-test', name: 'Тест активный', shop: 'Мясной цех', shops: null, active: 1, archived_shops: '[]' },
+    { id: 'legacy-archive', name: 'Прежний архив', shop: 'Мясной цех', shops: '["Мясной цех","Соусный цех"]', active: 0, archived_shops: '[]' },
   ];
   const history = {
     date: '2026-10-04', doneFlags: { 'meat-123-pl-0': true },
@@ -20,6 +21,7 @@ test('archive/restore retains identity, shops and historical shift records, with
   };
   const snapshot = JSON.stringify(history);
   const messages = [];
+  let collideOnce = false;
   pool.query = async (sql, params = []) => {
     const s = sql.replace(/\s+/g, ' ').trim();
     // Reject ANY access to shift tables: archiving must not rewrite history.
@@ -30,21 +32,26 @@ test('archive/restore retains identity, shops and historical shift records, with
       if (s.includes('WHERE id=$1')) rows = rows.filter(r => r.id === params[0]);
       return { rows: rows.map(r => ({ ...r })), rowCount: rows.length };
     }
-    if (s.startsWith('UPDATE employees SET active=$1')) {
-      const row = records.find(r => r.id === params[1]);
-      if (row) row.active = params[0];
-      return { rows: [], rowCount: row ? 1 : 0 };
-    }
     if (s.startsWith('UPDATE employees SET name=')) {
-      const row = records.find(r => r.id === params[3]);
-      if (row) Object.assign(row, { name: params[0], shop: params[1], shops: params[2] });
-      return { rows: [], rowCount: row ? 1 : 0 };
+      const row = records.find(r => r.id === params[5]);
+      if (!row) return { rows: [], rowCount: 0 };
+      if (collideOnce) {
+        collideOnce = false;
+        row.archived_shops = '["Соусный цех"]';
+        return { rows: [], rowCount: 0 };
+      }
+      if (row.active !== params[6] || row.archived_shops !== params[7] ||
+          (row.shops || '') !== params[8] || row.shop !== params[9] || row.name !== params[10]) {
+        return { rows: [], rowCount: 0 };
+      }
+      Object.assign(row, { name: params[0], shop: params[1], shops: params[2], archived_shops: params[3], active: params[4] });
+      return { rows: [], rowCount: 1 };
     }
     if (s.startsWith('INSERT INTO employees')) {
       assert.doesNotMatch(s.split('ON CONFLICT')[1], /active\s*=\s*1/);
       const row = records.find(r => r.id === params[0]);
       if (row) Object.assign(row, { name: params[1], shop: params[2], shops: params[3] });
-      else records.push({ id: params[0], name: params[1], shop: params[2], shops: params[3], active: 1 });
+      else records.push({ id: params[0], name: params[1], shop: params[2], shops: params[3], active: 1, archived_shops: '[]' });
       return { rows: [], rowCount: 1 };
     }
     throw new Error('Unexpected SQL: ' + s);
@@ -62,33 +69,57 @@ test('archive/restore retains identity, shops and historical shift records, with
   });
   const catalog = async suffix => (await (await request(suffix)).json()).employees;
   assert.equal((await catalog('')).length, 2);
-  const archived = await request('/archive-test/archive', { archived: true });
+  const archived = await request('/archive-test/archive', { archived: true, shop: 'Мясной цех' });
   assert.equal(archived.status, 200);
   const employee = (await archived.json()).employee;
-  assert.equal(employee.active, 0);
+  assert.equal(employee.active, 1);
+  assert.deepEqual(employee.archivedShops, ['Мясной цех']);
   assert.equal(employee.id, 'archive-test');
   assert.deepEqual(employee.shops, ['Мясной цех', 'Соусный цех']);
-  assert.deepEqual((await catalog('')).map(r => r.id), ['active-test']);
+  assert.equal((await catalog('')).length, 2);
   assert.equal((await catalog('?include_archived=1')).find(r => r.id === 'archive-test').name, 'Тест истории');
   assert.equal(JSON.stringify(history), snapshot);
   assert.equal(messages.at(-1).type, 'employees_updated');
   // Repeated archiving is safe; unrelated editing and legacy upserts cannot restore an archive.
-  assert.equal((await request('/archive-test/archive', { archived: true })).status, 200);
+  assert.equal((await request('/archive-test/archive', { archived: true, shop: 'Мясной цех' })).status, 200);
   await request('/archive-test', { name: 'Тест истории', shops: ['Мясной цех', 'Соусный цех'] }, 'PUT');
   await request('', { id: 'archive-test', name: 'Тест истории', shops: ['Мясной цех', 'Соусный цех'] }, 'POST');
-  assert.equal(records[0].active, 0);
-  assert.equal((await request('/missing/archive', { archived: true })).status, 404);
-  assert.equal((await request('/archive-test/archive', { archived: 'false' })).status, 400);
+  assert.equal(records[0].active, 1);
+  assert.deepEqual(JSON.parse(records[0].archived_shops), ['Мясной цех']);
+  assert.equal((await request('/missing/archive', { archived: true, shop: 'Мясной цех' })).status, 404);
+  assert.equal((await request('/archive-test/archive', { archived: 'false', shop: 'Мясной цех' })).status, 400);
+  assert.equal((await request('/archive-test/archive', { archived: true })).status, 400);
+  assert.equal((await request('/archive-test/archive', { archived: true, shop: 'Не его цех' })).status, 400);
   assert.equal((await request('/archive-test/archive', {})).status, 400);
-  const restored = await request('/archive-test/archive', { archived: false });
+  await request('/archive-test/archive', { archived: true, shop: 'Соусный цех' });
+  assert.equal(records[0].active, 0);
+  assert.equal((await catalog('')).length, 1);
+  const restored = await request('/archive-test/archive', { archived: false, shop: 'Мясной цех' });
   assert.equal((await restored.json()).employee.active, 1);
+  assert.deepEqual(JSON.parse(records[0].archived_shops), ['Соусный цех']);
   assert.equal((await catalog('')).length, 2);
+  // Previous whole-employee archives are not accidentally revived by the migration.
+  const legacy = (await catalog('?include_archived=1')).find(r => r.id === 'legacy-archive');
+  assert.deepEqual(legacy.archivedShops, ['Мясной цех', 'Соусный цех']);
+  const legacyRestored = await request('/legacy-archive/archive', { archived: false, shop: 'Мясной цех' });
+  assert.deepEqual((await legacyRestored.json()).employee.archivedShops, ['Соусный цех']);
+  // A simultaneous archive in the other shop must survive compare-and-swap retries.
+  await request('/archive-test/archive', { archived: false, shop: 'Соусный цех' });
+  collideOnce = true;
+  const concurrent = await request('/archive-test/archive', { archived: true, shop: 'Мясной цех' });
+  assert.equal(concurrent.status, 200);
+  assert.deepEqual(new Set((await concurrent.json()).employee.archivedShops), new Set(['Мясной цех', 'Соусный цех']));
+  const added = await request('', { id: 'new-test', name: 'Новый', shops: ['Мясной цех'] }, 'POST');
+  assert.equal(added.status, 200);
+  const newEmployee = (await catalog('')).find(row => row.id === 'new-test');
+  assert.equal(newEmployee.active, 1);
+  assert.deepEqual(newEmployee.archivedShops, []);
   assert.equal(JSON.stringify(history), snapshot);
 });
 
 const html = fs.readFileSync(path.join(__dirname, '../public/index.html'), 'utf8');
 function source(start, end) { return html.slice(html.indexOf(start), html.indexOf(end, html.indexOf(start))); }
-const activeSource = source('function isEmployeeActive(', 'function getShopEmployees(');
+const activeSource = source('function getEmployeeShops(', 'function getShopEmployees(');
 const loadSource = source('async function loadEmployeesGlobal(', 'async function addEmployeeToServer(');
 const toggleSource = source('function EmployeeToggles(', '// ============================================================\n// ITEM CARD');
 
@@ -136,9 +167,34 @@ test('packing selections also exclude archives while keeping already assigned ar
   assert.match(html, /shopEmployees\.filter\(emp=>isEmployeeActive\(emp\)\|\|lineEmpIds\.includes\(emp\.id\)\)/);
   assert.match(html, /if\(!isEmployeeActive\(emp\)\) return e\('span'/);
   const tab = source('function EmployeesTab(', '// MANAGER — SHIFTS TAB');
-  assert.ok(tab.includes('setEmployeeArchivedOnServer(emp.id,archived)'));
+  assert.ok(tab.includes('setEmployeeArchivedOnServer(emp.id,archived,shop)'));
   assert.ok(!tab.includes('removeEmployeeFromServer('));
   assert.ok(tab.includes('Восстановить'));
+});
+
+test('a partial archive hides selection only in its shop, including distinct items of a merged workshop', () => {
+  const context = {};
+  vm.runInNewContext(source('function getEmployeeShops(', '// ============================================================\n// УТИЛИТЫ'), context);
+  const employee = { id: 'both', name: 'Два цеха', shops: ['Мясной цех', 'Соусный цех'], active: 1, archivedShops: ['Мясной цех'] };
+  assert.equal(context.isEmployeeActive(employee), true);
+  assert.equal(context.isEmployeeActive(employee, 'Мясной цех'), false);
+  assert.equal(context.isEmployeeActive(employee, 'Соусный цех'), true);
+  const meat = context.getShopEmployees('Мясной цех', [employee]);
+  const sauce = context.getShopEmployees('Соусный цех', [employee]);
+  assert.equal(context.isEmployeeActive(meat[0]), false);
+  assert.equal(context.isEmployeeActive(sauce[0]), true);
+  const merged = context.getShopEmployees({ _sourceShops: ['Мясной цех', 'Соусный цех'], stations: [] }, [employee]);
+  assert.equal(context.isEmployeeActive(context.getItemEmployees({ __sourceShop: 'Мясной цех' }, 'meat', merged)[0]), false);
+  assert.equal(context.isEmployeeActive(context.getItemEmployees({ __sourceShop: 'Соусный цех' }, 'sauce', merged)[0]), true);
+  assert.equal(employee.active, 1);
+  assert.deepEqual(employee.archivedShops, ['Мясной цех']);
+  // Merged workshops previously shared staff, even for a single-shop employee.
+  const single = { id: 'meat-only', name: 'Общий сотрудник', shops: ['Мясной цех'], active: 1, archivedShops: [] };
+  const sharedPool = context.getShopEmployees(['Мясной цех', 'Рыбный цех'], [single]);
+  assert.equal(context.isEmployeeActive(context.getItemEmployees({ __sourceShop: 'Рыбный цех' }, 'fish', sharedPool)[0]), true);
+  const outside = { ...single, shops: ['Мясной цех', 'Соусный цех'], archivedShops: ['Мясной цех'] };
+  const inactivePool = context.getShopEmployees(['Мясной цех', 'Рыбный цех'], [outside]);
+  assert.equal(context.isEmployeeActive(context.getItemEmployees({ __sourceShop: 'Рыбный цех' }, 'fish', inactivePool)[0]), false);
 });
 
 test('reading an old shift keeps the archived employee ID, completion timestamp and production fact', async () => {

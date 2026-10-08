@@ -12,10 +12,14 @@ async function initDb(pool) {
       name       TEXT NOT NULL,
       shop       TEXT NOT NULL,
       active     INTEGER NOT NULL DEFAULT 1,
+      archived_shops TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL DEFAULT (NOW()::text),
       updated_at TEXT NOT NULL DEFAULT (NOW()::text)
     )
   `);
+  if (process.env.DATABASE_URL) {
+    await pool.query("ALTER TABLE employees ADD COLUMN IF NOT EXISTS archived_shops TEXT NOT NULL DEFAULT '[]'");
+  }
   await pool.query(`
     CREATE TABLE IF NOT EXISTS techcards (
       id         SERIAL PRIMARY KEY,

@@ -82,6 +82,14 @@ sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_tt_status_date ON technologist_tasks
   }
 }
 
+// Archive individual shop memberships without removing the employee identity.
+{
+  const cols = sqlite.prepare('PRAGMA table_info(employees)').all();
+  if (cols.length > 0 && !cols.some(c => c.name === 'archived_shops')) {
+    sqlite.exec("ALTER TABLE employees ADD COLUMN archived_shops TEXT NOT NULL DEFAULT '[]'");
+  }
+}
+
 // Добавляем ud_techcard_id к shifts если нет
 {
   const cols = sqlite.prepare('PRAGMA table_info(shifts)').all();

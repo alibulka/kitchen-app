@@ -50,7 +50,7 @@ function packing({ qty = 33, warehouse = 2, fact, done = false, yesterdayFact, e
     },
   };
   vm.createContext(context);
-  vm.runInContext(html.slice(html.indexOf('function isEmployeeActive('), html.indexOf('function getShopEmployees(')), context);
+  vm.runInContext(html.slice(html.indexOf('function getEmployeeShops('), html.indexOf('function getShopEmployees(')), context);
   vm.runInContext(html.slice(start, end), context);
   vm.runInContext(`${html.slice(handlerStart, handlerEnd)};this.onLineEmp=onLineEmp;`, context);
   const render = () => {
