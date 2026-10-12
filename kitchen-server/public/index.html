@@ -7681,7 +7681,9 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, prevLi
           (sp.subPreps||[]).length>0 && renderSubPreps(sp.subPreps||[], depth+1),
           (sp.ingredients||[]).length>0 && e('div',{className:'subprep-ings'},
             (sp.ingredients||[]).map((ing,i)=>e('div',{key:i,className:'ing-row subprep-ing'},
-              e('div',{className:'ing-name'},ing.name),
+              e('div',{className:'ing-name'},
+                ing.id && e('span',{style:{fontSize:11,color:'var(--muted)',marginRight:5,fontVariantNumeric:'tabular-nums'}},ing.id),
+                ing.name),
               ing.planAmount>0 && e('div',{className:'ing-qty'},
                 ing.planAmount.toLocaleString('ru-RU'),' ',(ing.unit||'г'))
             ))
@@ -7696,7 +7698,9 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, prevLi
     mainIngs.length>0 && e('div',{className:'card-section'},
       e('div',{className:'section-label'},'Ингредиенты'),
       mainIngs.map(ing=>e('div',{key:ing.id,className:'ing-row'},
-        e('div',{className:'ing-name'},ing.name),
+        e('div',{className:'ing-name'},
+          ing.id && e('span',{style:{fontSize:11,color:'var(--muted)',marginRight:5,fontVariantNumeric:'tabular-nums'}},ing.id),
+          ing.name),
         ing.planAmount != null && e('div',{className:'ing-qty'},
           (ing.planAmount||0).toLocaleString('ru-RU'),' ',(ing.unit||'г'))
       ))
@@ -8233,10 +8237,12 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robok
 // ============================================================
 // KITCHEN SHOP PAGE (вкладки по станциям)
 // ============================================================
-function KitchenShopPage({shopGroup, shift, onShiftChange, allEmployees, onBack, shopGroups, isManager, precutConfig, onPrecutConfigChange}) {
+function KitchenShopPage({shopGroup, shift, onShiftChange, allEmployees, onBack, shopGroups, isManager, precutConfig, onPrecutConfigChange, dateKey}) {
   const stations=shopGroup.stations||[];
-  const [stationIdx,setStationIdx]=useState(0);
-  const station=stations[stationIdx]||stations[0];
+  const [stationIdx,setStationIdx]=useState(0); // -1 = вкладка отходов
+  const isMeatShop = /мясной/i.test(shopGroup.shop);
+  const activeStationIdx = stationIdx === -1 ? 0 : stationIdx;
+  const station=stations[activeStationIdx]||stations[0];
   const shopEmployees=useMemo(()=>getShopEmployees(shopGroup._sourceShops||shopGroup.shop,allEmployees),[shopGroup,allEmployees]);
   // Заготовки Робокопа передаём в Ручную нарезку
   const robokopItems=useMemo(()=>{
@@ -8281,15 +8287,23 @@ function KitchenShopPage({shopGroup, shift, onShiftChange, allEmployees, onBack,
           className:'station-tab'+(i===stationIdx?' active':''),
           onClick:()=>setStationIdx(i)
         },label+(stTotal>0?` (${stDone}/${stTotal})`:''));
-      })
+      }),
+      isMeatShop && e('button',{
+        key:'__waste',
+        className:'station-tab'+(stationIdx===-1?' active':''),
+        onClick:()=>setStationIdx(-1),
+        style:{marginLeft:'auto'}
+      },'🗑️ Отходы')
     ),
-    station && e(KitchenStationPage,{
-      key:station.key, station, shift, onShiftChange, shopEmployees,
-      robokopItems: station.key===RUCHNAYA_KEY ? robokopItems : [],
-      precutConfig: precutConfig||new Set(),
-      onPrecutConfigChange,
-      shopParam: !isManager
-    })
+    stationIdx === -1
+      ? e(RawWasteTab,{dateKey})
+      : station && e(KitchenStationPage,{
+          key:station.key, station, shift, onShiftChange, shopEmployees,
+          robokopItems: station.key===RUCHNAYA_KEY ? robokopItems : [],
+          precutConfig: precutConfig||new Set(),
+          onPrecutConfigChange,
+          shopParam: !isManager
+        })
   );
 }
 
@@ -9639,17 +9653,66 @@ function getDHItems(catalog, itemPackLines) {
 function DXFactsTab({dateKey, archiveIndex}) {
   const today = new Date().toISOString().slice(0, 10);
   const [selDate, setSelDate] = useState(dateKey || today);
-  const [shiftData, setShiftData] = useState(null);  // {shift, catalog, dhItems}
+  const [shiftData, setShiftData] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [factInputs, setFactInputs] = useState({}); // {item_id: string}
+  const [factInputs, setFactInputs] = useState({}); // {item_id: string} — для ДХ из техкарты
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState('');
+
+  // Ручные заготовки: [{uid, id, name, plan, fact}]
+  const [manualItems, setManualItems] = useState([]);
+  // Форма добавления
+  const [addId, setAddId]   = useState(null);   // null = ручной ввод
+  const [addName, setAddName] = useState('');
+  const [addPlan, setAddPlan] = useState('');
+  const [addFact, setAddFact] = useState('');
+  const [suggestions, setSuggestions] = useState([]);
+  const [showSugg, setShowSugg] = useState(false);
+  const [allDbItems, setAllDbItems] = useState([]);
+
+  // Восстанавливаем вручную добавленные позиции при первой загрузке данных смены
+  const manualLoadedRef = React.useRef(false);
+  useEffect(() => {
+    if (!shiftData) return;
+    if (manualLoadedRef.current) return;
+    manualLoadedRef.current = true;
+    const saved = shiftData?.shift?.manualDhItems;
+    if (saved && saved.length > 0) setManualItems(saved);
+  }, [shiftData]);
+
+  // Загружаем все позиции из БД один раз при монтировании
+  useEffect(() => {
+    fetch('/api/techcards/all-items')
+      .then(r => r.ok ? r.json() : {items: []})
+      .then(d => setAllDbItems(d.items || []))
+      .catch(() => {});
+  }, []);
+
+  // Плоский список позиций для автодополнения: ДХ-позиции из смены + все из БД
+  const allCatalogItems = useMemo(() => {
+    const seen = new Set();
+    const res = [];
+    // Приоритет: позиции из текущей смены (с планом)
+    (shiftData?.dhItems || []).forEach(d => {
+      if (seen.has(d.item.id)) return;
+      seen.add(d.item.id);
+      res.push({id: d.item.id, name: d.item.name, plan: d.plan || 0});
+    });
+    // Все позиции из БД (все техкарты)
+    (allDbItems || []).forEach(it => {
+      if (seen.has(it.id)) return;
+      seen.add(it.id);
+      res.push({id: it.id, name: it.name, plan: Number(it.plan) || 0});
+    });
+    return res;
+  }, [shiftData, allDbItems]);
 
   useEffect(() => {
     if (!selDate) return;
     setLoading(true);
     setFactInputs({});
     setSaveStatus('');
+    setManualItems([]);
     (async () => {
       try {
         const sr = await fetch(`/api/shifts/${selDate}`);
@@ -9669,6 +9732,10 @@ function DXFactsTab({dateKey, archiveIndex}) {
         const catalog = getCatalogForDate(selDate, eeTc, udTc);
         const dhItems = getDHItems(catalog, sh.itemPackLines);
         setShiftData({ shift: sh, dhItems });
+        // Загружаем ранее сохранённые ручные заготовки
+        if (sh.manualDhItems?.length) {
+          setManualItems(sh.manualDhItems.map((it, i) => ({...it, uid: it.uid || String(Date.now()+i)})));
+        }
       } catch {}
       setLoading(false);
     })();
@@ -9679,32 +9746,93 @@ function DXFactsTab({dateKey, archiveIndex}) {
   const getFactVal = (itemId) =>
     factInputs[itemId] !== undefined ? factInputs[itemId] : String(factTotals[itemId] ?? '');
 
+  async function saveManualItems(items) {
+    console.log('[saveManualItems] shiftData=', !!shiftData, 'selDate=', selDate, 'items=', items.length);
+    if (!shiftData) return;
+    const newShift = { ...shiftData.shift, manualDhItems: items.map(it => ({
+      uid: it.uid, id: it.id, name: it.name,
+      plan: Number(it.plan) || 0, fact: Number(it.fact) || 0,
+    }))};
+    const r = await fetch(`/api/shifts/${selDate}`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ shift: newShift }),
+    });
+    console.log('[saveManualItems] response', r.status, r.ok);
+    if (!r.ok) { const t = await r.text(); console.error('[saveManualItems] error:', t); }
+    if (r.ok) setShiftData(prev => ({ ...prev, shift: newShift }));
+  }
+
+  function handleAddManual() {
+    if (!addName.trim()) return;
+    const newItem = {
+      uid: String(Date.now()), id: addId, name: addName.trim(),
+      plan: Number(addPlan) || 0, fact: Number(addFact) || 0,
+    };
+    const next = [...manualItems, newItem];
+    setManualItems(next);
+    saveManualItems(next);
+    setAddName(''); setAddPlan(''); setAddFact(''); setAddId(null); setSuggestions([]);
+  }
+
+  function handleDeleteManual(uid) {
+    const next = manualItems.filter(it => it.uid !== uid);
+    setManualItems(next);
+    saveManualItems(next);
+  }
+
+  function handleAddNameChange(val) {
+    setAddName(val);
+    setAddId(null);
+    if (val.trim().length < 1) { setSuggestions([]); return; }
+    const q = val.toLowerCase();
+    const shiftIds = new Set((shiftData?.dhItems || []).map(d => d.item.id));
+    const matches = allCatalogItems.filter(it =>
+      !shiftIds.has(it.id) &&
+      (it.name.toLowerCase().includes(q) || String(it.id).includes(q))
+    ).slice(0, 8);
+    setSuggestions(matches);
+  }
+
+  function selectSuggestion(it) {
+    setAddId(it.id);
+    setAddName(it.name);
+    setSuggestions([]);
+    setShowSugg(false);
+  }
+
+  function updateManual(uid, field, val) {
+    setManualItems(prev => prev.map(it => it.uid === uid ? {...it, [field]: val} : it));
+  }
+
   const handleSaveFact = async () => {
     if (!shiftData) return;
     setSaving(true); setSaveStatus('');
     try {
-      // Строим новый объект facts: обнуляем старые ДХ-записи, ставим новые
       const dhIds = new Set((shiftData.dhItems || []).map(d => d.item.id));
       const newFacts = {};
-      // копируем не-ДХ факты
       Object.entries(shiftData.shift.facts || {}).forEach(([k, v]) => {
         const m = k.match(/^.+-(\d+)-pl-\d+$/);
         if (m && dhIds.has(Number(m[1]))) return;
         newFacts[k] = v;
       });
-      // записываем менеджерские значения для ДХ
       (shiftData.dhItems || []).forEach(({ stationKey, item }) => {
         const val = factInputs[item.id] !== undefined
           ? Number(factInputs[item.id])
           : (factTotals[item.id] ?? 0);
-        const k = `${stationKey}-${item.id}-pl-0`;
-        newFacts[k] = val;
+        newFacts[`${stationKey}-${item.id}-pl-0`] = val;
       });
-      const newShift = { ...shiftData.shift, facts: newFacts };
+      const savedManual = manualItems.map(it => ({
+        uid: it.uid,
+        id: it.id,
+        name: it.name,
+        plan: Number(it.plan) || 0,
+        fact: Number(it.fact) || 0,
+      }));
+      const newShift = { ...shiftData.shift, facts: newFacts, manualDhItems: savedManual };
       const r = await fetch(`/api/shifts/${selDate}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shift: newShift }),
+        body: JSON.stringify({ shift: newShift, syncControl: true }),
       });
       if (r.ok) {
         setShiftData(prev => ({ ...prev, shift: newShift }));
@@ -9717,13 +9845,14 @@ function DXFactsTab({dateKey, archiveIndex}) {
   };
 
   const dhItems = shiftData?.dhItems || [];
+  const inputStyle = {textAlign:'right', padding:'4px 6px',
+    border:'1px solid var(--border,#d1d5db)', borderRadius:6, fontSize:14, background:'var(--bg)', color:'var(--text)'};
 
-  return e('div', {style:{padding:'16px 8px', maxWidth:820, margin:'0 auto'}},
+  return e('div', {style:{padding:'16px 8px', maxWidth:900, margin:'0 auto'}},
     e('div', {style:{display:'flex', alignItems:'center', gap:16, marginBottom:20, flexWrap:'wrap'}},
-      e('label', {style:{fontWeight:600, fontSize:14}}, 'Дата:'),
+      e('label', {style:{fontWeight:600, fontSize:14}}, 'Дата работ:'),
       e('input', {
-        type: 'date', value: selDate,
-        max: today,
+        type: 'date', value: selDate, max: today,
         onChange: ev => setSelDate(ev.target.value),
         style:{padding:'6px 10px', border:'1px solid var(--border,#d1d5db)',
           borderRadius:8, fontSize:14, cursor:'pointer'}
@@ -9731,22 +9860,21 @@ function DXFactsTab({dateKey, archiveIndex}) {
     ),
     loading && e('div', {style:{color:'var(--muted)', padding:24}}, 'Загрузка...'),
     !loading && !shiftData && selDate &&
-      e('div', {style:{color:'var(--muted)', padding:24, textAlign:'center'}},
-        'Смена за выбранную дату не найдена'),
-    !loading && shiftData && dhItems.length === 0 &&
-      e('div', {style:{color:'var(--muted)', padding:24, textAlign:'center'}},
-        'Нет позиций с префиксом «ДХ» в техкарте этой смены'),
-    !loading && shiftData && dhItems.length > 0 && e('div', null,
+      e('div', {style:{color:'var(--muted)', padding:24, textAlign:'center'}}, 'Смена за выбранную дату не найдена'),
+    !loading && shiftData && e('div', null,
       e('div', {style:{overflowX:'auto'}},
         e('table', {style:{width:'100%', borderCollapse:'collapse', fontSize:14}},
           e('thead', null,
             e('tr', {style:{background:'var(--header-bg,#f3f4f6)', textAlign:'left'}},
+              e('th', {style:{padding:'8px 12px', fontWeight:600, color:'var(--muted)', fontSize:12}}, 'ID'),
               e('th', {style:{padding:'8px 12px', fontWeight:600}}, 'Позиция'),
               e('th', {style:{padding:'8px 12px', fontWeight:600, textAlign:'right'}}, 'План, уп'),
               e('th', {style:{padding:'8px 12px', fontWeight:600, textAlign:'right', minWidth:110}}, 'Факт, уп'),
+              e('th', {style:{padding:'8px 12px', width:36}}),
             )
           ),
           e('tbody', null,
+            // ДХ из техкарты
             dhItems.map(({ item, plan }) => {
               const factVal = getFactVal(item.id);
               const factNum = Number(factVal);
@@ -9754,20 +9882,118 @@ function DXFactsTab({dateKey, archiveIndex}) {
               const done = planNum > 0 && factNum >= planNum;
               return e('tr', {key: item.id, style:{borderBottom:'1px solid var(--border,#e5e7eb)',
                   background: done ? 'var(--ok-bg,#f0fdf4)' : 'var(--bg)'}},
+                e('td', {style:{padding:'8px 12px', color:'var(--muted)', fontSize:12}}, item.id),
                 e('td', {style:{padding:'8px 12px'}}, item.name),
-                e('td', {style:{padding:'8px 12px', textAlign:'right', color:'var(--muted)'}},
-                  planNum || '—'),
+                e('td', {style:{padding:'8px 12px', textAlign:'right', color:'var(--muted)'}}, planNum || '—'),
                 e('td', {style:{padding:'8px 12px', textAlign:'right'}},
                   e('input', {
-                    type: 'number', min: 0, step: 1, value: factVal,
+                    type:'number', min:0, step:1, value:factVal,
                     onFocus: ev => ev.target.select(),
                     onChange: ev => setFactInputs(p => ({...p, [item.id]: ev.target.value})),
-                    style:{width:80, textAlign:'right', padding:'4px 6px',
-                      border:'1px solid var(--border,#d1d5db)', borderRadius:6, fontSize:14}
+                    style:{...inputStyle, width:80}
                   })
                 ),
+                e('td', null),
               );
-            })
+            }),
+            // Ручные заготовки
+            manualItems.map(it =>
+              e('tr', {key: it.uid, style:{borderBottom:'1px solid var(--border,#e5e7eb)', background:'var(--bg)'}},
+                e('td', {style:{padding:'8px 12px', color:'var(--muted)', fontSize:12}}, it.id ? String(it.id) : '—'),
+                e('td', {style:{padding:'8px 12px'}}, it.name),
+                e('td', {style:{padding:'8px 12px', textAlign:'right'}},
+                  e('input', {
+                    type:'number', min:0, step:1, value:it.plan||'',
+                    onFocus: ev => ev.target.select(),
+                    onChange: ev => updateManual(it.uid, 'plan', ev.target.value),
+                    style:{...inputStyle, width:80}
+                  })
+                ),
+                e('td', {style:{padding:'8px 12px', textAlign:'right'}},
+                  e('input', {
+                    type:'number', min:0, step:1, value:it.fact||'',
+                    onFocus: ev => ev.target.select(),
+                    onChange: ev => updateManual(it.uid, 'fact', ev.target.value),
+                    style:{...inputStyle, width:80}
+                  })
+                ),
+                e('td', {style:{padding:'8px 4px', textAlign:'center'}},
+                  e('button', {
+                    onClick: () => handleDeleteManual(it.uid),
+                    title: 'Удалить',
+                    style:{background:'none', border:'none', color:'var(--muted)', cursor:'pointer', fontSize:16, padding:'2px 6px'}
+                  }, '×')
+                ),
+              )
+            ),
+            // Строка добавления
+            e('tr', {style:{background:'var(--surface,#f9fafb)'}},
+              e('td', {style:{padding:'8px 12px', color:'var(--muted)', fontSize:11}},
+                addId ? String(addId) : '—'),
+              e('td', {style:{padding:'6px 12px', position:'relative'}},
+                e('input', {
+                  type:'text', value:addName, placeholder:'Найти по названию или ID…',
+                  onChange: ev => { setShowSugg(true); handleAddNameChange(ev.target.value); },
+                  onFocus: () => { setShowSugg(true); if (!addId && addName.trim().length >= 2) handleAddNameChange(addName); },
+                  onBlur: () => setTimeout(() => setShowSugg(false), 300),
+                  onKeyDown: ev => {
+                    if (ev.key==='Enter') { if(suggestions.length) selectSuggestion(suggestions[0]); else handleAddManual(); }
+                    if (ev.key==='Escape') { setSuggestions([]); setShowSugg(false); }
+                  },
+                  style:{...inputStyle, textAlign:'left', width:'100%', minWidth:220}
+                }),
+                showSugg && suggestions.length > 0 && e('div', {style:{
+                  position:'absolute', bottom:'100%', left:0, right:0, zIndex:100,
+                  background:'var(--bg,#fff)', border:'1px solid var(--border)', borderRadius:8,
+                  boxShadow:'0 -4px 16px rgba(0,0,0,0.12)', maxHeight:280, overflowY:'auto',
+                  marginBottom:4,
+                }},
+                  suggestions.map(s => e('div', {key:s.id,
+                    onMouseDown: ev => { ev.preventDefault(); selectSuggestion(s); },
+                    style:{padding:'8px 12px', cursor:'pointer', fontSize:13,
+                      borderBottom:'1px solid var(--border)',
+                      display:'flex', alignItems:'center', gap:8},
+                    onMouseEnter: ev => ev.currentTarget.style.background='var(--surface,#f3f4f6)',
+                    onMouseLeave: ev => ev.currentTarget.style.background='',
+                  },
+                    e('span', {style:{color:'var(--muted)', fontSize:11, minWidth:40}}, s.id),
+                    e('span', null, s.name),
+                  ))
+                ),
+                showSugg && !suggestions.length && addName.length >= 1 && !addId && e('div', {style:{
+                  position:'absolute', bottom:'100%', left:0, right:0, zIndex:100,
+                  background:'var(--bg,#fff)', border:'1px solid var(--border)', borderRadius:8,
+                  boxShadow:'0 -4px 16px rgba(0,0,0,0.12)', padding:'10px 12px', fontSize:13, color:'var(--muted)',
+                  marginBottom:4,
+                }}, 'Не найдено в каталоге — будет добавлено вручную'),
+              ),
+              e('td', {style:{padding:'6px 12px', textAlign:'right'}},
+                e('input', {
+                  type:'number', min:0, step:1, value:addPlan, placeholder:'0',
+                  onFocus: ev => ev.target.select(),
+                  onChange: ev => setAddPlan(ev.target.value),
+                  style:{...inputStyle, width:80}
+                })
+              ),
+              e('td', {style:{padding:'6px 12px', textAlign:'right'}},
+                e('input', {
+                  type:'number', min:0, step:1, value:addFact, placeholder:'0',
+                  onFocus: ev => ev.target.select(),
+                  onChange: ev => setAddFact(ev.target.value),
+                  onKeyDown: ev => { if(ev.key==='Enter') handleAddManual(); },
+                  style:{...inputStyle, width:80}
+                })
+              ),
+              e('td', {style:{padding:'6px 4px', textAlign:'center'}},
+                e('button', {
+                  onClick: handleAddManual, disabled: !addName.trim(),
+                  title:'Добавить',
+                  style:{background:'var(--accent,#6d28d9)', border:'none', color:'white',
+                    borderRadius:6, cursor:addName.trim()?'pointer':'default',
+                    opacity:addName.trim()?1:0.4, padding:'4px 10px', fontSize:14, fontWeight:700}
+                }, '+')
+              ),
+            )
           )
         )
       ),
@@ -9791,8 +10017,8 @@ function DXDistributionTab({dateKey}) {
   const [shiftData, setShiftData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [saved, setSaved] = useState({});
-  const [inputs, setInputs] = useState({});     // {item_id: to_kitchen string}
-  const [labelDates, setLabelDates] = useState({}); // {item_id: date string}
+  const [inputs, setInputs] = useState({});          // {item_id: to_kitchen, item_id+'_X': to_kitchen_excess}
+  const [labelDates, setLabelDates] = useState({});  // {item_id: date, item_id+'_X': date}
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState('');
 
@@ -9836,46 +10062,93 @@ function DXDistributionTab({dateKey}) {
 
   const dhItems = shiftData?.dhItems || [];
   const factTotals = shiftData?.factTotals || {};
+  const manualItems = shiftData?.shift?.manualDhItems || [];
 
-  const getToKitchen = (itemId) => {
-    if (inputs[itemId] !== undefined) return inputs[itemId];
-    if (saved[itemId] !== undefined) return String(saved[itemId].to_kitchen);
-    return String(factTotals[itemId] || 0);
+  // Строим единый список: dhItems + manualItems, каждый с plan и fact
+  const allRows = useMemo(() => {
+    const seen = new Set();
+    const rows = [];
+    dhItems.forEach(({ stationKey, item, plan }) => {
+      seen.add(item.id);
+      rows.push({ id: item.id, name: item.name, plan: plan || 0, fact: factTotals[item.id] || 0, stationKey, isManual: false });
+    });
+    manualItems.forEach(it => {
+      if (seen.has(it.id || it.uid)) return;
+      seen.add(it.id || it.uid);
+      rows.push({ id: it.id || it.uid, name: it.name, plan: Number(it.plan) || 0, fact: factTotals[it.id] || Number(it.fact) || 0, stationKey: null, isManual: true });
+    });
+    // Позиции из factTotals, которых нет в dhItems/manual
+    Object.entries(factTotals).forEach(([idStr, fact]) => {
+      const id = Number(idStr);
+      if (seen.has(id) || !fact) return;
+      seen.add(id);
+      rows.push({ id, name: String(id), plan: 0, fact, stationKey: null, isManual: false });
+    });
+    return rows;
+  }, [dhItems, manualItems, factTotals]);
+
+  const getVal = (key, fallback) => {
+    if (inputs[key] !== undefined) return inputs[key];
+    return fallback !== undefined ? String(fallback) : '';
   };
-  const getLabelDate = (itemId) => {
-    if (labelDates[itemId] !== undefined) return labelDates[itemId];
-    if (saved[itemId]?.label_date) return saved[itemId].label_date;
-    return selDate; // предзаполнение датой смены
+  const getDate = (key) => {
+    if (labelDates[key] !== undefined) return labelDates[key];
+    const itemId = key.endsWith('_X') ? Number(key.slice(0, -2)) : Number(key);
+    if (saved[itemId]) return key.endsWith('_X') ? (saved[itemId].label_date_excess || selDate) : (saved[itemId].label_date || selDate);
+    return selDate;
   };
 
   const handleSave = async () => {
     setSaving(true); setSaveStatus('');
     try {
-      const items = dhItems.map(({ item }) => ({
-        item_id: item.id,
-        to_kitchen: Number(getToKitchen(item.id)) || 0,
-        to_storage: 0,
-        label_date: getLabelDate(item.id) || null,
-      }));
+      const items = allRows.map(({ id, name, plan, fact, stationKey, isManual }) => {
+        const excess = Math.max(0, fact - plan);
+        const toKitchen = Number(getVal(String(id), Math.min(fact, plan))) || 0;
+        const toKitchenExcess = excess > 0 ? (Number(getVal(String(id)+'_X', excess)) || 0) : 0;
+        return {
+          item_id: id,
+          name,
+          to_kitchen: toKitchen,
+          to_storage: 0,
+          label_date: getDate(String(id)) || null,
+          to_kitchen_excess: toKitchenExcess,
+          label_date_excess: excess > 0 ? (getDate(String(id)+'_X') || null) : null,
+          station_key: stationKey || null,
+          is_manual: isManual || false,
+          total_fact: toKitchen + toKitchenExcess,
+        };
+      });
       const r = await fetch(`/api/shifts/${selDate}/dh-storage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ items }),
       });
       if (r.ok) {
+        const resp = await r.json();
         const m = {};
         items.forEach(it => { m[it.item_id] = it; });
         setSaved(m); setInputs({}); setLabelDates({});
-        setSaveStatus('ok');
-        setTimeout(() => setSaveStatus(''), 2500);
-      } else setSaveStatus('error');
-    } catch { setSaveStatus('error'); }
+
+        if (resp.sheetSync?.status === 'error') {
+          setSaveStatus('sheet-error:' + resp.sheetSync.message);
+        } else if (resp.sheetSync?.written === 0) {
+          setSaveStatus('sheet-warn:' + (resp.sheetSync.message || 'Дата не найдена в таблице'));
+        } else {
+          setSaveStatus('ok');
+          setTimeout(() => setSaveStatus(''), 3000);
+        }
+      } else {
+        const errText = await r.text().catch(() => '');
+        console.error('[dh-storage] HTTP error', r.status, errText);
+        setSaveStatus('error');
+      }
+    } catch(e) { console.error('[dh-storage] catch', e); setSaveStatus('error'); }
     setSaving(false);
   };
 
   return e('div', {style:{padding:'16px 8px', maxWidth:900, margin:'0 auto'}},
     e('div', {style:{display:'flex', alignItems:'center', gap:16, marginBottom:20, flexWrap:'wrap'}},
-      e('label', {style:{fontWeight:600, fontSize:14}}, 'Дата:'),
+      e('label', {style:{fontWeight:600, fontSize:14}}, 'Дата работ:'),
       e('input', {
         type: 'date', value: selDate,
         max: today,
@@ -9888,48 +10161,84 @@ function DXDistributionTab({dateKey}) {
     !loading && !shiftData && selDate &&
       e('div', {style:{color:'var(--muted)', padding:24, textAlign:'center'}},
         'Смена за выбранную дату не найдена'),
-    !loading && shiftData && dhItems.length === 0 &&
+    !loading && shiftData && allRows.length === 0 &&
       e('div', {style:{color:'var(--muted)', padding:24, textAlign:'center'}},
-        'Нет позиций с префиксом «ДХ» в техкарте этой смены'),
-    !loading && shiftData && dhItems.length > 0 && e('div', null,
+        'Нет ДХ-позиций в этой смене'),
+    !loading && shiftData && allRows.length > 0 && e('div', null,
       e('div', {style:{overflowX:'auto'}},
         e('table', {style:{width:'100%', borderCollapse:'collapse', fontSize:14}},
           e('thead', null,
             e('tr', {style:{background:'var(--header-bg,#f3f4f6)', textAlign:'left'}},
+              e('th', {style:{padding:'8px 12px', fontWeight:600, color:'var(--muted)', fontSize:12}}, 'ID'),
               e('th', {style:{padding:'8px 12px', fontWeight:600}}, 'Позиция'),
+              e('th', {style:{padding:'8px 12px', fontWeight:600, textAlign:'right'}}, 'План'),
               e('th', {style:{padding:'8px 12px', fontWeight:600, textAlign:'right'}}, 'Факт'),
               e('th', {style:{padding:'8px 12px', fontWeight:600, textAlign:'right', minWidth:110}}, 'На кухне'),
               e('th', {style:{padding:'8px 12px', fontWeight:600, minWidth:160}}, 'Дата наклейки'),
             )
           ),
           e('tbody', null,
-            dhItems.map(({ item }) => {
-              const fact = factTotals[item.id] || 0;
-              const toKitchen = getToKitchen(item.id);
-              const lblDate = getLabelDate(item.id);
-              return e('tr', {key: item.id, style:{borderBottom:'1px solid var(--border,#e5e7eb)'}},
-                e('td', {style:{padding:'8px 12px'}}, item.name),
+            allRows.flatMap(({ id, name, plan, fact }) => {
+              const excess = Math.max(0, fact - plan);
+              const keyMain = String(id);
+              const keyX = String(id) + '_X';
+              const mainRow = e('tr', {key: keyMain, style:{borderBottom: excess > 0 ? 'none' : '1px solid var(--border,#e5e7eb)'}},
+                e('td', {style:{padding:'8px 12px', color:'var(--muted)', fontSize:12}}, id),
+                e('td', {style:{padding:'8px 12px'}}, name),
                 e('td', {style:{padding:'8px 12px', textAlign:'right', color:'var(--muted)'}},
+                  plan ? `${plan} уп` : '—'),
+                e('td', {style:{padding:'8px 12px', textAlign:'right', color: excess > 0 ? 'var(--danger,#dc2626)' : 'var(--muted)'}},
                   fact ? `${fact} уп` : '—'),
                 e('td', {style:{padding:'8px 12px', textAlign:'right'}},
                   e('input', {
-                    type: 'number', min: 0, max: fact || undefined, step: 1,
-                    value: toKitchen,
+                    type:'number', min:0, step:1,
+                    value: getVal(keyMain, Math.min(fact, plan)),
                     onFocus: ev => ev.target.select(),
-                    onChange: ev => setInputs(p => ({...p, [item.id]: ev.target.value})),
+                    onChange: ev => setInputs(p => ({...p, [keyMain]: ev.target.value})),
                     style:{width:80, textAlign:'right', padding:'4px 6px',
                       border:'1px solid var(--border,#d1d5db)', borderRadius:6, fontSize:14}
                   })
                 ),
                 e('td', {style:{padding:'8px 12px'}},
                   e('input', {
-                    type: 'date', value: lblDate,
-                    onChange: ev => setLabelDates(p => ({...p, [item.id]: ev.target.value})),
+                    type:'date', value: getDate(keyMain),
+                    onChange: ev => setLabelDates(p => ({...p, [keyMain]: ev.target.value})),
                     style:{padding:'4px 8px', border:'1px solid var(--border,#d1d5db)',
                       borderRadius:6, fontSize:13, cursor:'pointer'}
                   })
                 ),
               );
+              if (excess <= 0) return [mainRow];
+              const excessRow = e('tr', {key: keyX, style:{borderBottom:'1px solid var(--border,#e5e7eb)', background:'#fff7ed'}},
+                e('td', {style:{padding:'6px 12px', color:'var(--muted)', fontSize:12}}, ''),
+                e('td', {style:{padding:'6px 12px'}}, name),
+                e('td', null),
+                e('td', {style:{padding:'6px 12px', textAlign:'right'}},
+                  e('span', {style:{
+                    background:'#fef3c7', color:'#92400e', fontSize:11, fontWeight:600,
+                    padding:'2px 7px', borderRadius:4,
+                  }}, 'сверх плана'),
+                ),
+                e('td', {style:{padding:'6px 12px', textAlign:'right'}},
+                  e('input', {
+                    type:'number', min:0, step:1,
+                    value: getVal(keyX, excess),
+                    onFocus: ev => ev.target.select(),
+                    onChange: ev => setInputs(p => ({...p, [keyX]: ev.target.value})),
+                    style:{width:80, textAlign:'right', padding:'4px 6px',
+                      border:'1px solid #fcd34d', borderRadius:6, fontSize:14, background:'#fffbeb'}
+                  })
+                ),
+                e('td', {style:{padding:'6px 12px'}},
+                  e('input', {
+                    type:'date', value: getDate(keyX),
+                    onChange: ev => setLabelDates(p => ({...p, [keyX]: ev.target.value})),
+                    style:{padding:'4px 8px', border:'1px solid #fcd34d',
+                      borderRadius:6, fontSize:13, cursor:'pointer', background:'#fffbeb'}
+                  })
+                ),
+              );
+              return [mainRow, excessRow];
             })
           )
         )
@@ -9940,8 +10249,12 @@ function DXDistributionTab({dateKey}) {
           style:{padding:'10px 28px', background:'var(--accent,#6d28d9)', color:'#fff',
             border:'none', borderRadius:8, fontWeight:600, fontSize:15, cursor:'pointer'}
         }, saving ? 'Сохранение...' : 'Сохранить'),
-        saveStatus==='ok' && e('span',{style:{color:'var(--ok,#16a34a)', fontWeight:600}},'✓ Сохранено'),
+        saveStatus==='ok' && e('span',{style:{color:'var(--ok,#16a34a)', fontWeight:600}},'✓ Сохранено в БД и в таблицу'),
         saveStatus==='error' && e('span',{style:{color:'var(--danger,#dc2626)'}},'Ошибка сохранения'),
+        saveStatus.startsWith('sheet-error:') && e('span',{style:{color:'#b45309', fontSize:13}},
+          '✓ Сохранено в БД | Ошибка таблицы: '+saveStatus.slice(12)),
+        saveStatus.startsWith('sheet-warn:') && e('span',{style:{color:'#b45309', fontSize:13}},
+          '✓ Сохранено в БД | '+saveStatus.slice(11)),
       )
     )
   );
@@ -9966,6 +10279,483 @@ function DXStorageTab({dateKey, shift, activeTcEE, activeTcUD, archiveIndex}) {
     ),
     subTab==='facts' && e(DXFactsTab, {dateKey, archiveIndex}),
     subTab==='dist'  && e(DXDistributionTab, {dateKey}),
+  );
+}
+
+// ============================================================
+// RAW WASTE TAB — ввод отходов мясником
+// Список сырья берётся из файла выдачи (категории Мясо и Рыба)
+// ============================================================
+
+function RawWasteTab({dateKey}) {
+  const [ingredients, setIngredients] = useState([]); // [{id, name}] из выдачи
+  const [waste, setWaste] = useState({}); // {ing_name → string}
+  const [saved, setSaved] = useState({}); // {ing_name → weight_kg} из БД
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState(null);
+
+  useEffect(() => {
+    if (!dateKey) return;
+    (async () => {
+      try {
+        const [issR, wasteR] = await Promise.all([
+          fetch(`/api/raw-material/issuance/${dateKey}`),
+          fetch(`/api/raw-material/waste/${dateKey}`),
+        ]);
+        // Список ингредиентов из выдачи (уже отфильтрован по Мясо/Рыба)
+        if (issR.ok) {
+          const d = await issR.json();
+          // Схлопываем дубли — суммируем mass_g если позиция в Производстве и Резерве
+          const seen = new Map(); // id → {name, mass_g}
+          (d.items||[]).forEach(it => {
+            if (!seen.has(it.ingredient_id)) {
+              seen.set(it.ingredient_id, {name: it.ing_name, mass_g: it.mass_g || 0});
+            } else {
+              seen.get(it.ingredient_id).mass_g += it.mass_g || 0;
+            }
+          });
+          setIngredients([...seen.entries()].map(([id, v]) => ({id, name: v.name, mass_g: v.mass_g})));
+        }
+        // Ранее сохранённые отходы
+        if (wasteR.ok) {
+          const d = await wasteR.json();
+          const map = {}, inputs = {};
+          (d.items||[]).forEach(it => {
+            map[it.ing_name] = it.weight_kg;
+            inputs[it.ing_name] = String(it.weight_kg);
+          });
+          setSaved(map);
+          setWaste(inputs);
+        }
+      } catch(e) {}
+    })();
+  }, [dateKey]);
+
+  async function handleSubmit() {
+    setSaving(true);
+    const items = ingredients.map(ing => ({
+      ingredient_id: ing.id,
+      ing_name: ing.name,
+      weight_kg: parseFloat((waste[ing.name]||'').replace(',','.')) || 0,
+    }));
+    try {
+      const r = await fetch(`/api/raw-material/waste/${dateKey}`, {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({items}),
+      });
+      if (r.ok) {
+        const newSaved = {};
+        items.forEach(it => { if(it.weight_kg > 0) newSaved[it.ing_name] = it.weight_kg; });
+        setSaved(newSaved);
+        setSavedAt(new Date().toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'}));
+      }
+    } catch(e) {}
+    setSaving(false);
+  }
+
+  const fmt = v => v != null ? v.toLocaleString('ru-RU', {minimumFractionDigits:1, maximumFractionDigits:2}) : '—';
+
+  return e('div', null,
+    e('h2', {className:'page-title', style:{padding:'16px 16px 4px'}}, '🗑️ Отходы — Мясной цех'),
+    e('p', {style:{color:'var(--muted)',fontSize:13,padding:'0 16px',marginBottom:12}},
+      'Взвесьте отходы и введите вес в кг. Нажмите «Отправить».'),
+    !ingredients.length && e('div', {className:'empty-state'},
+      'Нет данных выдачи на эту дату. Сначала загрузите файл выдачи на вкладке «Выдача».'),
+    !!ingredients.length && e('div', {className:'pack-table-wrap'},
+      e('table', {className:'pack-table'},
+        e('thead', null,
+          e('tr', null,
+            e('th', null, 'Сырьё'),
+            e('th', {style:{width:110, textAlign:'right'}}, 'Выдано, кг'),
+            e('th', {style:{width:130, textAlign:'right'}}, 'Отходы, кг'),
+          )
+        ),
+        e('tbody', null,
+          ingredients.map(ing =>
+            e('tr', {key: ing.name},
+              e('td', null, ing.name),
+              e('td', {style:{textAlign:'right', fontWeight:600, fontVariantNumeric:'tabular-nums'}},
+                ing.mass_g > 0
+                  ? (ing.mass_g / 1000).toLocaleString('ru-RU', {minimumFractionDigits:2, maximumFractionDigits:2})
+                  : '—'),
+              e('td', {style:{textAlign:'right'}},
+                e('div', {style:{display:'flex', alignItems:'center', justifyContent:'flex-end', gap:6}},
+                  e('input', {
+                    type:'text', inputMode:'decimal',
+                    value: waste[ing.name] || '',
+                    onChange: ev => setWaste(w => ({...w, [ing.name]: ev.target.value})),
+                    placeholder: '0',
+                    style:{
+                      width:90, textAlign:'right', fontSize:17, fontWeight:700,
+                      padding:'5px 10px', borderRadius:8,
+                      border:'2px solid var(--border)',
+                      background:'var(--bg)', color:'var(--text)',
+                      outline:'none',
+                    },
+                  }),
+                  e('span', {style:{fontSize:13, color:'var(--muted)'}}, 'кг'),
+                )
+              ),
+            )
+          )
+        )
+      )
+    ),
+    !!ingredients.length && e('div', {style:{padding:'16px'}},
+      e('button', {
+        onClick: handleSubmit,
+        disabled: saving || !dateKey,
+        style:{
+          width: '100%', padding: '13px', fontSize: 15, fontWeight: 700,
+          background: 'var(--accent)', color: 'white', border: 'none', borderRadius: 10,
+          cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.7 : 1,
+        },
+      }, saving ? 'Сохранение...' : '💾 Сохранить'),
+      savedAt && e('div', {style:{textAlign:'center', marginTop:10, color:'var(--muted)', fontSize:13}},
+        `Сохранено в ${savedAt}`)
+    )
+  );
+}
+
+// ============================================================
+// ISSUANCE TAB — сырьё и остатки мясного цеха
+// ============================================================
+function IssuanceTab({dateKey, activeTcEE, activeTcUD, shift}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [viewDate, setViewDate] = useState(dateKey || today);
+  const isToday = viewDate === today;
+
+  const [issuanceItems, setIssuanceItems] = useState(null); // null = не загружено ещё
+  const [wasteItems, setWasteItems] = useState([]);
+  const [fileName, setFileName] = useState('');
+  const [error, setError] = useState('');
+  const [shiftIngData, setShiftIngData] = useState(null);
+  const [shiftLoading, setShiftLoading] = useState(false);
+
+  function collectIngredients(obj, acc) {
+    for (const ing of (obj.ingredients||[])) acc.push(ing);
+    for (const sp of (obj.subPreps||[])) collectIngredients(sp, acc);
+  }
+
+  // При смене даты — сбрасываем и перезагружаем
+  useEffect(() => {
+    setIssuanceItems(null);
+    setWasteItems([]);
+    setFileName('');
+    setError('');
+    setShiftIngData(null);
+    (async () => {
+      try {
+        const [issR, wasteR] = await Promise.all([
+          fetch(`/api/raw-material/issuance/${viewDate}`),
+          fetch(`/api/raw-material/waste/${viewDate}`),
+        ]);
+        if (issR.ok) {
+          const d = await issR.json();
+          if (d.items?.length) {
+            setIssuanceItems(d.items);
+            setFileName('(загружено из базы)');
+          } else {
+            setIssuanceItems([]); // нет данных для этой даты
+          }
+        }
+        if (wasteR.ok) {
+          const d = await wasteR.json();
+          setWasteItems(d.items || []);
+        }
+      } catch(e) {}
+    })();
+  }, [viewDate]);
+
+  // Загружаем данные техкарты + фактов ДХ
+  useEffect(() => {
+    const tcId = activeTcEE?.id || activeTcUD?.id;
+    if (!tcId || !dateKey) { setShiftIngData(null); return; }
+    setShiftLoading(true);
+    (async () => {
+      try {
+        const [tcResp, dhResp, shiftResp] = await Promise.all([
+          fetch(`/api/techcards/${tcId}`),
+          fetch(`/api/shifts/${viewDate}/dh-storage`),
+          fetch(`/api/shifts/${viewDate}`),
+        ]);
+        if (!tcResp.ok) { setShiftLoading(false); return; }
+        const tcData = await tcResp.json();
+        const tc = tcData.techcard || tcData;
+
+        // Факты ДХ/Склад: {item_id → to_kitchen (кол-во уп)}
+        const factMap = {};
+        if (dhResp.ok) {
+          const dd = await dhResp.json();
+          (dd.items||[]).forEach(it => { factMap[it.item_id] = it.to_kitchen||0; });
+        }
+        // Факты из смены (pack-table, если нет ДХ/Склад записи)
+        let shiftFacts = {};
+        if (shiftResp.ok) {
+          const sd = await shiftResp.json();
+          shiftFacts = calcFactTotals(sd.shift?.facts || {});
+        }
+
+        // Строим карту item_id → {planQty, ingredients: [{id,name,planAmount,unit}]}
+        const ingMap = {};
+        // shift.itemPackLines — это уже объект {itemId: [{qty,...}]}
+        const packLinesObj = shift?.itemPackLines || {};
+
+        (tc.stations||[]).forEach(st => {
+          (st.items||[]).forEach(item => {
+            if (!item.name.startsWith('ДХ')) return;
+            const lines = packLinesObj[item.id];
+            const plan = lines != null
+              ? (Array.isArray(lines) ? lines.reduce((s,l)=>s+(Number(l.qty)||0), 0) : (Number(lines.qty)||0))
+              : (item.packPlan ? (Number(item.packPlan.qty)||0) : 0);
+            const ings = [];
+            collectIngredients(item, ings);
+            // Схлопываем одинаковые ингредиенты
+            const merged = {};
+            ings.forEach(ing => {
+              if (!ing.id) return;
+              if (!merged[ing.id]) merged[ing.id]={id:ing.id,name:ing.name,planAmount:0,unit:ing.unit||'г'};
+              merged[ing.id].planAmount += ing.planAmount||0;
+            });
+            const fact = factMap[item.id] ?? shiftFacts[item.id] ?? 0;
+            ingMap[item.id] = {name:item.name, plan, fact, ingredients:Object.values(merged)};
+          });
+        });
+        setShiftIngData(ingMap);
+      } catch(e) { console.error('IssuanceTab shift load error', e); }
+      setShiftLoading(false);
+    })();
+  }, [dateKey, activeTcEE?.id, activeTcUD?.id]);
+
+  function parseIssuanceXlsx(data) {
+    const wb = XLSX.read(data, {type:'array'});
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+    const result = [];
+    for (const row of rows) {
+      const id = Number(row[0]);
+      if (!id || !isFinite(id)) continue;
+      const name = String(row[1]||'').trim();
+      if (!name) continue;
+      const category = String(row[3]||'').trim();
+      const source   = String(row[4]||'').trim();
+      const brutto   = Number(row[5]) || 0;
+      const qty      = Number(row[6]) || 0;
+      const unit     = String(row[7]||'').trim();
+      if (source !== 'Производство' && source !== 'Резерв') continue;
+      if (!/мясо/i.test(category) && !/рыба/i.test(category)) continue;
+      const mass_g = unit === 'шт' ? brutto * qty : brutto;
+      result.push({ingredient_id: id, ing_name: name, category, source, mass_g});
+    }
+    return result;
+  }
+
+  async function handleFile(file) {
+    if (!file || !isToday) return;
+    setFileName(file.name);
+    setError('');
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const parsed = parseIssuanceXlsx(ev.target.result);
+        if (!parsed.length) { setError('Не найдено позиций с категорией Мясо/Рыба в блоках Производство/Резерв'); return; }
+        setIssuanceItems(parsed);
+        const r = await fetch(`/api/raw-material/issuance/${viewDate}`, {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({items: parsed}),
+        });
+        if (!r.ok) console.warn('Не удалось сохранить выдачу в БД');
+      } catch(ex) { setError('Ошибка парсинга: ' + ex.message); }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  async function handleClearIssuance() {
+    await fetch(`/api/raw-material/issuance/${viewDate}`, {method:'DELETE'});
+    setIssuanceItems([]);
+    setFileName('');
+  }
+
+  // Агрегируем данные по ингредиентам
+  const ingRows = (() => {
+    if (!issuanceItems?.length) return [];
+    const map = {};
+    issuanceItems.forEach(it => {
+      if (!map[it.ingredient_id]) map[it.ingredient_id] = {id:it.ingredient_id, name:it.ing_name, issuedG:0, consumedG:0, wasteKg:0, writeoffKg:0};
+      map[it.ingredient_id].issuedG += it.mass_g || 0;
+    });
+    // Расход по факту: суммируем по всем ДХ-позициям
+    Object.values(shiftIngData || {}).forEach(dhItem => {
+      const ratio = dhItem.plan > 0 ? (dhItem.fact || 0) / dhItem.plan : 0;
+      (dhItem.ingredients || []).forEach(ing => {
+        if (map[ing.id]) map[ing.id].consumedG += (ing.planAmount || 0) * ratio;
+      });
+    });
+    // Отходы
+    wasteItems.forEach(it => {
+      if (map[it.ingredient_id]) map[it.ingredient_id].wasteKg = it.weight_kg || 0;
+    });
+    return Object.values(map).map(r => {
+      const issuedKg = r.issuedG / 1000;
+      const consumedKg = r.consumedG / 1000;
+      const balance = issuedKg - consumedKg - r.wasteKg - r.writeoffKg;
+      let status;
+      if (consumedKg < 0.001) {
+        status = 'no_fact';       // факт не внесён
+      } else if (r.wasteKg > 0) {
+        status = 'done';          // отходы внесены → выполнено
+      } else if (Math.abs(balance) < 0.1) {
+        status = 'ok';            // сходится без отходов
+      } else {
+        status = 'wait_waste';    // есть остаток, ждём отходов
+      }
+      return {...r, issuedKg, consumedKg, balance, status};
+    });
+  })();
+
+  const totals = ingRows.reduce((a,r) => ({
+    issued: a.issued+r.issuedKg, consumed: a.consumed+r.consumedKg,
+    waste: a.waste+r.wasteKg, writeoff: a.writeoff+r.writeoffKg, balance: a.balance+r.balance,
+  }), {issued:0,consumed:0,waste:0,writeoff:0,balance:0});
+
+
+  const STATUS_BADGE = {
+    no_fact:    {label:'Не выполнено', bg:'#f3f4f6', color:'#6b7280'},
+    ok:         {label:'Сходится',     bg:'#dcfce7', color:'#16a34a'},
+    wait_waste: {label:'Ждём отходов', bg:'#fef9c3', color:'#92400e'},
+    done:       {label:'Выполнено',    bg:'#dcfce7', color:'#16a34a'},
+  };
+
+  const fmtKg = n => n.toLocaleString('ru-RU', {minimumFractionDigits:2, maximumFractionDigits:2});
+  const fmtKg1 = n => n.toLocaleString('ru-RU', {minimumFractionDigits:1, maximumFractionDigits:1});
+
+  // Навигация по датам
+  function shiftViewDate(delta) {
+    const d = new Date(viewDate);
+    d.setDate(d.getDate() + delta);
+    const next = d.toISOString().slice(0, 10);
+    if (next > today) return; // не в будущее
+    setViewDate(next);
+  }
+
+  const hasIssuance = issuanceItems?.length > 0;
+
+  return e('div', {style:{paddingBottom:40}},
+    // Заголовок + навигация по датам
+    e('div', {style:{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'20px 20px 12px',flexWrap:'wrap',gap:12}},
+      e('div', null,
+        e('h1', {className:'page-title', style:{margin:0}}, 'Сырьё и остатки'),
+        e('p', {style:{fontSize:13,color:'var(--muted)',margin:'4px 0 0'}},
+          'Мясной цех · выдача, расход по факту, отходы и расчётный остаток'),
+      ),
+      e('div', {style:{display:'flex',alignItems:'center',gap:8}},
+        e('button', {onClick:()=>shiftViewDate(-1),
+          style:{width:32,height:32,borderRadius:8,border:'1px solid var(--border)',background:'var(--surface)',cursor:'pointer',fontSize:16,display:'flex',alignItems:'center',justifyContent:'center'}},
+          '‹'),
+        e('div', {style:{padding:'6px 14px',borderRadius:8,border:'1px solid var(--border)',background:'var(--surface)',fontWeight:600,fontSize:14,minWidth:120,textAlign:'center'}},
+          isToday ? 'Сегодня, ' + formatDateRu(viewDate) : formatDateRu(viewDate)),
+        e('button', {onClick:()=>shiftViewDate(+1), disabled: isToday,
+          style:{width:32,height:32,borderRadius:8,border:'1px solid var(--border)',background:'var(--surface)',cursor:isToday?'default':'pointer',fontSize:16,opacity:isToday?0.3:1,display:'flex',alignItems:'center',justifyContent:'center'}},
+          '›'),
+      ),
+    ),
+
+    // Блок загрузки файла — только сегодня и если файл ещё не загружен
+    isToday && !hasIssuance && e('div', {style:{padding:'0 20px 20px'}},
+      e('div', {style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}},
+        e('div', {style:{background:'var(--surface)',borderRadius:12,padding:20,border:'1px solid var(--border)'}},
+          e('h3', {style:{margin:'0 0 8px',fontSize:15,fontWeight:700}}, 'Файл выдачи'),
+          e('p', {style:{margin:'0 0 12px',fontSize:13,color:'var(--muted)',lineHeight:1.5}},
+            'Выдача сырья на мясной цех за день. Загрузите отчёт из 1С.'),
+          e('label', {
+            style:{display:'block',border:'2px dashed var(--border)',borderRadius:8,padding:'24px 16px',
+              textAlign:'center',cursor:'pointer',background:'var(--bg)'},
+            onDragOver: ev => ev.preventDefault(),
+            onDrop: ev => { ev.preventDefault(); const f=ev.dataTransfer.files?.[0]; if(f) handleFile(f); },
+          },
+            e('div', {style:{fontWeight:600,marginBottom:4}}, 'Загрузить новый файл'),
+            e('div', {style:{fontSize:12,color:'var(--muted)'}}, 'Excel (.xlsx, .xls), можно перетащить сюда'),
+            e('input', {type:'file',accept:'.xlsx,.xls',style:{display:'none'},
+              onChange: ev => { const f=ev.target.files?.[0]; if(f) handleFile(f); ev.target.value=''; }})
+          ),
+          error && e('div',{style:{color:'var(--danger,#dc2626)',fontSize:13,marginTop:8}}, error),
+        ),
+        e('div', {style:{background:'var(--surface)',borderRadius:12,padding:20,border:'1px solid var(--border)'}},
+          e('h3', {style:{margin:'0 0 12px',fontSize:15,fontWeight:700}}, 'Загруженные файлы'),
+          e('div', {style:{color:'var(--muted)',fontSize:13}}, 'Файл не загружен'),
+        ),
+      )
+    ),
+
+    // Если файл загружен — показываем статус файла с кнопкой "Убрать" (только сегодня)
+    hasIssuance && e('div', {style:{padding:'0 20px 16px'}},
+      e('div', {style:{background:'#f0fdf4',border:'1px solid #86efac',borderRadius:10,padding:'12px 16px',display:'flex',alignItems:'center',justifyContent:'space-between',gap:12}},
+        e('div', null,
+          e('div', {style:{fontWeight:600,color:'#16a34a'}}, '✓ ' + (fileName && fileName !== '(загружено из базы)' ? fileName : 'Файл выдачи')),
+          e('div', {style:{fontSize:12,color:'var(--muted)',marginTop:2}}, `Применён · ${ingRows.length} позиций сырья`),
+        ),
+        isToday && e('button', {onClick:handleClearIssuance,
+          style:{padding:'4px 12px',border:'1px solid #86efac',borderRadius:6,background:'white',color:'#16a34a',cursor:'pointer',fontWeight:600,fontSize:13,whiteSpace:'nowrap'}},
+          'Убрать'),
+      )
+    ),
+
+    // Сводные карточки
+    e('div', {style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(130px,1fr))',gap:12,padding:'0 20px 16px'}},
+      [
+        {label:'Выдано',       v:totals.issued},
+        {label:'Ушло в работу',v:totals.consumed},
+        {label:'Отходы',       v:totals.waste},
+        {label:'Списано',      v:totals.writeoff},
+        {label:'Остаток',      v:totals.balance},
+      ].map(s => e('div', {key:s.label,
+        style:{background:'var(--surface)',borderRadius:10,padding:'12px 16px',border:'1px solid var(--border)'}},
+        e('div', {style:{fontSize:12,color:'var(--muted)',marginBottom:4}}, s.label),
+        e('div', {style:{fontSize:22,fontWeight:700}},
+          fmtKg1(s.v),
+          e('span', {style:{fontSize:13,fontWeight:400,color:'var(--muted)',marginLeft:4}}, 'кг'),
+        ),
+      ))
+    ),
+
+
+    // Основная таблица
+    shiftLoading && e('div',{style:{color:'var(--muted)',padding:'12px 20px'}},'Загрузка данных...'),
+    ingRows.length > 0 && e('div', {style:{padding:'0 20px'}},
+      e('div', {className:'pack-table-wrap'},
+        e('table', {className:'pack-table'},
+          e('thead', null, e('tr', null,
+            e('th', null, 'Сырьё'),
+            e('th', {style:{width:110,textAlign:'right'}}, 'Выдано, кг'),
+            e('th', {style:{width:130,textAlign:'right'}}, 'Расход по факту, кг'),
+            e('th', {style:{width:110,textAlign:'right'}}, 'Отходы, кг'),
+            e('th', {style:{width:100,textAlign:'right'}}, 'Остаток, кг'),
+            e('th', {style:{width:130}}, 'Статус'),
+          )),
+          e('tbody', null,
+            ingRows.map(r => {
+              const badge = STATUS_BADGE[r.status] || {label:r.status,bg:'#f3f4f6',color:'#6b7280'};
+              return e('tr', {key:r.id},
+                e('td', {style:{fontWeight:500}}, r.name),
+                e('td', {style:{textAlign:'right',fontWeight:600,fontVariantNumeric:'tabular-nums'}}, fmtKg(r.issuedKg)),
+                e('td', {style:{textAlign:'right',fontVariantNumeric:'tabular-nums'}}, r.consumedKg>0.001 ? fmtKg(r.consumedKg) : '—'),
+                e('td', {style:{textAlign:'right',fontVariantNumeric:'tabular-nums'}},
+                  r.wasteKg > 0
+                    ? fmtKg(r.wasteKg)
+                    : e('span', {style:{background:'#fef9c3',color:'#92400e',padding:'1px 8px',borderRadius:4,fontSize:12,fontWeight:600}}, 'не внесено')),
+                e('td', {style:{textAlign:'right',fontWeight:600,fontVariantNumeric:'tabular-nums',
+                  color: Math.abs(r.balance)<0.1 ? 'var(--muted)' : r.balance<0 ? 'var(--danger,#dc2626)' : 'var(--text)'}},
+                  fmtKg(r.balance)),
+                e('td', null,
+                  e('span', {style:{background:badge.bg,color:badge.color,padding:'2px 10px',borderRadius:20,fontSize:12,fontWeight:600,whiteSpace:'nowrap'}}, badge.label)),
+              );
+            })
+          )
+        )
+      )
+    ),
+    !issuanceItems?.length && !shiftLoading &&
+      e('div', {className:'empty-state', style:{marginTop:40}}, 'Загрузите файл выдачи, чтобы увидеть сводку'),
   );
 }
 
@@ -10010,6 +10800,7 @@ function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesCh
         ? e(KitchenShopPage,{
             shopGroup:selectedShop, shift, onShiftChange, allEmployees,
             isManager:true, shopGroups:workshopGroups,
+            dateKey,
             precutConfig, onPrecutConfigChange,
             onBack:(targetGroup)=>{
               if(targetGroup) setSelectedShop(targetGroup);
@@ -10025,7 +10816,50 @@ function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesCh
     tab==='techTasks' && e(ManagerTechnologistTasks),
     tab==='product' && e(ProductJournalPage,null),
     tab==='acts' && e(ActsPage,{isManager:true}),
-    tab==='dh-storage' && e(DXStorageTab,{dateKey,shift,activeTcEE,activeTcUD,archiveIndex})
+    tab==='dh-storage' && e(DXStorageTab,{dateKey,shift,activeTcEE,activeTcUD,archiveIndex}),
+    tab==='issuance'  && e(IssuanceTab,{dateKey,activeTcEE,activeTcUD,shift})
+  );
+}
+
+// ============================================================
+// KITCHEN MANAGER PAGE — роль менеджера кухни
+// Вкладки: Кухня (цеха), Техкарты, ДХ/Склад
+// URL: ?role=kitchen_manager
+// ============================================================
+function KitchenManagerPage({dateKey, shift, onShiftChange, allTechcards, activeTcEE, activeTcUD,
+    onApplyTechcard, onDeactivate, onRefreshTechcards, archiveIndex,
+    workshopGroups, precutConfig, onPrecutConfigChange}) {
+  const [tab, setTab] = useState('kitchen');
+  const [selectedShop, setSelectedShop] = useState(null);
+  const switchTab = (t) => { if (t !== 'kitchen') setSelectedShop(null); setTab(t); };
+
+  return e('div', {className:'mgr-wrap'},
+    e('div', {className:'mgr-tabs'},
+      e('button', {className:'mgr-tab'+(tab==='kitchen'?' active':''), onClick:()=>switchTab('kitchen')},
+        '🍳 Кухня'),
+      e('button', {className:'mgr-tab'+(tab==='upload'?' active':''), onClick:()=>switchTab('upload')},
+        e(SvgUpload,{size:16}),' Техкарты'),
+      e('button', {className:'mgr-tab'+(tab==='dh-storage'?' active':''), onClick:()=>switchTab('dh-storage')},
+        '📦 ДХ / Склад'),
+    ),
+    tab==='kitchen' && (
+      selectedShop
+        ? e(KitchenShopPage, {
+            shopGroup: selectedShop, shift, onShiftChange, allEmployees: [],
+            isManager: true, shopGroups: workshopGroups,
+            dateKey,
+            precutConfig, onPrecutConfigChange,
+            onBack: (targetGroup) => {
+              if (targetGroup) setSelectedShop(targetGroup);
+              else setSelectedShop(null);
+            }
+          })
+        : e(WorkshopSelector, {shopGroups: workshopGroups, shift, onSelect: setSelectedShop})
+    ),
+    tab==='upload' && e(TechcardsTab, {shift, allTechcards, activeTcEE, activeTcUD,
+      onApplyTechcard, onDeactivate, onRefreshTechcards}),
+    tab==='dh-storage' && e(DXStorageTab, {dateKey, shift, activeTcEE, activeTcUD, archiveIndex}),
+    tab==='issuance'  && e(IssuanceTab, {dateKey, activeTcEE, activeTcUD, shift}),
   );
 }
 
@@ -12956,11 +13790,12 @@ function App() {
   const isManager=roleParam==='manager';
   const isTechnologist=roleParam==='technologist';
   const isProduct=roleParam==='product';
+  const isKitchenManager=roleParam==='kitchen_manager';
 
   const [loading,setLoading]=useState(true);
   const [today]=useState(todayKey);
   const [viewDate,setViewDate]=useState(todayKey);
-  const [mode,setMode]=useState(shopParam?'kitchen':isManager?'manager':'home'); // home | kitchen | manager
+  const [mode,setMode]=useState(shopParam?'kitchen':(isManager||isKitchenManager)?'manager':'home'); // home | kitchen | manager
   const [selectedShop,setSelectedShop]=useState(null);
   const [allEmployees,setAllEmployees]=useState([]);
   const [shift,setShift]=useState(()=>emptyShiftData(todayKey()));
@@ -13137,6 +13972,30 @@ function App() {
     e(ProductJournalPage,{initialActId:actIdParam})
   );
 
+  // Менеджер кухни — нужна загрузка данных смены, поэтому рендерим после loading
+  if(isKitchenManager && loading) return e('div',{className:'empty-state',style:{marginTop:60}},'Загрузка…');
+  if(isKitchenManager) return e('div',null,
+    e('div',{className:'topnav'},
+      e('div',{style:{display:'flex',alignItems:'center',gap:10}},
+        e('span',{className:'topnav-brand'},'🍳 Менеджер кухни')
+      ),
+      e('div',{className:'topnav-right'},
+        e('div',{className:'date-pill'},formatDateRu(today))
+      )
+    ),
+    e(KitchenManagerPage,{
+      dateKey:viewDate, shift, onShiftChange:persistShift,
+      allTechcards, activeTcEE, activeTcUD,
+      onApplyTechcard:applyTechcard, onDeactivate:deactivateTechcard,
+      onRefreshTechcards:refreshTechcards,
+      archiveIndex, workshopGroups, precutConfig,
+      onPrecutConfigChange: async(newSet)=>{
+        setPrecutConfig(newSet);
+        try{ await fetch('/api/precut',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:[...newSet]})}); }catch(_){}
+      }
+    })
+  );
+
   if(loading) return e('div',{className:'empty-state',style:{marginTop:60}},'Загрузка…');
 
   const isArchive=viewDate!==today;
@@ -13190,6 +14049,7 @@ function App() {
       onShiftChange:persistShift,
       allEmployees,
       isManager,
+      dateKey:viewDate,
       shopGroups: (shopParam||!isManager) ? null : workshopGroups,
       precutConfig,
       onPrecutConfigChange: async(newSet)=>{

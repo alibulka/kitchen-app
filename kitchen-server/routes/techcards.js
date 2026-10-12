@@ -259,6 +259,27 @@ async function saveTechcardData(client, techcardId, items, stations) {
 
 // ─── Маршруты ─────────────────────────────────────────────────────────────────
 
+// Все уникальные позиции из всех техкарт (для автодополнения)
+router.get('/all-items', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        i.item_id AS id,
+        i.name,
+        COALESCE(
+          (SELECT SUM(tpl.qty) FROM techcard_pack_lines tpl
+           WHERE tpl.item_id = i.item_id), 0
+        ) AS plan
+      FROM items i
+      WHERE i.item_id IN (SELECT DISTINCT item_id FROM techcard_station_items)
+      ORDER BY i.name
+    `);
+    res.json({ items: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/', async (req, res) => {
   try {
     const { rows } = await pool.query(

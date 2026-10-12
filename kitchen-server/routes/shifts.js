@@ -3,12 +3,16 @@ const router = express.Router();
 const { pool } = require('../db');
 let writeFacts, writeFacts2;
 try { ({ writeFacts, writeFacts2 } = require('../lib/facts-sheets')); } catch {}
+let writeFactsToControlSheet;
+try { ({ writeFactsToControlSheet } = require('../lib/dh-control-sheet')); } catch {}
+let appendToKitchenResidues;
+try { ({ appendToKitchenResidues } = require('../lib/kitchen-residues-sheet')); } catch {}
 
 // ─── Чтение смены ─────────────────────────────────────────────────────────────
 
 async function buildShift(date) {
   const { rows: [shiftRow] } = await pool.query(
-    'SELECT date, techcard_id, ud_techcard_id FROM shifts WHERE date = $1', [date]
+    'SELECT date, techcard_id, ud_techcard_id, extra_json FROM shifts WHERE date = $1', [date]
   );
   if (!shiftRow) return null;
 
@@ -173,13 +177,16 @@ async function buildShift(date) {
 
   const itemPackLines = await buildItemPackLines(shiftRow.techcard_id, shiftRow.ud_techcard_id, date);
 
+  const extra = shiftRow.extra_json ? JSON.parse(shiftRow.extra_json) : {};
+
   return {
     date,
     techcardId: shiftRow.techcard_id || null,
     udTechcardId: shiftRow.ud_techcard_id || null,
     doneFlags, doneTimes, skipReasons, skipTimes, prevSkips,
     prevTechcardId, prevUdTechcardId,
-    doneBy, facts, itemPackLines, stationStartTimes, assignments: {}
+    doneBy, facts, itemPackLines, stationStartTimes, assignments: {},
+    manualDhItems: extra.manualDhItems || [],
   };
 }
 
@@ -224,10 +231,11 @@ async function saveShift(date, shift) {
   const udTechcardId = shift.udTechcardId || null;
 
   await pool.withTransaction(async (client) => {
+    const extraJson = JSON.stringify({ manualDhItems: shift.manualDhItems || [] });
     await client.query(`
-      INSERT INTO shifts(date, techcard_id, ud_techcard_id) VALUES($1, $2, $3)
-      ON CONFLICT(date) DO UPDATE SET techcard_id = $2, ud_techcard_id = $3, updated_at = NOW()::text
-    `, [date, techcardId, udTechcardId]);
+      INSERT INTO shifts(date, techcard_id, ud_techcard_id, extra_json) VALUES($1, $2, $3, $4)
+      ON CONFLICT(date) DO UPDATE SET techcard_id = $2, ud_techcard_id = $3, extra_json = $4, updated_at = NOW()::text
+    `, [date, techcardId, udTechcardId, extraJson]);
 
     // Статусы выполнения + skip — UPSERT чтобы не затирать отметки других устройств
     const allKeys = new Set([
@@ -463,7 +471,7 @@ router.get('/:date', async (req, res) => {
 
 router.post('/:date', async (req, res) => {
   const { date } = req.params;
-  const { shift, clientId } = req.body;
+  const { shift, clientId, syncControl } = req.body;
   if (!shift) return res.status(400).json({ error: 'shift required' });
 
   try {
@@ -479,6 +487,35 @@ router.post('/:date', async (req, res) => {
     if (writeFacts && factsKeys.length > 0) {
       syncFactsToSheet(date, shift.facts).catch(e => console.error('[facts-sheets]', e.message));
     }
+    // Запись в "Контроль 2026" при сохранении Факта ДХ
+    console.log('[control-debug] syncControl=', syncControl, 'fn=', !!writeFactsToControlSheet, 'creds=', !!process.env.GOOGLE_CREDENTIALS_JSON, 'factsKeys=', factsKeys.length);
+    if (syncControl && writeFactsToControlSheet && process.env.GOOGLE_CREDENTIALS_JSON && factsKeys.length > 0) {
+      const factTotals = {};
+      factsKeys.forEach(k => {
+        const m = k.match(RE_FACT_KEY);
+        if (m) {
+          const id = String(m[2]);
+          factTotals[id] = (factTotals[id] || 0) + (Number(shift.facts[k]) || 0);
+        }
+      });
+      const items = Object.entries(factTotals).map(([item_id, fact]) => ({ item_id, fact, isManual: false }));
+      // Добавляем ручные позиции с планом и фактом
+      (shift.manualDhItems || []).forEach(it => {
+        const id = String(it.id || it.uid);
+        const fact = Number(it.fact) || 0;
+        const plan = Number(it.plan) || 0;
+        if (fact > 0 || plan > 0) {
+          // Заменяем если уже есть в items (не должно быть, но на всякий случай)
+          const existing = items.find(i => i.item_id === id);
+          if (existing) { existing.fact = fact; existing.plan = plan; existing.isManual = true; }
+          else items.push({ item_id: id, fact, plan, isManual: true });
+        }
+      });
+      console.log('[control-debug] items=', items.length, 'date=', date);
+      writeFactsToControlSheet(date, items)
+        .then(r => console.log('[control-debug] result=', JSON.stringify(r)))
+        .catch(e => console.error('[dh-control-sheet] Ошибка:', e.message));
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -490,7 +527,7 @@ router.get('/:date/dh-storage', async (req, res) => {
   const { date } = req.params;
   try {
     const { rows } = await pool.query(
-      'SELECT item_id, to_kitchen, to_storage, label_date FROM shift_dh_storage WHERE shift_date=$1', [date]);
+      'SELECT item_id, to_kitchen, to_storage, label_date, to_kitchen_excess, label_date_excess FROM shift_dh_storage WHERE shift_date=$1', [date]);
     res.json({ items: rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -502,16 +539,114 @@ router.post('/:date/dh-storage', async (req, res) => {
   const { items } = req.body;
   if (!Array.isArray(items)) return res.status(400).json({ error: 'items required' });
   try {
+    // Читаем предыдущее состояние ДО обновления — для сравнения
+    const { rows: prevRows } = await pool.query(
+      'SELECT item_id, to_kitchen, label_date, to_kitchen_excess, label_date_excess FROM shift_dh_storage WHERE shift_date=$1', [date]);
+    const prevMap = {};
+    prevRows.forEach(r => { prevMap[r.item_id] = r; });
+
     for (const it of items) {
       await pool.query(
-        `INSERT INTO shift_dh_storage(shift_date, item_id, to_kitchen, to_storage, label_date)
-         VALUES($1,$2,$3,$4,$5)
-         ON CONFLICT(shift_date, item_id) DO UPDATE SET to_kitchen=$3, to_storage=$4, label_date=$5`,
-        [date, it.item_id, it.to_kitchen ?? 0, it.to_storage ?? 0, it.label_date ?? null]);
+        `INSERT INTO shift_dh_storage(shift_date, item_id, to_kitchen, to_storage, label_date, to_kitchen_excess, label_date_excess)
+         VALUES($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT(shift_date, item_id) DO UPDATE SET to_kitchen=$3, to_storage=$4, label_date=$5, to_kitchen_excess=$6, label_date_excess=$7`,
+        [date, it.item_id, it.to_kitchen ?? 0, it.to_storage ?? 0, it.label_date ?? null, it.to_kitchen_excess ?? 0, it.label_date_excess ?? null]);
     }
-    res.json({ ok: true });
+
+    // Определяем только новые или изменённые позиции для записи в Sheets
+    const changedItems = items.filter(it => {
+      const prev = prevMap[it.item_id];
+      if (!prev) return true; // новая позиция
+      return (
+        (it.to_kitchen ?? 0) !== Number(prev.to_kitchen) ||
+        (it.label_date ?? null) !== (prev.label_date ?? null) ||
+        (it.to_kitchen_excess ?? 0) !== Number(prev.to_kitchen_excess) ||
+        (it.label_date_excess ?? null) !== (prev.label_date_excess ?? null)
+      );
+    });
+
+    // Синхронизация с Google Sheets "Контроль 2026"
+    let sheetSync = null;
+    if (writeFactsToControlSheet && process.env.GOOGLE_CREDENTIALS_JSON) {
+      console.log('[control] начало записи');
+      try {
+        const sheetItems = items.map(it => ({ item_id: it.item_id, fact: it.to_kitchen ?? 0 }));
+        sheetSync = await writeFactsToControlSheet(date, sheetItems);
+        console.log('[control] завершено:', JSON.stringify(sheetSync));
+      } catch (e) {
+        console.error('[dh-control-sheet] Ошибка записи:', e.message);
+        sheetSync = { status: 'error', message: e.message };
+      }
+    }
+
+    // Позиции без строки в Sheets или с изменёнными данными
+    const { rows: sheetRows } = await pool.query(
+      'SELECT item_id, is_excess, sheet_name FROM shift_dh_sheet_rows WHERE shift_date=$1', [date]);
+    const hasResiduesRow = new Set(sheetRows.filter(r=>r.sheet_name==='Остатки кухни ').map(r=>`${r.item_id}-${r.is_excess}`));
+    const hasTransferRow = new Set(sheetRows.filter(r=>r.sheet_name==='Передача с кухни на СКЛАД').map(r=>`${r.item_id}-${r.is_excess}`));
+
+    const needsSheetWrite = items.filter(it => {
+      const prev = prevMap[it.item_id];
+      const changed = !prev ||
+        (it.to_kitchen ?? 0) !== Number(prev.to_kitchen) ||
+        (it.label_date ?? null) !== (prev.label_date ?? null) ||
+        (it.to_kitchen_excess ?? 0) !== Number(prev.to_kitchen_excess) ||
+        (it.label_date_excess ?? null) !== (prev.label_date_excess ?? null);
+      const missingRow = !hasResiduesRow.has(`${it.item_id}-0`) || !hasTransferRow.has(`${it.item_id}-0`);
+      return changed || missingRow;
+    });
+
+    // Запись в "Остатки кухни "
+    let residuesSync = null;
+    if (appendToKitchenResidues && process.env.GOOGLE_CREDENTIALS_JSON && needsSheetWrite.length > 0) {
+      console.log('[residues] начало записи, items=', needsSheetWrite.length);
+      try {
+        residuesSync = await appendToKitchenResidues(needsSheetWrite, date);
+        console.log('[residues] завершено:', JSON.stringify(residuesSync));
+      } catch (e) {
+        console.error('[kitchen-residues-sheet] Ошибка:', e.message);
+        residuesSync = { status: 'error', message: e.message };
+      }
+      console.log('[residues] после записи');
+    }
+
+    // "Передача с кухни на СКЛАД" пишется в 12:00 следующего дня (scheduleNoonTransferSync в server.js)
+
+    // Синхронизация фактов: распределение ДХ → Факт ДХ
+    console.log('[dh-storage] синхронизация фактов, items=', items.length);
+    for (const it of items) {
+      if (it.total_fact === undefined || it.total_fact === null) continue;
+      if (!it.is_manual && it.station_key) {
+        // Обновляем shift_facts_n для обычных позиций
+        await pool.query(
+          `INSERT INTO shift_facts_n(shift_date, station_key, item_id, line_idx, value)
+           VALUES($1,$2,$3,$4,$5)
+           ON CONFLICT(shift_date, station_key, item_id, line_idx) DO UPDATE SET value=$5`,
+          [date, it.station_key, String(it.item_id), 0, it.total_fact]
+        );
+      }
+    }
+    // Обновляем fact ручных позиций в extra_json
+    const manualUpdates = items.filter(it => it.is_manual && it.total_fact !== undefined);
+    if (manualUpdates.length > 0) {
+      const { rows: [shiftRow] } = await pool.query('SELECT extra_json FROM shifts WHERE date=$1', [date]);
+      if (shiftRow) {
+        const extra = shiftRow.extra_json ? JSON.parse(shiftRow.extra_json) : {};
+        const factMap = {};
+        manualUpdates.forEach(it => { factMap[String(it.item_id)] = it.total_fact; });
+        (extra.manualDhItems || []).forEach(m => {
+          const id = String(m.id || m.uid);
+          if (factMap[id] !== undefined) m.fact = factMap[id];
+        });
+        await pool.query('UPDATE shifts SET extra_json=$1 WHERE date=$2', [JSON.stringify(extra), date]);
+      }
+    }
+
+    console.log('[dh-storage] отправляем ответ');
+    res.json({ ok: true, sheetSync, residuesSync });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[dh-storage] CATCH ERROR:', err.message, err.stack);
+    if (!res.headersSent) res.status(500).json({ error: err.message });
   }
 });
 
