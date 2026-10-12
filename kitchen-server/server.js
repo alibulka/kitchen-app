@@ -6,6 +6,7 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const { createCompressedIndexHandler } = require('./lib/compressed-index');
+const { stripInlineExcel } = require('./lib/browser-startup');
 
 const { pool, initDb } = require('./db');
 
@@ -18,7 +19,11 @@ app.set('wss', wss);
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use((req, _res, next) => { console.log(new Date().toISOString(), req.method, req.path); next(); });
-app.get(['/', '/index.html'], createCompressedIndexHandler(path.join(__dirname, 'public', 'index.html')));
+app.get(['/', '/index.html'], createCompressedIndexHandler(
+  path.join(__dirname, 'public', 'index.html'), { transform: stripInlineExcel }
+));
+const excelBundlePath = require.resolve('xlsx/dist/xlsx.full.min.js');
+app.get('/assets/xlsx-0.18.5.min.js', createCompressedIndexHandler(excelBundlePath, { contentType: 'js' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/api/ping', (_req, res) => res.json({ pong: Date.now() }));

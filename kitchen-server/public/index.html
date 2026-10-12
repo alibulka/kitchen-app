@@ -459,7 +459,13 @@
 </style>
 </head>
 <body>
-<div id="root"></div>
+<div id="root">
+  <div class="empty-state" style="margin-top:60px">
+    <div id="app-boot-status" role="status">Открываем приложение…</div>
+    <button id="app-boot-retry" class="btn-secondary" style="margin-top:12px" hidden>Повторить загрузку</button>
+  </div>
+</div>
+<script src="/startup.js"></script>
 <script>
 /**
  * @license React
@@ -8716,7 +8722,9 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
     return 'В работе';
   };
 
-  const exportXlsx=()=>{
+  const exportXlsx=async()=>{
+    try { await window.ensureExcelLibrary(); }
+    catch(err) { alert(err.message); return; }
     const hdr=["Дата","Цех","Станция","Заготовка","Объём","Упаковка","Кол-во","Статус","Выполнено","Время (мин)","Уп/мин","Сотрудник","Время отметки"];
     const data=filtered.map(r=>[
       formatDateRu(r.date),r.shop,r.station,r.name,r.volume||'',r.packName||'',r.planQty||0,
@@ -9191,7 +9199,9 @@ function ShiftReportPanel({dk, allEmployees, onClose}) {
     })();
   },[dk]);
 
-  const exportShift=()=>{
+  const exportShift=async()=>{
+    try { await window.ensureExcelLibrary(); }
+    catch(err) { alert(err.message); return; }
     if(!data) return;
     const hdr=['Цех','Станция','Заготовка','План уп','Выполнено','Сотрудники'];
     const rows=[];
@@ -9373,8 +9383,9 @@ function TechcardsTab({shift, allTechcards, activeTcEE, activeTcUD, onApplyTechc
     setMessageFn('');
     setParsedFn(null);
     const reader=new FileReader();
-    reader.onload=(ev)=>{
+    reader.onload=async(ev)=>{
       try {
+        await window.ensureExcelLibrary();
         const wb=XLSX.read(ev.target.result,{type:'array'});
         const ws=wb.Sheets[wb.SheetNames[0]];
         const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
@@ -10670,6 +10681,7 @@ function IssuanceTab({dateKey, activeTcEE, activeTcUD, shift}) {
     const reader = new FileReader();
     reader.onload = async (ev) => {
       try {
+        await window.ensureExcelLibrary();
         const parsed = parseIssuanceXlsx(ev.target.result);
         if (!parsed.length) { setError('Не найдено позиций с категорией Мясо/Рыба в блоках Производство/Резерв'); return; }
         setIssuanceItems(parsed);
@@ -14245,7 +14257,18 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(e(App,null));
+class AppErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error) { console.error('Application render failed:', error); }
+  render() {
+    if (this.state.error) return e('div',{className:'empty-state',style:{marginTop:60}},
+      e('div',{role:'alert'},'Не удалось открыть приложение: '+this.state.error.message),
+      e('button',{className:'btn-secondary',style:{marginTop:12},onClick:()=>location.reload()},'Повторить загрузку'));
+    return this.props.children;
+  }
+}
+ReactDOM.createRoot(document.getElementById('root')).render(e(AppErrorBoundary,null,e(App,null)));
 
 </script>
 </body>

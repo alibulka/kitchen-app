@@ -64,6 +64,7 @@ function render({ period = false, sortDir = null } = {}) {
     overrides.set(11, sortDir);
   }
   const context = {
+    window: { ensureExcelLibrary: async () => {} },
     Set, Date,
     useMemo: fn => { const result = fn(); memo.push(result); return result; },
     useState: value => {
@@ -147,10 +148,10 @@ test('missing and invalid saved timestamps show a dash rather than a fabricated 
   assert.equal(context.formatDoneTime(time), expectedTime);
 });
 
-test('Excel includes the same completion time and preserves column alignment', () => {
+test('Excel includes the same completion time and preserves column alignment', async () => {
   const { context, tree } = render();
   const button = nodes(tree).find(n => n.type === 'button' && text(n).includes('Excel'));
-  button.props.onClick();
+  await button.props.onClick();
   const [headings, ...rows] = context.exportRows;
   const index = headings.indexOf('Время отметки');
   assert.equal(index, headings.length - 1);
