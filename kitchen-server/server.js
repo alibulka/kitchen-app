@@ -31,6 +31,7 @@ app.use('/api/quality',  require('./routes/quality'));
 app.use('/api/acts',     require('./routes/acts'));
 app.use('/api/prorabotki', require('./routes/prorabotki'));
 app.use('/api/technologist-tasks', require('./routes/technologist-tasks'));
+app.use('/api/raw-material',      require('./routes/raw-material'));
 const objectStorage = require('./lib/objectStorage');
 app.get('/uploads/:filename', async (req, res) => {
   const filename = path.basename(req.params.filename);
@@ -69,6 +70,74 @@ attachWebSocketUpgrade(server);
 
 const PORT = process.env.PORT || 3000;
 server.keepAliveTimeout = 5000;
+
+// Запись в "Передача с кухни на СКЛАД" в 12:00 следующего дня после дня работ
+let appendToKitchenTransfer;
+try { ({ appendToKitchenTransfer } = require('./lib/kitchen-transfer-sheet')); } catch {}
+
+function scheduleNoonTransferSync() {
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(12, 0, 0, 0);
+  if (next <= now) next.setDate(next.getDate() + 1);
+  const delay = next - now;
+  setTimeout(async () => {
+    // Записываем данные за вчера
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const date = yesterday.toISOString().slice(0, 10);
+    console.log(`[noon-transfer] Запуск записи передачи за ${date}`);
+    try {
+      if (appendToKitchenTransfer && process.env.GOOGLE_CREDENTIALS_JSON) {
+        // Берём актуальные данные из БД
+        const { rows: storageRows } = await pool.query(
+          'SELECT item_id, to_kitchen, label_date, to_kitchen_excess, label_date_excess FROM shift_dh_storage WHERE shift_date=$1',
+          [date]
+        );
+        if (storageRows.length > 0) {
+          // Получаем названия позиций
+          const { rows: shiftRow } = await pool.query('SELECT techcard_id, extra_json FROM shifts WHERE date=$1', [date]);
+          const nameMap = {};
+          if (shiftRow.length > 0) {
+            const { rows: tcRows } = await pool.query('SELECT items_json FROM techcards WHERE id=$1', [shiftRow[0].techcard_id]);
+            if (tcRows.length > 0) {
+              try {
+                const items = JSON.parse(tcRows[0].items_json || '{}');
+                Object.entries(items).forEach(([id, packs]) => {
+                  if (packs && packs[0] && packs[0].name) nameMap[String(id)] = packs[0].name;
+                });
+              } catch {}
+            }
+            // Добавляем ручные позиции
+            try {
+              const extra = JSON.parse(shiftRow[0].extra_json || '{}');
+              (extra.manualDhItems || []).forEach(m => {
+                const id = String(m.id || m.uid);
+                if (m.name) nameMap[id] = m.name;
+              });
+            } catch {}
+          }
+          const items = storageRows.map(r => ({
+            item_id: r.item_id,
+            name: nameMap[String(r.item_id)] || String(r.item_id),
+            to_kitchen: r.to_kitchen,
+            label_date: r.label_date,
+            to_kitchen_excess: r.to_kitchen_excess,
+            label_date_excess: r.label_date_excess,
+          }));
+          const res = await appendToKitchenTransfer(items, date);
+          console.log(`[noon-transfer] Завершено: appended=${res.appended}, updated=${res.updated}`);
+        } else {
+          console.log(`[noon-transfer] Нет данных распределения за ${date}`);
+        }
+      }
+    } catch (e) {
+      console.error('[noon-transfer] Ошибка:', e.message);
+    }
+    scheduleNoonTransferSync();
+  }, delay);
+  console.log(`[noon-transfer] Следующий запуск в 12:00 (через ${Math.round(delay / 60000)} мин)`);
+}
 
 // Ночная синхронизация фактов в Google Sheets в 23:50
 function scheduleNightlySync() {
@@ -110,6 +179,7 @@ initDb()
     server.listen(PORT, () => {
       console.log(`Kitchen server running on http://localhost:${PORT}`);
       scheduleNightlySync();
+      scheduleNoonTransferSync();
       const fallbackPort = Number(process.env.DEV_FALLBACK_PORT);
       if (Number.isInteger(fallbackPort) && fallbackPort > 0 && fallbackPort !== Number(PORT)) {
         const fallbackServer = http.createServer(app);

@@ -1,4 +1,5 @@
-const { JWT } = require('google-auth-library');
+let _JWT;
+function getJWT() { if (!_JWT) _JWT = require('google-auth-library').JWT; return _JWT; }
 const { cellId, taskKey, planIds, reconcileLegacy } = require('./prorabotki-identity');
 
 const SPREADSHEET_ID = '1wdclW96Z4YvdEv_syKILNrnUA-q3OnVayb0PHzQSNPA';
@@ -43,7 +44,7 @@ function createAuth(writable) {
     throw new Error('Не настроен доступ к Google Таблице проработок');
   }
   const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
-  return new JWT({
+  return new (getJWT())({
     email: credentials.client_email,
     key: credentials.private_key,
     scopes: [writable ? 'https://www.googleapis.com/auth/spreadsheets'

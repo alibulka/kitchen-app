@@ -381,7 +381,6 @@ router.put('/acts/:id', async (req, res) => {
       });
       const hasChanges = sets.length > 0 || changedValues.length > 0;
       if (hasChanges) {
-        // clock_timestamp() changes within a transaction; NOW() is fixed at transaction start.
         sets.push(`updated_at=(clock_timestamp()::text)`);
         if (isFirstCompletion) sets.push(`first_completed_at=(clock_timestamp()::text)`);
         params.push(req.params.id);

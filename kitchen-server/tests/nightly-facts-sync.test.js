@@ -6,10 +6,12 @@ const vm = require('node:vm');
 
 const routes = fs.readFileSync(path.join(__dirname, '../routes/shifts.js'), 'utf8');
 const server = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
-const postSource = routes.slice(routes.indexOf("router.post('/:date'"), routes.indexOf('\nmodule.exports'));
+const postStart = routes.indexOf("router.post('/:date'");
+const nextGetRoute = routes.indexOf('\nrouter.get(', postStart);
+const postSource = routes.slice(postStart, nextGetRoute < 0 ? routes.indexOf('\nmodule.exports') : nextGetRoute);
 const timerSource = server.slice(server.indexOf('function scheduleNightlySync()'), server.indexOf('\ninitDb()'));
 
-test('every shift save persists immediately and broadcasts, without any Google Sheets synchronization', async () => {
+test('ordinary shift saves persist immediately and broadcast, without any Google Sheets synchronization', async () => {
   let handler;
   const saves = [];
   const broadcasts = [];
@@ -19,6 +21,8 @@ test('every shift save persists immediately and broadcasts, without any Google S
     saveShift: async (date, shift) => saves.push({ date, shift }),
     syncFactsToSheet: () => { sheetCalls++; },
     writeFacts: () => { sheetCalls++; },
+    writeFactsToControlSheet: () => { sheetCalls++; },
+    process: { env: {} },
     console,
   };
   vm.runInNewContext(postSource, context);
@@ -42,6 +46,45 @@ test('every shift save persists immediately and broadcasts, without any Google S
   assert.equal(saves.length, 3);
   assert.equal(broadcasts.length, 3);
   assert.equal(sheetCalls, 0);
+});
+
+test('explicit DH save exports Control facts without triggering the nightly production export', async () => {
+  let handler;
+  const exports = [];
+  let saved = false;
+  const context = {
+    router: { post: (_path, callback) => { handler = callback; } },
+    saveShift: async () => { saved = true; },
+    syncFactsToSheet: () => { throw new Error('Production export must remain nightly'); },
+    writeFacts: () => { throw new Error('Production export must remain nightly'); },
+    writeFactsToControlSheet: async (date, items) => { exports.push({ date, items }); },
+    RE_FACT_KEY: /^(.+)-(\d+)-pl-(\d+)$/,
+    process: { env: { GOOGLE_CREDENTIALS_JSON: 'test-only' } },
+    console: { log() {}, error(message) { throw new Error(message); } },
+  };
+  vm.runInNewContext(postSource, context);
+  const date = '2026-10-12';
+  let response;
+  await handler({
+    params: { date },
+    body: {
+      syncControl: true,
+      shift: {
+        facts: { 'meat-13018-pl-0': 5, 'meat-13018-pl-1': 7 },
+        manualDhItems: [{ uid: 'manual-1', fact: 3, plan: 4 }],
+      },
+    },
+    app: { get: () => null },
+  }, { json: body => { response = body; }, status: () => { throw new Error('DH save must succeed'); } });
+  assert.equal(saved, true);
+  assert.equal(response.ok, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(exports)), [{
+    date,
+    items: [
+      { item_id: '13018', fact: 12, isManual: false },
+      { item_id: 'manual-1', fact: 3, plan: 4, isManual: true },
+    ],
+  }]);
 });
 
 function nightly({ hasShift = true, fail = false } = {}) {

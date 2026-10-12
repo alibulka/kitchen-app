@@ -440,6 +440,53 @@ async function initDb(pool) {
   await q("INSERT INTO shops(name,sort_order) VALUES('Главный технолог',98) ON CONFLICT(name) DO NOTHING");
   await q("ALTER TABLE employees ADD COLUMN shops TEXT");
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS shift_dh_storage (
+      shift_date TEXT NOT NULL,
+      item_id    INTEGER NOT NULL,
+      to_kitchen REAL NOT NULL DEFAULT 0,
+      to_storage REAL NOT NULL DEFAULT 0,
+      label_date TEXT,
+      PRIMARY KEY (shift_date, item_id)
+    )
+  `);
+  await q('ALTER TABLE shift_dh_storage ADD COLUMN IF NOT EXISTS label_date TEXT');
+  await q('ALTER TABLE shift_dh_storage ADD COLUMN IF NOT EXISTS to_kitchen_excess REAL NOT NULL DEFAULT 0');
+  await q('ALTER TABLE shift_dh_storage ADD COLUMN IF NOT EXISTS label_date_excess TEXT');
+
+  // Учёт остатков сырья мясного цеха
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS shift_raw_issuance (
+      shift_date    TEXT    NOT NULL,
+      ingredient_id INTEGER NOT NULL,
+      ing_name      TEXT    NOT NULL,
+      category      TEXT    NOT NULL DEFAULT '',
+      source        TEXT    NOT NULL DEFAULT '',
+      mass_g        REAL    NOT NULL DEFAULT 0,
+      PRIMARY KEY (shift_date, ingredient_id, source)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS shift_raw_waste (
+      shift_date    TEXT    NOT NULL,
+      ingredient_id INTEGER NOT NULL,
+      ing_name      TEXT    NOT NULL,
+      weight_kg     REAL    NOT NULL DEFAULT 0,
+      entered_at    TEXT    NOT NULL DEFAULT (NOW()::text),
+      PRIMARY KEY (shift_date, ingredient_id)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS raw_carryover (
+      from_date     TEXT    NOT NULL,
+      to_date       TEXT    NOT NULL,
+      ingredient_id INTEGER NOT NULL,
+      ing_name      TEXT    NOT NULL,
+      weight_kg     REAL    NOT NULL DEFAULT 0,
+      PRIMARY KEY (from_date, ingredient_id)
+    )
+  `);
+
   console.log(`DB ready (${process.env.DATABASE_URL ? 'PostgreSQL' : 'SQLite'})`);
 }
 
