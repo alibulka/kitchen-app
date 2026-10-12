@@ -237,6 +237,14 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS shift_dh_storage (
 {
   const dhCols = sqlite.prepare('PRAGMA table_info(shift_dh_storage)').all().map(c => c.name);
   if (!dhCols.includes('label_date')) sqlite.exec('ALTER TABLE shift_dh_storage ADD COLUMN label_date TEXT');
+  if (!dhCols.includes('to_kitchen_excess')) sqlite.exec('ALTER TABLE shift_dh_storage ADD COLUMN to_kitchen_excess REAL NOT NULL DEFAULT 0');
+  if (!dhCols.includes('label_date_excess')) sqlite.exec('ALTER TABLE shift_dh_storage ADD COLUMN label_date_excess TEXT');
+}
+{
+  const cols = sqlite.prepare('PRAGMA table_info(shifts)').all().map(c => c.name);
+  if (cols.length && !cols.includes('extra_json')) {
+    sqlite.exec("ALTER TABLE shifts ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'");
+  }
 }
 
 // ─── SQL: pg → SQLite ────────────────────────────────────────────────────────
