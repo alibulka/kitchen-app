@@ -2,10 +2,11 @@
  * Запись в лист "Остатки кухни "
  * A=ID, B=Название, D=Дата наклейки, E=Дата+180, F=Количество, G=На кухне
  */
-const { getAccessToken, isoToDDMMYYYY, findFirstEmptyRowInColA, writeCellsToSheet } = require('./sheets-utils');
+const { getAccessToken, isoToDDMMYYYY, findFirstEmptyRowInColA, writeCellsToSheet, sheetRowKey } = require('./sheets-utils');
 const { pool } = require('../db');
 
 const SHEET_NAME = 'Остатки кухни ';
+const SHEET_ROW_KEY = sheetRowKey(SHEET_NAME);
 
 function buildCells(r, rowNum) {
   return [
@@ -35,7 +36,7 @@ async function appendToKitchenResidues(items, date) {
     // Ищем сохранённый номер строки
     const { rows: existing } = await pool.query(
       'SELECT row_num FROM shift_dh_sheet_rows WHERE shift_date=$1 AND item_id=$2 AND is_excess=$3 AND sheet_name=$4',
-      [date, r.id, r.isExcess, SHEET_NAME]
+      [date, r.id, r.isExcess, SHEET_ROW_KEY]
     );
 
     if (existing.length > 0) {
@@ -51,7 +52,7 @@ async function appendToKitchenResidues(items, date) {
       await pool.query(
         `INSERT INTO shift_dh_sheet_rows(shift_date, item_id, is_excess, sheet_name, row_num)
          VALUES($1,$2,$3,$4,$5) ON CONFLICT(shift_date,item_id,is_excess,sheet_name) DO UPDATE SET row_num=$5`,
-        [date, r.id, r.isExcess, SHEET_NAME, rowNum]
+        [date, r.id, r.isExcess, SHEET_ROW_KEY, rowNum]
       );
       appended++;
     }

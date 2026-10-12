@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../db');
+const { sheetRowKey } = require('../lib/sheets-utils');
 let writeFacts, writeFacts2;
 try { ({ writeFacts, writeFacts2 } = require('../lib/facts-sheets')); } catch {}
 let writeFactsToControlSheet;
@@ -579,8 +580,8 @@ router.post('/:date/dh-storage', async (req, res) => {
     // Позиции без строки в Sheets или с изменёнными данными
     const { rows: sheetRows } = await pool.query(
       'SELECT item_id, is_excess, sheet_name FROM shift_dh_sheet_rows WHERE shift_date=$1', [date]);
-    const hasResiduesRow = new Set(sheetRows.filter(r=>r.sheet_name==='Остатки кухни ').map(r=>`${r.item_id}-${r.is_excess}`));
-    const hasTransferRow = new Set(sheetRows.filter(r=>r.sheet_name==='Передача с кухни на СКЛАД').map(r=>`${r.item_id}-${r.is_excess}`));
+    const hasResiduesRow = new Set(sheetRows.filter(r=>r.sheet_name===sheetRowKey('Остатки кухни ')).map(r=>`${r.item_id}-${r.is_excess}`));
+    const hasTransferRow = new Set(sheetRows.filter(r=>r.sheet_name===sheetRowKey('Передача с кухни на СКЛАД')).map(r=>`${r.item_id}-${r.is_excess}`));
 
     const needsSheetWrite = items.filter(it => {
       const prev = prevMap[it.item_id];

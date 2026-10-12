@@ -9,7 +9,7 @@
  *   - Искать строки с позицией НИЖЕ строки с плановой датой (до следующей строки-даты)
  */
 
-const SPREADSHEET_ID = '1abYpnMeyHrhzvh0bmFCMEp3bGHO1Y11tFkBhsKFz1pw';
+const { SPREADSHEET_ID } = require('./sheets-utils');
 const SHEET_NAME = 'Контроль 2026';
 const ITEM_ID_COL = 5;  // F
 // Пары: [индекс столбца даты, индекс столбца факта]
