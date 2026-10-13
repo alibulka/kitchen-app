@@ -608,7 +608,8 @@ router.post('/:date/dh-storage', async (req, res) => {
       console.log('[residues] после записи');
     }
 
-    // "Передача с кухни на СКЛАД" пишется в 12:00 следующего дня (scheduleNoonTransferSync в server.js)
+    // Автозапись в "Передача с кухни на СКЛАД" в 12:00 временно отключена.
+    // Планировщик в server.js запускается только при DH_NOON_TRANSFER_SYNC_ENABLED=true.
 
     // Синхронизация фактов: распределение ДХ → Факт ДХ
     console.log('[dh-storage] синхронизация фактов, items=', items.length);

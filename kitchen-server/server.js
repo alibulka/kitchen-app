@@ -81,6 +81,11 @@ let appendToKitchenTransfer;
 try { ({ appendToKitchenTransfer } = require('./lib/kitchen-transfer-sheet')); } catch {}
 
 function scheduleNoonTransferSync() {
+  // Temporarily paused by request. Only an explicit opt-in may schedule this export.
+  if (process.env.DH_NOON_TRANSFER_SYNC_ENABLED !== 'true') {
+    console.log('[noon-transfer] Автоматическая запись в 12:00 отключена');
+    return;
+  }
   const now = new Date();
   const next = new Date(now);
   next.setHours(12, 0, 0, 0);
