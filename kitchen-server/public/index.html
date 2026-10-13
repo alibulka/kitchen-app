@@ -10201,13 +10201,7 @@ function DXDistributionTab({dateKey}) {
       seen.add(it.id || it.uid);
       rows.push({ id: it.id || it.uid, name: it.name, plan: Number(it.plan) || 0, fact: factTotals[it.id] || Number(it.fact) || 0, stationKey: null, isManual: true });
     });
-    // Позиции из factTotals, которых нет в dhItems/manual
-    Object.entries(factTotals).forEach(([idStr, fact]) => {
-      const id = Number(idStr);
-      if (seen.has(id) || !fact) return;
-      seen.add(id);
-      rows.push({ id, name: String(id), plan: 0, fact, stationKey: null, isManual: false });
-    });
+    // Наличие факта в цехе не делает позицию ДХ: не добавляем остальные factTotals.
     return rows;
   }, [dhItems, manualItems, factTotals]);
 
