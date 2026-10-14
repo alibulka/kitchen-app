@@ -247,7 +247,10 @@ async function saveShift(date, shift) {
       const { stationKey, itemId } = splitCompKey(compKey);
       const done = !!(shift.doneFlags || {})[compKey];
       const doneAt = (shift.doneTimes || {})[compKey] || null;
-      const skipReason = done ? null : ((shift.skipReasons || {})[compKey] || null);
+      // Отметка сотрудника означает завершение работы, но факт может быть ниже
+      // плана: в этом случае явно выбранная причина должна сохраниться.
+      // Снятие причины передаётся отдельно через skipReasons.
+      const skipReason = (shift.skipReasons || {})[compKey] || null;
       const skipAt = skipReason ? ((shift.skipTimes || {})[compKey] || null) : null;
       await client.query(
         `INSERT INTO shift_item_status(shift_date, station_key, item_id, done, done_at, skip_reason, skip_at)
