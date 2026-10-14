@@ -11003,8 +11003,10 @@ function PhotoPickerButton({onFiles, uploading, label, style}) {
   const [open, setOpen] = useState(false);
 
   const pick = (ref) => {
+    // Keep the native picker inside the tap handler: mobile browsers may block
+    // file-input clicks deferred through a timer.
+    if(ref.current) ref.current.click();
     setOpen(false);
-    setTimeout(() => ref.current && ref.current.click(), 50);
   };
   const onInput = (ev) => {
     if(!ev.target.files||!ev.target.files.length) return;
@@ -11015,6 +11017,7 @@ function PhotoPickerButton({onFiles, uploading, label, style}) {
 
   return e('div',{style:{position:'relative',display:'inline-block'}},
     e('button',{
+      type:'button',
       onClick:()=>setOpen(o=>!o),
       disabled:!!uploading,
       style:{padding:'7px 14px',borderRadius:8,border:'1.5px dashed var(--border)',
@@ -11028,12 +11031,12 @@ function PhotoPickerButton({onFiles, uploading, label, style}) {
       e('div',{style:{position:'absolute',bottom:'calc(100% + 6px)',left:0,zIndex:1000,
         background:'var(--surface)',border:'1.5px solid var(--border)',borderRadius:12,
         boxShadow:'0 4px 20px rgba(0,0,0,0.15)',overflow:'hidden',minWidth:200}},
-        e('button',{onClick:()=>pick(cameraRef),
+        e('button',{type:'button',onClick:()=>pick(cameraRef),
           style:{display:'flex',alignItems:'center',gap:10,width:'100%',padding:'13px 16px',
             border:'none',background:'transparent',color:'var(--text)',fontSize:14,
             cursor:'pointer',textAlign:'left',borderBottom:'1px solid var(--border)'}},
           '📷 Сфотографировать'),
-        e('button',{onClick:()=>pick(galleryRef),
+        e('button',{type:'button',onClick:()=>pick(galleryRef),
           style:{display:'flex',alignItems:'center',gap:10,width:'100%',padding:'13px 16px',
             border:'none',background:'transparent',color:'var(--text)',fontSize:14,
             cursor:'pointer',textAlign:'left'}},
