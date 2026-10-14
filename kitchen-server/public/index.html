@@ -9773,6 +9773,29 @@ function getDHItems(catalog, itemPackLines) {
   return result;
 }
 
+// Причины текущих заготовок, включая отдельные строки фасовки.
+// prev-* относится к перенесённым заданиям, а не к текущему плану ДХ.
+function calcDHSkipReasons(skipReasons) {
+  const labels = {no_material:'Нет сырья', no_time:'Не успели'};
+  const reasons = {};
+  Object.entries(skipReasons || {}).forEach(([key, reason]) => {
+    if (/^(prev|precut|zames)-/.test(key) || !labels[reason]) return;
+    const match = key.match(/^.+-(\d+)-pl-\d+$/) || key.match(/^.+-(\d+)$/);
+    if (!match) return;
+    const id = Number(match[1]);
+    const list = reasons[id] || (reasons[id] = []);
+    if (!list.includes(labels[reason])) list.push(labels[reason]);
+  });
+  return reasons;
+}
+
+function renderDHSkipReasons(reasons) {
+  if (!reasons?.length) return null;
+  return e('div', {style:{marginTop:4, fontSize:12, fontWeight:600,
+    color:'var(--danger,#b91c1c)', whiteSpace:'normal'}},
+    'Причина невыполнения: '+reasons.join('; '));
+}
+
 // Подвкладка "Факты смены"
 function DXFactsTab({dateKey, archiveIndex}) {
   const today = new Date().toISOString().slice(0, 10);
@@ -9866,6 +9889,7 @@ function DXFactsTab({dateKey, archiveIndex}) {
   }, [selDate]);
 
   const factTotals = useMemo(() => calcFactTotals(shiftData?.shift?.facts), [shiftData]);
+  const skipReasons = useMemo(() => calcDHSkipReasons(shiftData?.shift?.skipReasons), [shiftData]);
 
   const getFactVal = (itemId) =>
     factInputs[itemId] !== undefined ? factInputs[itemId] : String(factTotals[itemId] ?? '');
@@ -10007,7 +10031,8 @@ function DXFactsTab({dateKey, archiveIndex}) {
               return e('tr', {key: item.id, style:{borderBottom:'1px solid var(--border,#e5e7eb)',
                   background: done ? 'var(--ok-bg,#f0fdf4)' : 'var(--bg)'}},
                 e('td', {style:{padding:'8px 12px', color:'var(--muted)', fontSize:12}}, item.id),
-                e('td', {style:{padding:'8px 12px'}}, item.name),
+                e('td', {style:{padding:'8px 12px'}}, item.name,
+                  renderDHSkipReasons(skipReasons[item.id])),
                 e('td', {style:{padding:'8px 12px', textAlign:'right', color:'var(--muted)'}}, planNum || '—'),
                 e('td', {style:{padding:'8px 12px', textAlign:'right'}},
                   e('input', {
@@ -10024,7 +10049,8 @@ function DXFactsTab({dateKey, archiveIndex}) {
             manualItems.map(it =>
               e('tr', {key: it.uid, style:{borderBottom:'1px solid var(--border,#e5e7eb)', background:'var(--bg)'}},
                 e('td', {style:{padding:'8px 12px', color:'var(--muted)', fontSize:12}}, it.id ? String(it.id) : '—'),
-                e('td', {style:{padding:'8px 12px'}}, it.name),
+                e('td', {style:{padding:'8px 12px'}}, it.name,
+                  renderDHSkipReasons(skipReasons[it.id])),
                 e('td', {style:{padding:'8px 12px', textAlign:'right'}},
                   e('input', {
                     type:'number', min:0, step:1, value:it.plan||'',
@@ -10187,6 +10213,7 @@ function DXDistributionTab({dateKey}) {
   const dhItems = shiftData?.dhItems || [];
   const factTotals = shiftData?.factTotals || {};
   const manualItems = shiftData?.shift?.manualDhItems || [];
+  const skipReasons = useMemo(() => calcDHSkipReasons(shiftData?.shift?.skipReasons), [shiftData]);
 
   // Строим единый список: dhItems + manualItems, каждый с plan и fact
   const allRows = useMemo(() => {
@@ -10302,7 +10329,8 @@ function DXDistributionTab({dateKey}) {
               const keyX = String(id) + '_X';
               const mainRow = e('tr', {key: keyMain, style:{borderBottom: excess > 0 ? 'none' : '1px solid var(--border,#e5e7eb)'}},
                 e('td', {style:{padding:'8px 12px', color:'var(--muted)', fontSize:12}}, id),
-                e('td', {style:{padding:'8px 12px'}}, name),
+                e('td', {style:{padding:'8px 12px'}}, name,
+                  renderDHSkipReasons(skipReasons[id])),
                 e('td', {style:{padding:'8px 12px', textAlign:'right', color:'var(--muted)'}},
                   plan ? `${plan} уп` : '—'),
                 e('td', {style:{padding:'8px 12px', textAlign:'right', color: excess > 0 ? 'var(--danger,#dc2626)' : 'var(--muted)'}},
