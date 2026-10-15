@@ -12550,7 +12550,7 @@ function ProrabotkaCreateActModal({task, onClose, onCreated}) {
 }
 
 // Вкладка Проработки — задания из Google Sheet
-function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
+function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId, onCountChange}) {
   const [tasks,setTasks]=useState(null);
   const [error,setError]=useState(null);
   const [search,setSearch]=useState('');
@@ -12560,11 +12560,13 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
   // actBySheetId/setActBySheetId приходят из TechnologistPage (общее состояние)
 
   useEffect(()=>{
+    let taskList=[];
     fetch('/api/prorabotki')
       .then(r=>r.json())
       .then(d=>{
         if(d.error) throw new Error(d.error);
-        setTasks(d.tasks||[]);
+        taskList=d.tasks||[];
+        setTasks(taskList);
         // ID initialization can migrate existing act links; load them afterwards.
         return fetch('/api/acts/acts');
       })
@@ -12574,6 +12576,10 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
         const map={};
         (d.acts||[]).forEach(a=>{ if(a.source_row) map[String(a.source_row)]=a; });
         setActBySheetId(map);
+        if(onCountChange){
+          const done=taskList.filter(t=>map[String(t.sheetId)]).length;
+          onCountChange(done,taskList.length);
+        }
       })
       .catch(e=>setError(e.message));
   },[]);
@@ -13015,7 +13021,7 @@ function TechnologistPage({initialActId=null}) {
   const [openActId,setOpenActId]=useState(initialActId);
   const [actBySheetId,setActBySheetId]=useState({});
   const [managerTaskCount,setManagerTaskCount]=useState(null); // [done,total]
-  const [actsCount,setActsCount]=useState(null); // [done,total]
+  const [prorabotkaCount,setProrabotkaCount]=useState(null); // [done,total]
   const [showScrollTop,setShowScrollTop]=useState(false);
   useEffect(()=>{
     const onScroll=()=>setShowScrollTop(window.scrollY>300);
@@ -13058,17 +13064,12 @@ function TechnologistPage({initialActId=null}) {
 
   useEffect(()=>{loadData(date);},[date]);
 
-  // Предзагрузка счётчиков для вкладок
+  // Предзагрузка счётчика вкладки "От управляющего"
   useEffect(()=>{
     technologistTaskRequest('/','technologist').then(data=>{
       const list=data.tasks||[];
       const done=list.filter(t=>t.status==='completed').length;
       setManagerTaskCount([done,list.length]);
-    }).catch(()=>{});
-    fetch('/api/acts/acts').then(r=>r.json()).then(d=>{
-      const list=d.acts||[];
-      const done=list.filter(a=>a.status==='done').length;
-      setActsCount([done,list.length]);
     }).catch(()=>{});
   },[]);
 
@@ -13146,10 +13147,10 @@ function TechnologistPage({initialActId=null}) {
         '📝 От управляющего'+(managerTaskCount!=null?` ${managerTaskCount[0]}/${managerTaskCount[1]}`:'')
       ),
       e('button',{className:'mgr-tab'+(tab==='library'?' active':''),onClick:()=>setTab('library')},'📚 Библиотека эталонов'),
-      e('button',{className:'mgr-tab'+(tab==='acts'?' active':''),onClick:()=>{setOpenActId(null);setTab('acts');}},
-        '🧪 Акты проработки'+(actsCount!=null?` ${actsCount[0]}/${actsCount[1]}`:'')
-      ),
-      e('button',{className:'mgr-tab'+(tab==='prorabotki'?' active':''),onClick:()=>setTab('prorabotki')},'🔬 Проработки')
+      e('button',{className:'mgr-tab'+(tab==='acts'?' active':''),onClick:()=>{setOpenActId(null);setTab('acts');}},'🧪 Акты проработки'),
+      e('button',{className:'mgr-tab'+(tab==='prorabotki'?' active':''),onClick:()=>setTab('prorabotki')},
+        '🔬 Проработки'+(prorabotkaCount!=null?` ${prorabotkaCount[0]}/${prorabotkaCount[1]}`:'')
+      )
     ),
 
     // Вкладка Задания
@@ -13226,7 +13227,7 @@ function TechnologistPage({initialActId=null}) {
     tab==='acts'&&e(ActsPage,{key:openActId||'acts',initialActId:openActId,
       onActDeleted:(id)=>setActBySheetId(prev=>{const next={...prev};Object.keys(next).forEach(k=>{if(next[k]?.id===id)delete next[k];});return next;}),
       onCountChange:(d,t)=>setActsCount([d,t])}),
-    tab==='prorabotki'&&e(ProrabotkaTab,{actBySheetId,setActBySheetId,onActCreated:(actId)=>{setOpenActId(actId);setTab('acts');}}),
+    tab==='prorabotki'&&e(ProrabotkaTab,{actBySheetId,setActBySheetId,onActCreated:(actId)=>{setOpenActId(actId);setTab('acts');},onCountChange:(d,t)=>setProrabotkaCount([d,t])}),
 
     // Модалка добавления
     showAdd&&e('div',{style:{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',
