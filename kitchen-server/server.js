@@ -20,6 +20,7 @@ app.use((req, _res, next) => { console.log(new Date().toISOString(), req.method,
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/api/ping', (_req, res) => res.json({ pong: Date.now() }));
+app.use('/api/auth', require('./routes/auth'));
 app.use('/api/shifts',    require('./routes/shifts'));
 app.use('/api/employees', require('./routes/employees'));
 app.use('/api/techcards', require('./routes/techcards'));
@@ -30,6 +31,7 @@ app.use('/api/acts',     require('./routes/acts'));
 app.use('/api/prorabotki', require('./routes/prorabotki'));
 app.use('/api/technologist-tasks', require('./routes/technologist-tasks'));
 app.use('/api/raw-material',      require('./routes/raw-material'));
+app.use('/api/ready-food',        require('./routes/ready-food'));
 const objectStorage = require('./lib/objectStorage');
 app.get('/uploads/:filename', async (req, res) => {
   const filename = path.basename(req.params.filename);
@@ -173,7 +175,9 @@ function scheduleNightlySync() {
 }
 
 initDb()
-  .then(() => {
+  .then(async () => {
+    const { seedUsers } = require('./routes/auth');
+    await seedUsers().catch(e => console.error('[auth] seed error:', e.message));
     server.listen(PORT, () => {
       console.log(`Kitchen server running on http://localhost:${PORT}`);
       scheduleNightlySync();

@@ -13005,6 +13005,478 @@ function TechnologistManagerTasks({onCountChange}){
   );
 }
 
+// ─── Готовая еда ──────────────────────────────────────────────────────────────
+
+// Форма создания/редактирования эталона готовой еды
+function RFStandardForm({standard, itemType, products, wrappers, onSave, onCancel}) {
+  const [name,setName]=useState(standard?.name||'');
+  const [itemId,setItemId]=useState(standard?.item_id||'');
+  const [appearance,setAppearance]=useState(standard?.appearance||'');
+  const [color,setColor]=useState(standard?.color||'');
+  const [tasteSmell,setTasteSmell]=useState(standard?.taste_smell||'');
+  const [consistency,setConsistency]=useState(standard?.consistency||'');
+  const [alwaysCheck,setAlwaysCheck]=useState(!!standard?.always_check);
+  const [extraFields,setExtraFields]=useState(standard?.extra_fields||[]);
+  const [newField,setNewField]=useState('');
+  const [saving,setSaving]=useState(false);
+  const [error,setError]=useState('');
+
+  const listItems = itemType==='product' ? products : wrappers;
+
+  const addField=()=>{
+    const f=newField.trim();
+    if(!f) return;
+    setExtraFields(prev=>[...prev,{name:f,description:''}]);
+    setNewField('');
+  };
+
+  const save=async()=>{
+    if(!name.trim()){setError('Введите название');return;}
+    setSaving(true);setError('');
+    try{
+      const body={name:name.trim(),item_id:itemId||null,item_type:itemType,
+        appearance:appearance||null,color:color||null,taste_smell:tasteSmell||null,
+        consistency:consistency||null,always_check:alwaysCheck,extra_fields:extraFields};
+      const url=standard?`/api/ready-food/standards/${standard.id}`:'/api/ready-food/standards';
+      const r=await fetch(url,{method:standard?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const d=await r.json();
+      if(!r.ok) throw new Error(d.error||r.status);
+      onSave(standard?standard.id:d.id);
+    }catch(err){setError(err.message);}finally{setSaving(false);}
+  };
+
+  const fieldStyle={width:'100%',padding:'8px 10px',borderRadius:8,border:'1.5px solid var(--border)',
+    background:'var(--bg)',color:'var(--text)',fontSize:14,boxSizing:'border-box'};
+  const labelStyle={fontSize:12,fontWeight:600,color:'var(--muted)',marginBottom:4,display:'block'};
+
+  return e('div',{style:{background:'var(--surface)',border:'1.5px solid var(--border)',borderRadius:12,padding:20}},
+    error&&e('div',{style:{color:'#B91C1C',fontSize:13,marginBottom:10}},error),
+    e('label',{style:labelStyle},'Название *'),
+    e('input',{value:name,onChange:ev=>setName(ev.target.value),style:{...fieldStyle,marginBottom:12},placeholder:'Название блюда или заготовки'}),
+    e('label',{style:labelStyle},itemType==='product'?'Блюдо':'Заготовка'),
+    e('select',{value:itemId,onChange:ev=>setItemId(Number(ev.target.value)||''),style:{...fieldStyle,marginBottom:12}},
+      e('option',{value:''},'— не выбрано —'),
+      listItems.map(it=>e('option',{key:it.id||it.wrapper_id,value:it.id||it.wrapper_id},
+        it.name||it.wrapper_name))
+    ),
+    [['appearance','Внешний вид',appearance,setAppearance],
+     ['color','Цвет',color,setColor],
+     ['taste_smell','Вкус и запах',tasteSmell,setTasteSmell],
+     ['consistency','Консистенция',consistency,setConsistency]]
+    .map(([key,label,val,setter])=>e('div',{key,style:{marginBottom:12}},
+      e('label',{style:labelStyle},label),
+      e('textarea',{value:val,onChange:ev=>setter(ev.target.value),rows:2,
+        style:{...fieldStyle,resize:'vertical'}})
+    )),
+    e('label',{style:{...labelStyle,marginBottom:8}},
+      e('input',{type:'checkbox',checked:alwaysCheck,onChange:ev=>setAlwaysCheck(ev.target.checked),style:{marginRight:6}}),
+      'Проверять каждый день автоматически'
+    ),
+    e('div',{style:{marginBottom:12}},
+      e('div',{style:{fontSize:13,fontWeight:600,marginBottom:8}},'Дополнительные поля'),
+      extraFields.map((f,i)=>e('div',{key:i,style:{display:'flex',gap:8,alignItems:'center',marginBottom:6}},
+        e('span',{style:{flex:1,fontSize:13,padding:'6px 10px',background:'var(--hover)',borderRadius:7}},typeof f==='string'?f:f.name),
+        e('button',{onClick:()=>setExtraFields(prev=>prev.filter((_,j)=>j!==i)),
+          style:{padding:'4px 8px',border:'none',background:'#FEE2E2',color:'#B91C1C',borderRadius:6,cursor:'pointer',fontSize:12}},'✕')
+      )),
+      e('div',{style:{display:'flex',gap:8}},
+        e('input',{value:newField,onChange:ev=>setNewField(ev.target.value),
+          onKeyDown:ev=>ev.key==='Enter'&&addField(),
+          placeholder:'Новое поле…',style:{...fieldStyle,flex:1}}),
+        e('button',{onClick:addField,style:{padding:'8px 14px',border:'none',background:'var(--accent)',
+          color:'white',borderRadius:8,cursor:'pointer',fontWeight:600,whiteSpace:'nowrap'}},'+')
+      )
+    ),
+    e('div',{style:{display:'flex',gap:10,marginTop:16}},
+      e('button',{onClick:save,disabled:saving,style:{padding:'9px 20px',border:'none',background:'var(--ok)',
+        color:'white',borderRadius:9,fontWeight:700,cursor:'pointer'}},saving?'Сохранение…':'Сохранить'),
+      e('button',{onClick:onCancel,style:{padding:'9px 16px',border:'1.5px solid var(--border)',
+        background:'transparent',color:'var(--text)',borderRadius:9,cursor:'pointer'}},'Отмена')
+    )
+  );
+}
+
+// Карточка задания готовой еды (аналог QualityTaskCard)
+function RFTaskCard({task, isOpen, onToggle, onDelete, onSave, onReferenceAdded, onPhotosChanged, technologists, onAssign}) {
+  const [results,setResults]=useState(()=>{
+    const map={};
+    (task.results||[]).forEach(r=>{map[r.field_name]={result:r.result||'',comment:r.comment||'',action:r.action||''};});
+    return map;
+  });
+  const [saving,setSaving]=useState(false);
+  const [uploading,setUploading]=useState(false);
+  const [refUploading,setRefUploading]=useState(false);
+
+  const stdFields=[
+    {name:'appearance',label:'Внешний вид',value:task.appearance},
+    {name:'color',label:'Цвет',value:task.color},
+    {name:'taste_smell',label:'Вкус и запах',value:task.taste_smell},
+    {name:'consistency',label:'Консистенция',value:task.consistency},
+    ...(task.extra_fields||[]).map(f=>({name:typeof f==='string'?f:f.name,label:typeof f==='string'?f:f.name,value:null})),
+  ].filter(f=>f.value||!(f.name in {appearance:1,color:1,taste_smell:1,consistency:1})||task.status!=='done');
+
+  const allFilled=stdFields.length===0||stdFields.every(f=>(results[f.name]?.result||'').trim());
+
+  const saveTask=async(status)=>{
+    setSaving(true);
+    try{
+      const res=Object.entries(results).map(([field_name,v])=>({field_name,...v}));
+      await fetch(`/api/ready-food/tasks/${task.id}/save`,{method:'PATCH',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({status,results:res})});
+      onSave(task.id,status,res);
+    }finally{setSaving(false);}
+  };
+
+  const uploadPhoto=async(file,isRef)=>{
+    if(isRef) setRefUploading(true); else setUploading(true);
+    const fd=new FormData(); fd.append('photo',file);
+    const url=isRef?`/api/ready-food/standards/${task.standard_id}/photos`:`/api/ready-food/tasks/${task.id}/photos`;
+    const r=await fetch(url,{method:'POST',body:fd});
+    const d=await r.json();
+    if(isRef) { onReferenceAdded&&onReferenceAdded(task.standard_id,{filename:d.filename}); setRefUploading(false); }
+    else { onPhotosChanged&&onPhotosChanged(task.id,[...(task.photos||[]),{filename:d.filename}]); setUploading(false); }
+  };
+
+  const deletePhoto=async(filename,isRef)=>{
+    if(!confirm('Удалить фото?')) return;
+    const url=isRef?`/api/ready-food/standards/${task.standard_id}/photos/${filename}`:`/api/ready-food/tasks/${task.id}/photos/${filename}`;
+    await fetch(url,{method:'DELETE'});
+    if(isRef) onReferenceAdded&&onReferenceAdded(task.standard_id,null,filename);
+    else onPhotosChanged&&onPhotosChanged(task.id,(task.photos||[]).filter(p=>p.filename!==filename));
+  };
+
+  const statusColor=task.status==='done'?'var(--ok)':task.status==='overdue'?'var(--danger)':'var(--accent)';
+  const statusLabel=task.status==='done'?'Выполнено':task.status==='overdue'?'Просрочено':'Ожидает';
+  const typeLabel=task.item_type==='product'?'🍽️ Блюдо':'🥣 Заготовка';
+
+  return e('div',{style:{border:'1.5px solid var(--border)',borderRadius:12,overflow:'hidden',background:'var(--surface)'}},
+    e('div',{onClick:onToggle,style:{display:'flex',alignItems:'center',gap:10,padding:'12px 14px',cursor:'pointer',userSelect:'none'}},
+      e('span',{style:{fontSize:12,padding:'2px 8px',borderRadius:20,border:`1.5px solid ${statusColor}`,color:statusColor,fontWeight:700,flexShrink:0}},statusLabel),
+      e('span',{style:{fontSize:11,color:'var(--muted)',flexShrink:0}},typeLabel),
+      e('span',{style:{fontWeight:600,fontSize:14,flex:1,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},task.standard_name||task.name||'—'),
+      e('span',{style:{fontSize:18,color:'var(--muted)',flexShrink:0}},isOpen?'▲':'▼')
+    ),
+    isOpen&&e('div',{style:{borderTop:'1px solid var(--border)',padding:'14px 14px'}},
+      // Назначить
+      e('div',{style:{marginBottom:12}},
+        technologists&&technologists.length>0&&e('select',{
+          value:task.assigned_to||'',
+          onChange:async ev=>{
+            await fetch(`/api/ready-food/tasks/${task.id}/assign`,{method:'PATCH',
+              headers:{'Content-Type':'application/json'},body:JSON.stringify({assigned_to:ev.target.value||null})});
+            onAssign&&onAssign(task.id,ev.target.value||null);
+          },
+          style:{padding:'6px 10px',borderRadius:8,border:'1.5px solid var(--border)',background:'var(--bg)',color:'var(--text)',fontSize:13}
+        },
+          e('option',{value:''},'— Назначить технолога —'),
+          technologists.map(emp=>e('option',{key:emp.id,value:emp.id},emp.name))
+        )
+      ),
+      // Эталонные фото
+      (task.ref_photos||[]).length>0&&e('div',{style:{marginBottom:12}},
+        e('div',{style:{fontSize:12,fontWeight:600,color:'var(--muted)',marginBottom:6}},'Эталонные фото'),
+        e('div',{style:{display:'flex',gap:8,flexWrap:'wrap'}},
+          (task.ref_photos||[]).map(p=>e('img',{key:p.filename,src:`/api/quality/photos/${p.filename}`,
+            style:{width:72,height:72,objectFit:'cover',borderRadius:8,border:'1.5px solid var(--border)',cursor:'pointer'}}))
+        )
+      ),
+      // Поля проверки
+      stdFields.map(f=>e('div',{key:f.name,style:{marginBottom:12}},
+        e('div',{style:{fontSize:13,fontWeight:600,marginBottom:4}},f.label,
+          f.value&&e('span',{style:{fontSize:12,color:'var(--muted)',fontWeight:400,marginLeft:6}},'Эталон: '+f.value)
+        ),
+        e('textarea',{value:results[f.name]?.result||'',
+          onChange:ev=>setResults(p=>({...p,[f.name]:{...(p[f.name]||{}),result:ev.target.value}})),
+          rows:2,placeholder:'Результат проверки…',
+          style:{width:'100%',padding:'7px 10px',borderRadius:8,border:'1.5px solid var(--border)',
+            background:'var(--bg)',color:'var(--text)',resize:'vertical',fontSize:13,boxSizing:'border-box'}})
+      )),
+      // Фото
+      e('div',{style:{marginBottom:12}},
+        e('div',{style:{fontSize:12,fontWeight:600,color:'var(--muted)',marginBottom:6}},'Фото проверки'),
+        e('div',{style:{display:'flex',gap:8,flexWrap:'wrap',marginBottom:6}},
+          (task.photos||[]).map(p=>e('div',{key:p.filename,style:{position:'relative'}},
+            e('img',{src:`/api/quality/photos/${p.filename}`,
+              style:{width:72,height:72,objectFit:'cover',borderRadius:8,border:'1.5px solid var(--border)'}}),
+            e('button',{onClick:()=>deletePhoto(p.filename,false),
+              style:{position:'absolute',top:-6,right:-6,width:20,height:20,borderRadius:'50%',
+                border:'none',background:'#EF4444',color:'white',fontSize:11,cursor:'pointer',
+                display:'flex',alignItems:'center',justifyContent:'center',padding:0}},'✕')
+          ))
+        ),
+        e('label',{style:{display:'inline-flex',alignItems:'center',gap:6,padding:'7px 14px',
+          borderRadius:9,border:'1.5px solid var(--border)',cursor:'pointer',fontSize:13}},
+          uploading?'Загрузка…':'📷 Добавить фото',
+          !uploading&&e('input',{type:'file',accept:'image/*',style:{display:'none'},
+            onChange:ev=>ev.target.files[0]&&uploadPhoto(ev.target.files[0],false)})
+        )
+      ),
+      // Добавить эталонное фото
+      e('div',{style:{marginBottom:14}},
+        e('label',{style:{display:'inline-flex',alignItems:'center',gap:6,padding:'7px 14px',
+          borderRadius:9,border:'1.5px solid var(--border)',cursor:'pointer',fontSize:13,color:'var(--muted)'}},
+          refUploading?'Загрузка…':'🖼️ Добавить эталонное фото',
+          !refUploading&&e('input',{type:'file',accept:'image/*',style:{display:'none'},
+            onChange:ev=>ev.target.files[0]&&uploadPhoto(ev.target.files[0],true)})
+        )
+      ),
+      // Кнопки сохранения
+      task.status!=='done'&&e('div',{style:{display:'flex',gap:8}},
+        e('button',{onClick:()=>saveTask('done'),disabled:saving||!allFilled,
+          style:{padding:'9px 20px',border:'none',background:allFilled?'var(--ok)':'var(--border)',
+            color:'white',borderRadius:9,fontWeight:700,cursor:allFilled?'pointer':'default'}},
+          saving?'Сохранение…':'✓ Выполнено'),
+        e('button',{onClick:()=>saveTask('pending'),disabled:saving,
+          style:{padding:'9px 16px',border:'1.5px solid var(--border)',background:'transparent',
+            color:'var(--text)',borderRadius:9,cursor:'pointer'}},'Сохранить черновик')
+      ),
+      e('button',{onClick:()=>onDelete(task.id),
+        style:{marginTop:8,padding:'7px 14px',border:'1.5px solid #EF4444',background:'transparent',
+          color:'#EF4444',borderRadius:8,cursor:'pointer',fontSize:13}},'Удалить задание')
+    )
+  );
+}
+
+// Вкладка Готовая еда
+function ReadyFoodTab() {
+  const [subTab,setSubTab]=useState('tasks');
+  const [date,setDate]=useState(todayISO);
+  const [tasks,setTasks]=useState([]);
+  const [standards,setStandards]=useState([]);
+  const [products,setProducts]=useState([]);
+  const [wrappers,setWrappers]=useState([]);
+  const [technologists,setTechnologists]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [openTaskId,setOpenTaskId]=useState(null);
+  const [showAddTask,setShowAddTask]=useState(null); // standard_id
+  const [editStd,setEditStd]=useState(null); // null=list, 'new-product'/'new-wrapper'/standard_obj
+  const [stdTypeFilter,setStdTypeFilter]=useState('product');
+
+  const loadAll=async(d)=>{
+    setLoading(true);
+    const [tr,sr,pr,wr,er]=await Promise.all([
+      fetch(`/api/ready-food/tasks?date=${d}`).then(r=>r.json()),
+      fetch('/api/ready-food/standards').then(r=>r.json()),
+      fetch('/api/ready-food/products').then(r=>r.json()),
+      fetch('/api/ready-food/wrappers').then(r=>r.json()),
+      fetch('/api/employees').then(r=>r.json()).catch(()=>({employees:[]})),
+    ]);
+    setTasks(tr.tasks||[]);
+    setStandards(sr.standards||[]);
+    setProducts(pr.products||[]);
+    setWrappers(wr.wrappers||[]);
+    setTechnologists((er.employees||[]).filter(e=>e.shop==='Технолог'||e.shop==='Главный технолог'));
+    setLoading(false);
+  };
+
+  useEffect(()=>{loadAll(date);},[date]);
+
+  // Автосоздание заданий по "проверять каждый день"
+  useEffect(()=>{
+    if(!standards.length||loading) return;
+    const alwaysCheck=standards.filter(s=>s.always_check&&!tasks.some(t=>t.standard_id===s.id));
+    if(!alwaysCheck.length) return;
+    (async()=>{
+      for(const s of alwaysCheck){
+        await fetch('/api/ready-food/tasks',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({date,standard_id:s.id})});
+      }
+      const tr=await fetch(`/api/ready-food/tasks?date=${date}`).then(r=>r.json());
+      setTasks(tr.tasks||[]);
+    })();
+  },[standards,date]);
+
+  const addTask=async(stdId)=>{
+    await fetch('/api/ready-food/tasks',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({date,standard_id:stdId})});
+    const tr=await fetch(`/api/ready-food/tasks?date=${date}`).then(r=>r.json());
+    setTasks(tr.tasks||[]);
+    setShowAddTask(null);
+  };
+
+  const deleteTask=async(id)=>{
+    if(!confirm('Удалить задание?')) return;
+    await fetch(`/api/ready-food/tasks/${id}`,{method:'DELETE'});
+    setTasks(prev=>prev.filter(t=>t.id!==id));
+  };
+
+  const onSave=(taskId,status,results)=>{
+    setTasks(prev=>prev.map(t=>t.id===taskId?{...t,status,results}:t));
+  };
+  const onPhotosChanged=(taskId,photos)=>{
+    setTasks(prev=>prev.map(t=>t.id===taskId?{...t,photos}:t));
+  };
+  const onReferenceAdded=(stdId,photo,delFilename)=>{
+    setTasks(prev=>prev.map(t=>{
+      if(t.standard_id!==stdId) return t;
+      const rp=delFilename
+        ?(t.ref_photos||[]).filter(p=>p.filename!==delFilename)
+        :(t.ref_photos||[]).some(p=>p.filename===photo?.filename)?t.ref_photos:[...(t.ref_photos||[]),photo];
+      return {...t,ref_photos:rp};
+    }));
+    setStandards(prev=>prev.map(s=>{
+      if(s.id!==stdId) return s;
+      const rp=delFilename
+        ?(s.ref_photos||[]).filter(p=>p.filename!==delFilename)
+        :(s.ref_photos||[]).some(p=>p.filename===photo?.filename)?s.ref_photos:[...(s.ref_photos||[]),photo];
+      return {...s,ref_photos:rp};
+    }));
+  };
+
+  const pending=tasks.filter(t=>t.status==='pending'||t.status==='overdue');
+  const done=tasks.filter(t=>t.status==='done');
+  const filteredStds=standards.filter(s=>s.item_type===stdTypeFilter);
+
+  const tabBtn=(key,label)=>e('button',{
+    className:'mgr-tab'+(subTab===key?' active':''),
+    onClick:()=>setSubTab(key)
+  },label);
+
+  return e('div',null,
+    e('div',{style:{display:'flex',gap:0,borderBottom:'2px solid var(--border)',marginBottom:20}},
+      tabBtn('tasks',`📋 Задания${tasks.length>0?` ${done.length}/${tasks.length}`:''}`),
+      tabBtn('standards','📚 Эталоны')
+    ),
+
+    // ── Задания ──
+    subTab==='tasks'&&e(React.Fragment,null,
+      e('div',{style:{display:'flex',alignItems:'center',gap:12,marginBottom:20}},
+        e('input',{type:'date',className:'filter-input',value:date,
+          onChange:ev=>setDate(ev.target.value),style:{fontSize:15}}),
+        e('button',{onClick:()=>setDate(todayISO()),
+          style:{padding:'7px 14px',borderRadius:8,border:'1.5px solid var(--border)',
+            background:'transparent',color:'var(--text)',fontSize:13,cursor:'pointer'}},'Сегодня')
+      ),
+      loading?e('div',{className:'empty-state'},'Загрузка…'):e(React.Fragment,null,
+        e('div',{style:{marginBottom:24}},
+          e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}},
+            e('div',{style:{fontWeight:700,fontSize:16}},`К проверке (${pending.length})`),
+            e('button',{onClick:()=>setShowAddTask(true),
+              style:{padding:'7px 16px',borderRadius:10,border:'none',background:'var(--accent)',
+                color:'white',fontWeight:700,fontSize:13,cursor:'pointer'}},'+ Добавить')
+          ),
+          showAddTask&&e('div',{style:{marginBottom:16,padding:14,background:'var(--surface)',
+            border:'1.5px solid var(--border)',borderRadius:12}},
+            e('div',{style:{fontSize:13,fontWeight:600,marginBottom:10}},'Выберите эталон'),
+            e('div',{style:{display:'flex',gap:8,marginBottom:10}},
+              e('button',{onClick:()=>setStdTypeFilter('product'),
+                style:{padding:'5px 12px',borderRadius:7,border:'1.5px solid var(--border)',
+                  background:stdTypeFilter==='product'?'var(--accent)':'transparent',
+                  color:stdTypeFilter==='product'?'white':'var(--text)',cursor:'pointer',fontSize:12}},'🍽️ Блюда'),
+              e('button',{onClick:()=>setStdTypeFilter('wrapper'),
+                style:{padding:'5px 12px',borderRadius:7,border:'1.5px solid var(--border)',
+                  background:stdTypeFilter==='wrapper'?'var(--accent)':'transparent',
+                  color:stdTypeFilter==='wrapper'?'white':'var(--text)',cursor:'pointer',fontSize:12}},'🥣 Заготовки')
+            ),
+            filteredStds.length===0
+              ?e('div',{style:{color:'var(--muted)',fontSize:13}},'Нет эталонов этого типа')
+              :e('div',{style:{display:'flex',flexDirection:'column',gap:6,maxHeight:300,overflowY:'auto'}},
+                filteredStds.filter(s=>!tasks.some(t=>t.standard_id===s.id)).map(s=>
+                  e('button',{key:s.id,onClick:()=>addTask(s.id),
+                    style:{padding:'8px 12px',textAlign:'left',border:'1.5px solid var(--border)',
+                      background:'var(--bg)',color:'var(--text)',borderRadius:8,cursor:'pointer',fontSize:13}},
+                    s.name)
+                )
+              ),
+            e('button',{onClick:()=>setShowAddTask(null),
+              style:{marginTop:10,padding:'6px 14px',border:'1.5px solid var(--border)',
+                background:'transparent',color:'var(--text)',borderRadius:8,cursor:'pointer',fontSize:13}},'Закрыть')
+          ),
+          pending.length===0
+            ?e('div',{style:{padding:'20px',textAlign:'center',color:'var(--muted)',fontSize:14,
+                border:'1.5px dashed var(--border)',borderRadius:12}},'Нет заданий на этот день')
+            :e('div',{style:{display:'flex',flexDirection:'column',gap:10}},
+              pending.map(t=>e(RFTaskCard,{key:t.id,task:t,isOpen:openTaskId===t.id,
+                onToggle:()=>setOpenTaskId(v=>v===t.id?null:t.id),
+                onDelete:deleteTask,onSave,onReferenceAdded,onPhotosChanged,
+                technologists,
+                onAssign:async(taskId,empId)=>{
+                  setTasks(prev=>prev.map(t=>t.id===taskId?{...t,assigned_to:empId}:t));
+                }}))
+            )
+        ),
+        done.length>0&&e('div',null,
+          e('div',{style:{fontWeight:700,fontSize:16,marginBottom:10}},`Выполнено (${done.length})`),
+          e('div',{style:{display:'flex',flexDirection:'column',gap:10}},
+            done.map(t=>e(RFTaskCard,{key:t.id,task:t,isOpen:openTaskId===t.id,
+              onToggle:()=>setOpenTaskId(v=>v===t.id?null:t.id),
+              onDelete:deleteTask,onSave,onReferenceAdded,onPhotosChanged,
+              technologists,
+              onAssign:async(taskId,empId)=>{
+                setTasks(prev=>prev.map(t=>t.id===taskId?{...t,assigned_to:empId}:t));
+              }}))
+          )
+        )
+      )
+    ),
+
+    // ── Эталоны ──
+    subTab==='standards'&&e(React.Fragment,null,
+      editStd
+        ?e(RFStandardForm,{
+            standard:typeof editStd==='object'&&editStd!==null&&editStd!=='new-product'&&editStd!=='new-wrapper'?editStd:null,
+            itemType:typeof editStd==='string'?editStd.replace('new-',''):editStd?.item_type||'product',
+            products,wrappers,
+            onSave:async()=>{
+              const sr=await fetch('/api/ready-food/standards').then(r=>r.json());
+              setStandards(sr.standards||[]);
+              setEditStd(null);
+            },
+            onCancel:()=>setEditStd(null)
+          })
+        :e(React.Fragment,null,
+          e('div',{style:{display:'flex',gap:8,marginBottom:16,alignItems:'center',flexWrap:'wrap'}},
+            e('button',{onClick:()=>setStdTypeFilter('product'),
+              style:{padding:'6px 14px',borderRadius:8,border:'1.5px solid var(--border)',
+                background:stdTypeFilter==='product'?'var(--accent)':'transparent',
+                color:stdTypeFilter==='product'?'white':'var(--text)',cursor:'pointer',fontSize:13}},'🍽️ Блюда'),
+            e('button',{onClick:()=>setStdTypeFilter('wrapper'),
+              style:{padding:'6px 14px',borderRadius:8,border:'1.5px solid var(--border)',
+                background:stdTypeFilter==='wrapper'?'var(--accent)':'transparent',
+                color:stdTypeFilter==='wrapper'?'white':'var(--text)',cursor:'pointer',fontSize:13}},'🥣 Заготовки'),
+            e('button',{onClick:()=>setEditStd('new-'+stdTypeFilter),
+              style:{marginLeft:'auto',padding:'7px 16px',border:'none',background:'var(--accent)',
+                color:'white',borderRadius:9,fontWeight:700,cursor:'pointer',fontSize:13}},
+              '+ Новый эталон')
+          ),
+          loading?e('div',{className:'empty-state'},'Загрузка…'):
+          filteredStds.length===0
+            ?e('div',{style:{padding:'30px',textAlign:'center',color:'var(--muted)',fontSize:14,
+                border:'1.5px dashed var(--border)',borderRadius:12}},
+              'Нет эталонов. ',
+              e('span',{style:{color:'var(--accent)',cursor:'pointer'},onClick:()=>setEditStd('new-'+stdTypeFilter)},'Создать первый эталон'))
+            :e('div',{style:{display:'flex',flexDirection:'column',gap:8}},
+              filteredStds.map(s=>e('div',{key:s.id,
+                style:{border:'1.5px solid var(--border)',borderRadius:10,padding:'12px 14px',
+                  background:'var(--surface)',display:'flex',alignItems:'center',gap:12}},
+                e('div',{style:{flex:1,minWidth:0}},
+                  e('div',{style:{fontWeight:600,fontSize:14,marginBottom:2,overflow:'hidden',
+                    textOverflow:'ellipsis',whiteSpace:'nowrap'}},s.name),
+                  e('div',{style:{fontSize:12,color:'var(--muted)'}},
+                    [s.appearance&&'Вид',s.color&&'Цвет',s.taste_smell&&'Вкус',s.consistency&&'Конс.',
+                     ...((s.extra_fields||[]).map(f=>typeof f==='string'?f:f.name))]
+                    .filter(Boolean).join(' · ')||'Нет описания')
+                ),
+                s.always_check&&e('span',{style:{fontSize:11,padding:'2px 7px',borderRadius:10,
+                  background:'var(--ok-bg)',color:'var(--ok)',fontWeight:600,flexShrink:0}},'Каждый день'),
+                e('button',{onClick:()=>setEditStd(s),
+                  style:{padding:'6px 12px',border:'1.5px solid var(--border)',background:'transparent',
+                    color:'var(--text)',borderRadius:8,cursor:'pointer',fontSize:12,flexShrink:0}},'✏️ Изменить'),
+                e('button',{onClick:async()=>{
+                    if(!confirm('Удалить эталон?')) return;
+                    await fetch(`/api/ready-food/standards/${s.id}`,{method:'DELETE'});
+                    setStandards(prev=>prev.filter(x=>x.id!==s.id));
+                  },
+                  style:{padding:'6px 12px',border:'1.5px solid #EF4444',background:'transparent',
+                    color:'#EF4444',borderRadius:8,cursor:'pointer',fontSize:12,flexShrink:0}},'🗑️')
+              ))
+            )
+        )
+    )
+  );
+}
+
 // Страница технолога
 function TechnologistPage({initialActId=null}) {
   const [tab,setTab]=useState(initialActId?'acts':'tasks');
@@ -13146,6 +13618,7 @@ function TechnologistPage({initialActId=null}) {
       e('button',{className:'mgr-tab'+(tab==='managerTasks'?' active':''),onClick:()=>setTab('managerTasks')},
         '📝 От управляющего'+(managerTaskCount!=null?` ${managerTaskCount[0]}/${managerTaskCount[1]}`:'')
       ),
+      e('button',{className:'mgr-tab'+(tab==='readyFood'?' active':''),onClick:()=>setTab('readyFood')},'🍽️ Готовая еда'),
       e('button',{className:'mgr-tab'+(tab==='library'?' active':''),onClick:()=>setTab('library')},'📚 Библиотека эталонов'),
       e('button',{className:'mgr-tab'+(tab==='acts'?' active':''),onClick:()=>{setOpenActId(null);setTab('acts');}},'🧪 Акты проработки'),
       e('button',{className:'mgr-tab'+(tab==='prorabotki'?' active':''),onClick:()=>setTab('prorabotki')},
@@ -13221,6 +13694,7 @@ function TechnologistPage({initialActId=null}) {
       )
     ),
     tab==='managerTasks'&&e(TechnologistManagerTasks,{onCountChange:(d,t)=>setManagerTaskCount([d,t])}),
+    tab==='readyFood'&&e(ReadyFoodTab),
 
     // Вкладка Библиотека
     tab==='library'&&e(LibraryTab,{standards,onReload:async()=>{await reloadStandards();}}),
