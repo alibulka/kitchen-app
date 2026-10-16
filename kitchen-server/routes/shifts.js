@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../db');
+const { sheetRowKey } = require('../lib/sheets-utils');
 let writeFacts, writeFacts2;
 try { ({ writeFacts, writeFacts2 } = require('../lib/facts-sheets')); } catch {}
 let writeFactsToControlSheet;
@@ -246,7 +247,10 @@ async function saveShift(date, shift) {
       const { stationKey, itemId } = splitCompKey(compKey);
       const done = !!(shift.doneFlags || {})[compKey];
       const doneAt = (shift.doneTimes || {})[compKey] || null;
-      const skipReason = done ? null : ((shift.skipReasons || {})[compKey] || null);
+      // Отметка сотрудника означает завершение работы, но факт может быть ниже
+      // плана: в этом случае явно выбранная причина должна сохраниться.
+      // Снятие причины передаётся отдельно через skipReasons.
+      const skipReason = (shift.skipReasons || {})[compKey] || null;
       const skipAt = skipReason ? ((shift.skipTimes || {})[compKey] || null) : null;
       await client.query(
         `INSERT INTO shift_item_status(shift_date, station_key, item_id, done, done_at, skip_reason, skip_at)
@@ -482,11 +486,8 @@ router.post('/:date', async (req, res) => {
       wss.clients.forEach(c => { if (c.readyState === 1) c.send(msg); });
     }
     res.json({ ok: true });
-    // Асинхронно синхронизируем факты в Google Sheets
+    // Google Sheets receive the persisted daily facts only from the nightly job.
     const factsKeys = shift.facts ? Object.keys(shift.facts) : [];
-    if (writeFacts && factsKeys.length > 0) {
-      syncFactsToSheet(date, shift.facts).catch(e => console.error('[facts-sheets]', e.message));
-    }
     // Запись в "Контроль 2026" при сохранении Факта ДХ
     console.log('[control-debug] syncControl=', syncControl, 'fn=', !!writeFactsToControlSheet, 'creds=', !!process.env.GOOGLE_CREDENTIALS_JSON, 'factsKeys=', factsKeys.length);
     if (syncControl && writeFactsToControlSheet && process.env.GOOGLE_CREDENTIALS_JSON && factsKeys.length > 0) {
@@ -582,8 +583,8 @@ router.post('/:date/dh-storage', async (req, res) => {
     // Позиции без строки в Sheets или с изменёнными данными
     const { rows: sheetRows } = await pool.query(
       'SELECT item_id, is_excess, sheet_name FROM shift_dh_sheet_rows WHERE shift_date=$1', [date]);
-    const hasResiduesRow = new Set(sheetRows.filter(r=>r.sheet_name==='Остатки кухни ').map(r=>`${r.item_id}-${r.is_excess}`));
-    const hasTransferRow = new Set(sheetRows.filter(r=>r.sheet_name==='Передача с кухни на СКЛАД').map(r=>`${r.item_id}-${r.is_excess}`));
+    const hasResiduesRow = new Set(sheetRows.filter(r=>r.sheet_name===sheetRowKey('Остатки кухни ')).map(r=>`${r.item_id}-${r.is_excess}`));
+    const hasTransferRow = new Set(sheetRows.filter(r=>r.sheet_name===sheetRowKey('Передача с кухни на СКЛАД')).map(r=>`${r.item_id}-${r.is_excess}`));
 
     const needsSheetWrite = items.filter(it => {
       const prev = prevMap[it.item_id];
@@ -610,7 +611,8 @@ router.post('/:date/dh-storage', async (req, res) => {
       console.log('[residues] после записи');
     }
 
-    // "Передача с кухни на СКЛАД" пишется в 12:00 следующего дня (scheduleNoonTransferSync в server.js)
+    // Автозапись в "Передача с кухни на СКЛАД" в 12:00 временно отключена.
+    // Планировщик в server.js запускается только при DH_NOON_TRANSFER_SYNC_ENABLED=true.
 
     // Синхронизация фактов: распределение ДХ → Факт ДХ
     console.log('[dh-storage] синхронизация фактов, items=', items.length);

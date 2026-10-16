@@ -12,6 +12,7 @@ async function initDb(pool) {
       name       TEXT NOT NULL,
       shop       TEXT NOT NULL,
       active     INTEGER NOT NULL DEFAULT 1,
+      archived_shops TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL DEFAULT (NOW()::text),
       updated_at TEXT NOT NULL DEFAULT (NOW()::text)
     )
@@ -37,6 +38,7 @@ async function initDb(pool) {
     )
   `);
   await q(`ALTER TABLE shifts ADD COLUMN IF NOT EXISTS ud_techcard_id INTEGER REFERENCES techcards(id)`);
+  await q(`ALTER TABLE shifts ADD COLUMN IF NOT EXISTS extra_json TEXT NOT NULL DEFAULT '{}'`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS shift_item_status (
       shift_date  TEXT NOT NULL REFERENCES shifts(date) ON DELETE CASCADE,
@@ -452,6 +454,17 @@ async function initDb(pool) {
   await q('ALTER TABLE shift_dh_storage ADD COLUMN IF NOT EXISTS label_date TEXT');
   await q('ALTER TABLE shift_dh_storage ADD COLUMN IF NOT EXISTS to_kitchen_excess REAL NOT NULL DEFAULT 0');
   await q('ALTER TABLE shift_dh_storage ADD COLUMN IF NOT EXISTS label_date_excess TEXT');
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS shift_dh_sheet_rows (
+      shift_date TEXT NOT NULL,
+      item_id INTEGER NOT NULL,
+      is_excess INTEGER NOT NULL DEFAULT 0,
+      sheet_name TEXT NOT NULL,
+      row_num INTEGER NOT NULL,
+      PRIMARY KEY (shift_date, item_id, is_excess, sheet_name)
+    )
+  `);
 
   // Учёт остатков сырья мясного цеха
   await pool.query(`

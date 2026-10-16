@@ -319,8 +319,12 @@
   }
   .mgr-tab.active { background: var(--accent); color: white; border-color: var(--accent); }
   .prorabotki-table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+  .tech-prorabotki-standalone { width: calc(100% - 40px); }
   @media (max-width: 820px) {
     .prorabotki-table { min-width: 860px; }
+  }
+  @media (max-width: 600px) {
+    .tech-prorabotki-standalone { width: calc(100% - 24px); }
   }
 
   /* ---- dashboard ---- */
@@ -455,7 +459,13 @@
 </style>
 </head>
 <body>
-<div id="root"></div>
+<div id="root">
+  <div class="empty-state" style="margin-top:60px">
+    <div id="app-boot-status" role="status">Открываем приложение…</div>
+    <button id="app-boot-retry" class="btn-secondary" style="margin-top:12px" hidden>Повторить загрузку</button>
+  </div>
+</div>
+<script src="/startup.js"></script>
 <script>
 /**
  * @license React
@@ -6787,7 +6797,7 @@ function getStationsFromTc(tc, source) {
   if (tc.stations && tc.stations.length > 0) {
     return tc.stations.map(s => ({
       ...s,
-      items: s.items.map(i => ({ ...i, source }))
+      items: s.items.map(i => ({ ...i, source, __sourceShop:s.shop }))
     }));
   }
   if (!tc.items || Object.keys(tc.items).length === 0) return STATIONS_CATALOG_FROM_EXCEL;
@@ -6795,7 +6805,7 @@ function getStationsFromTc(tc, source) {
   return STATIONS_CATALOG_FROM_EXCEL
     .map(station => ({
       ...station,
-      items: station.items.filter(item => tcItemIds.has(String(item.id))).map(i => ({ ...i, source }))
+      items: station.items.filter(item => tcItemIds.has(String(item.id))).map(i => ({ ...i, source, __sourceShop:station.shop }))
     }))
     .filter(station => station.items.length > 0);
 }
@@ -6924,14 +6934,17 @@ function mergeWorkshopGroups(rawGroups, viewDate, today) {
           name: pair[2] + ' / ' + label,
           items: [],
           _sourceKeys: [],
+          _sourceShopByStationKey: {},
           _visibleName: label,
           _normalizedVisibleName: normalizedLabel
         };
         stations.push(target);
       }
       target._sourceKeys.push(station.key);
+      target._sourceShopByStationKey[station.key]=station.shop||source.shop;
       (station.items || []).forEach(item => target.items.push({
         ...item,
+        __sourceShop: station.shop || source.shop,
         __sourceStationKey: station.key,
         __visualItemKey: station.key + '-' + item.id
       }));
@@ -6984,14 +6997,43 @@ const INITIAL_EMPLOYEES = [
 // Соусный цех и Молочный цех — общие сотрудники
 const SAUCE_MILK_SHOPS = ['Соусный цех', 'Молочный цех'];
 
+function getEmployeeShops(employee) {
+  return Array.isArray(employee.shops)&&employee.shops.length>0?employee.shops:(employee.shop?[employee.shop]:[]);
+}
+function isEmployeeActive(employee, shop) {
+  const globallyActive=employee.active !== 0 && employee.active !== false && employee.active !== '0';
+  if(shop) return globallyActive && getEmployeeShops(employee).includes(shop) &&
+    !(employee.archivedShops||[]).includes(shop);
+  if(typeof employee._activeInContext==='boolean') return employee._activeInContext;
+  return globallyActive && (getEmployeeShops(employee).length===0 ||
+    getEmployeeShops(employee).some(s=>!(employee.archivedShops||[]).includes(s)));
+}
+
 function getShopEmployees(shopName, allEmployees) {
   const sourceShops = Array.isArray(shopName)
     ? shopName
-    : (shopName && shopName._sourceShops) || [shopName];
-  return allEmployees.filter(e => {
-    const s = Array.isArray(e.shops) && e.shops.length > 0 ? e.shops : (e.shop ? [e.shop] : []);
-    return sourceShops.some(shop => s.includes(shop));
+    : (shopName && shopName._sourceShops) || [typeof shopName==='object'?shopName.shop:shopName];
+  const employees=allEmployees.filter(emp => sourceShops.some(shop=>getEmployeeShops(emp).includes(shop)))
+    .map(emp=>({...emp,_activeInContext:sourceShops.some(shop=>isEmployeeActive(emp,shop))}));
+  const sourceShopByStationKey={};
+  ((shopName&&shopName.stations)||[]).forEach(station=>{
+    sourceShopByStationKey[station.key]=station.shop;
+    Object.assign(sourceShopByStationKey,station._sourceShopByStationKey||{});
+    (station.items||[]).forEach(item=>{
+      if(item.__sourceStationKey&&item.__sourceShop) sourceShopByStationKey[item.__sourceStationKey]=item.__sourceShop;
+    });
   });
+  Object.defineProperty(employees,'sourceShopByStationKey',{value:sourceShopByStationKey});
+  return employees;
+}
+
+function getItemEmployees(item, stationKey, employees) {
+  const sourceShop=item.__sourceShop||employees.sourceShopByStationKey?.[stationKey];
+  // Preserve the existing shared employee pool for merged workshops, except
+  // when an employee's own membership is explicitly archived in this shop.
+  return sourceShop?employees.map(emp=>({...emp,_activeInContext:
+    getEmployeeShops(emp).includes(sourceShop)?isEmployeeActive(emp,sourceShop):isEmployeeActive(emp)
+  })):employees;
 }
 
 // ============================================================
@@ -7042,23 +7084,18 @@ function startTimeToDate(dateKey, hhmm) {
 // STORAGE
 // ============================================================
 async function loadEmployeesGlobal() {
-  try {
-    const r = await fetch('/api/employees');
-    if (!r.ok) throw new Error('fetch failed');
-    const { employees } = await r.json();
-    if (employees && employees.length > 0) return employees;
-    await saveEmployeesGlobal(INITIAL_EMPLOYEES);
-    return INITIAL_EMPLOYEES;
-  } catch(e) { return [...INITIAL_EMPLOYEES]; }
+  // Keep archived identities for history; filter only the selectable controls.
+  const r = await fetch('/api/employees?include_archived=1');
+  if (!r.ok) throw new Error('Не удалось загрузить сотрудников');
+  const { employees } = await r.json();
+  if (!Array.isArray(employees)) throw new Error('Некорректный список сотрудников');
+  return employees;
 }
 async function addEmployeeToServer(emp) {
-  try {
-    await fetch('/api/employees', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(emp)
-    });
-  } catch(e) {}
+  const r = await fetch('/api/employees', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(emp)
+  });
+  if (!r.ok) throw new Error('Не удалось добавить сотрудника');
 }
 async function removeEmployeeFromServer(id) {
   try {
@@ -7066,13 +7103,18 @@ async function removeEmployeeFromServer(id) {
   } catch(e) {}
 }
 async function updateEmployeeOnServer(id, name, shops) {
-  try {
-    await fetch('/api/employees/'+id, {
-      method: 'PUT',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name, shops})
-    });
-  } catch(e) {}
+  const r = await fetch('/api/employees/'+encodeURIComponent(id), {
+    method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name, shops})
+  });
+  if (!r.ok) throw new Error('Не удалось сохранить сотрудника');
+  return (await r.json()).employee;
+}
+async function setEmployeeArchivedOnServer(id, archived, shop) {
+  const r = await fetch('/api/employees/'+encodeURIComponent(id)+'/archive', {
+    method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({archived,shop})
+  });
+  if (!r.ok) throw new Error('Не удалось '+(archived?'архивировать':'восстановить')+' сотрудника');
+  return (await r.json()).employee;
 }
 async function loadShopsFromServer() {
   try {
@@ -7380,8 +7422,12 @@ function PackTable({packLines, facts, onFactChange, itemKey,
                 borderTop:'none'
               }},
                 e('div',{style:{display:'flex',gap:6,flexWrap:'wrap'}},
-                  shopEmployees.map(emp=>{
+                  shopEmployees.filter(emp=>isEmployeeActive(emp)||lineEmpIds.includes(emp.id)).map(emp=>{
                     const sel=lineEmpIds.includes(emp.id);
+                    if(!isEmployeeActive(emp)) return e('span',{
+                      key:emp.id,className:'emp-archived-mark',
+                      style:{padding:'7px 12px',borderRadius:20,background:'var(--ok-bg)',color:'var(--ok)',fontSize:13}
+                    },emp.name+' (архив)');
                     return e('button',{
                       key:emp.id,
                       onClick:()=>{
@@ -7427,8 +7473,12 @@ function PackTable({packLines, facts, onFactChange, itemKey,
 // ============================================================
 function EmployeeToggles({employees, selectedIds, onToggle, warn}) {
   return e('div',{className:'emp-toggles'+(warn?' emp-warn':'')},
-    employees.map(emp=>{
+    employees.filter(emp=>isEmployeeActive(emp)||(selectedIds||[]).includes(emp.id)).map(emp=>{
       const sel=(selectedIds||[]).includes(emp.id);
+      if(!isEmployeeActive(emp)) return e('span',{
+        key:emp.id,className:'emp-archived-mark',
+        style:{padding:'7px 12px',borderRadius:20,background:'var(--ok-bg)',color:'var(--ok)',fontSize:13}
+      },emp.name+' (архив)');
       return e('button',{
         key:emp.id, className:'emp-toggle'+(sel?' selected':''),
         onClick:()=>onToggle(emp.id)
@@ -7540,6 +7590,7 @@ function SkipPicker({isMeat, item, onSave, onCancel}) {
 }
 
 function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, prevLineData, overridePackLines, keyPrefix, autoFillWeight, hideSkip, isMeat}) {
+  shopEmployees=getItemEmployees(item,stationKey,shopEmployees);
   const itemKey=`${keyPrefix||''}${stationKey}-${item.id}`;
   const [noEmpWarn,setNoEmpWarn]=useState(false);
   const [showSkipPicker,setShowSkipPicker]=useState(false);
@@ -8325,7 +8376,7 @@ function KitchenShopPage({shopGroup, shift, onShiftChange, allEmployees, onBack,
   const isMeatShop = /мясной/i.test(shopGroup.shop);
   const activeStationIdx = stationIdx === -1 ? 0 : stationIdx;
   const station=stations[activeStationIdx]||stations[0];
-  const shopEmployees=useMemo(()=>getShopEmployees(shopGroup._sourceShops||shopGroup.shop,allEmployees),[shopGroup,allEmployees]);
+  const shopEmployees=useMemo(()=>getShopEmployees(shopGroup,allEmployees),[shopGroup,allEmployees]);
   // Заготовки Робокопа передаём в Ручную нарезку
   const robokopItems=useMemo(()=>{
     const st=stations.find(s=>s.key===ROBOKOP_KEY);
@@ -8754,7 +8805,9 @@ function DashboardTab({dateKey, shift, allEmployees, archiveIndex, activeTcEE, a
     return 'В работе';
   };
 
-  const exportXlsx=()=>{
+  const exportXlsx=async()=>{
+    try { await window.ensureExcelLibrary(); }
+    catch(err) { alert(err.message); return; }
     const hdr=["Дата","Цех","Станция","Заготовка","Объём","Упаковка","Кол-во","Статус","Выполнено","Время (мин)","Уп/мин","Сотрудник","Время отметки"];
     const data=filtered.map(r=>[
       formatDateRu(r.date),r.shop,r.station,r.name,r.volume||'',r.packName||'',r.planQty||0,
@@ -9018,102 +9071,170 @@ function EmployeesTab({employees, onSave}) {
   const [editingId, setEditingId]=useState(null);
   const [editName, setEditName]=useState('');
   const [editShops, setEditShops]=useState([]);
+  const [view,setView]=useState('active');
+  const [pendingId,setPendingId]=useState(null);
+  const [adding,setAdding]=useState(false);
+  const [savingEdit,setSavingEdit]=useState(false);
+  const [error,setError]=useState('');
+  const [shopsLoading,setShopsLoading]=useState(true);
 
   useEffect(()=>{
-    loadShopsFromServer().then(s=>{ setShops(s); });
+    loadShopsFromServer().then(s=>{ setShops(s); }).catch(()=>{
+      setError('Не удалось загрузить список цехов. Обновите страницу и попробуйте снова.');
+    }).finally(()=>setShopsLoading(false));
   },[]);
   useEffect(()=>{ setList([...employees]); },[employees]);
 
   const add=async()=>{
-    if(!newName.trim()||newShops.length===0) return;
-    const emp={id:'e_'+uid(),name:newName.trim(),shops:newShops,shop:newShops[0]};
-    const next=[...list,emp];
-    setList(next); setNewName(''); setNewShops([]);
-    await addEmployeeToServer(emp);
-    onSave(next);
+    if(adding||!newName.trim()||newShops.length===0) return;
+    setAdding(true); setError('');
+    const emp={id:'e_'+uid(),name:newName.trim(),shops:[...newShops],shop:newShops[0],active:1};
+    try {
+      await addEmployeeToServer(emp);
+      const next=[...list,emp];
+      setList(next); onSave(next);
+      setNewName(''); setNewShops([]);
+    } catch(err) {
+      setError('Не удалось добавить сотрудника. Проверьте соединение и попробуйте снова.');
+    } finally { setAdding(false); }
   };
 
   const startEdit=(emp)=>{
+    setError('');
     setEditingId(emp.id);
     setEditName(emp.name);
     setEditShops(Array.isArray(emp.shops)&&emp.shops.length>0 ? emp.shops : (emp.shop?[emp.shop]:[]));
   };
 
   const saveEdit=async()=>{
-    if(!editName.trim()||editShops.length===0) return;
-    const next=list.map(x=>x.id===editingId?{...x,name:editName.trim(),shops:editShops,shop:editShops[0]}:x);
-    setList(next); setEditingId(null);
-    await updateEmployeeOnServer(editingId, editName.trim(), editShops);
-    onSave(next);
+    if(savingEdit||!editName.trim()||editShops.length===0) return;
+    setSavingEdit(true); setError('');
+    try {
+      const updated=await updateEmployeeOnServer(editingId, editName.trim(), editShops);
+      const next=list.map(x=>x.id===editingId
+        ? {...x,...updated,name:updated?.name||editName.trim(),shops:Array.isArray(updated?.shops)?updated.shops:[...editShops],shop:updated?.shop||editShops[0]}
+        : x);
+      setList(next); onSave(next); setEditingId(null);
+    } catch(err) {
+      setError('Не удалось сохранить изменения. Введённые данные сохранены в форме — попробуйте снова.');
+    } finally { setSavingEdit(false); }
   };
 
-  const remove=async(id)=>{
-    const next=list.filter(x=>x.id!==id);
-    setList(next);
-    await removeEmployeeFromServer(id);
-    onSave(next);
+  const changeArchiveState=async(emp,archived,shop)=>{
+    if(pendingId!==null) return;
+    if(!window.confirm(`Сотрудник «${emp.name}» — цех «${shop}». ${archived?'Архивировать':'Восстановить'} только в этом цехе? В остальных цехах статус не изменится, отметки и история останутся без изменений.`)) return;
+    setPendingId(emp.id); setError('');
+    try {
+      const updated=await setEmployeeArchivedOnServer(emp.id,archived,shop);
+      const next=list.map(x=>x.id===emp.id?{...x,...updated}:x);
+      setList(next); onSave(next);
+    } catch(err) {
+      setError(archived
+        ? 'Не удалось архивировать сотрудника. Список не изменён — попробуйте снова.'
+        : 'Не удалось восстановить сотрудника. Список не изменён — попробуйте снова.');
+    } finally { setPendingId(null); }
   };
 
-  // Group by shop; employee appears in each of their shops
+  // Memberships, not the employee's aggregate status, determine each shop's list.
   const grouped={};
   shops.forEach(s=>{grouped[s]=[];});
+  const membershipsFor=(emp)=> {
+    const assigned=getEmployeeShops(emp);
+    return Array.isArray(assigned)&&assigned.length>0?assigned:(emp.shop?[emp.shop]:[]);
+  };
   list.forEach(emp=>{
-    const empShops=Array.isArray(emp.shops)&&emp.shops.length>0?emp.shops:(emp.shop?[emp.shop]:[]);
-    empShops.forEach(s=>{ if(!grouped[s]) grouped[s]=[]; grouped[s].push(emp); });
+    const empShops=membershipsFor(emp);
+    empShops.forEach(shop=>{
+      const activeHere=isEmployeeActive(emp,shop);
+      if((view==='active'&&activeHere)||(view==='archived'&&!activeHere)) {
+        if(!grouped[shop]) grouped[shop]=[];
+        grouped[shop].push(emp);
+      }
+    });
+    if(empShops.length===0) {
+      const activeSomewhere=isEmployeeActive(emp);
+      if((view==='active'&&activeSomewhere)||(view==='archived'&&!activeSomewhere)) {
+        if(!grouped['Цех не указан']) grouped['Цех не указан']=[];
+        grouped['Цех не указан'].push(emp);
+      }
+    }
   });
-  shops.forEach(s=>{ grouped[s].sort((a,b)=>a.name.localeCompare(b.name,'ru')); });
+  Object.keys(grouped).forEach(s=>{ grouped[s].sort((a,b)=>a.name.localeCompare(b.name,'ru')); });
 
-  const renderEmpRow=(emp)=>{
-    const empShops=Array.isArray(emp.shops)&&emp.shops.length>0?emp.shops:(emp.shop?[emp.shop]:[]);
+  const renderEmpRow=(emp,shop)=>{
     const isEditing=editingId===emp.id;
+    const isPending=pendingId===emp.id;
     return e('div',{key:emp.id,className:'emp-item',style:{flexDirection:'column',alignItems:'stretch',gap:8,marginBottom:4}},
       isEditing
         ? e('div',null,
+            e('div',{style:{fontSize:11,color:'var(--muted)',marginBottom:6}},'Редактирование · цех: '+shop),
             e('input',{className:'add-emp-input',style:{width:'100%',boxSizing:'border-box',marginBottom:6},
-              value:editName,onChange:ev=>setEditName(ev.target.value),autoFocus:true}),
+              value:editName,onChange:ev=>setEditName(ev.target.value),autoFocus:true,disabled:savingEdit}),
             shops.length>0 && e(ShopsCheckboxes,{shops,selected:editShops,onChange:setEditShops}),
             e('div',{style:{display:'flex',gap:8,marginTop:8}},
-              e('button',{className:'btn-primary',onClick:saveEdit,
-                style:{opacity:(!editName.trim()||editShops.length===0)?0.5:1}},'Сохранить'),
-              e('button',{className:'btn-secondary',onClick:()=>setEditingId(null)},'Отмена')
+              e('button',{className:'btn-primary',onClick:saveEdit,disabled:savingEdit||!editName.trim()||editShops.length===0,
+                style:{opacity:(savingEdit||!editName.trim()||editShops.length===0)?0.5:1}},savingEdit?'Сохранение…':'Сохранить'),
+              e('button',{className:'btn-secondary',onClick:()=>setEditingId(null),disabled:savingEdit},'Отмена')
             )
           )
-        : e('div',{style:{display:'flex',alignItems:'center',gap:8}},
-            e('div',{style:{flex:1}},
+        : e('div',{style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}},
+            e('div',{style:{flex:'1 1 160px',minWidth:0}},
               e('div',{className:'emp-item-name'},emp.name),
-              empShops.length>1 && e('div',{style:{fontSize:11,color:'var(--muted)'}},empShops.join(' · '))
+              e('div',{style:{fontSize:11,color:'var(--muted)'}},'Цех: '+shop),
+              e('div',{style:{fontSize:11,color:'var(--muted)',marginTop:2}},
+                `Другие цеха: ${membershipsFor(emp).filter(s=>s!==shop).join(' · ')||'нет'}`),
+              view==='archived' && e('div',{style:{fontSize:11,color:'var(--muted)',marginTop:3}},'В архиве в этом цехе · история сохранена')
             ),
             e('button',{className:'btn-secondary',onClick:()=>startEdit(emp),
-              style:{display:'flex',alignItems:'center',gap:4,padding:'4px 10px'}},'✏ Изменить'),
-            e('button',{className:'btn-danger',onClick:()=>remove(emp.id),
-              style:{display:'flex',alignItems:'center',gap:4}},
-              e(SvgTrash,{size:14}),' Удалить')
+              disabled:isPending||pendingId!==null,style:{display:'flex',alignItems:'center',gap:4,padding:'4px 10px'}},'Изменить'),
+            e('button',{className:view==='archived'?'btn-primary':'btn-secondary',
+              onClick:()=>changeArchiveState(emp,view!=='archived',shop),disabled:isPending||pendingId!==null||shop==='Цех не указан',
+              style:{display:'flex',alignItems:'center',gap:4,padding:'4px 10px',opacity:(isPending||pendingId!==null||shop==='Цех не указан')?0.55:1}},
+              isPending?(view==='archived'?'Восстановление…':'Архивирование…'):(view==='archived'?'Восстановить':'В архив'))
           )
     );
   };
 
   return e('div',null,
     e('h2',{className:'page-title',style:{marginBottom:4}},'Сотрудники'),
-    e('p',{className:'page-sub'},'Сотрудник может работать в нескольких цехах'),
+    e('p',{className:'page-sub'},'Сотрудник может работать в нескольких цехах. Архив скрывает его из новых отметок, сохраняя историю.'),
+    error && e('div',{role:'alert',style:{background:'var(--surface)',border:'1px solid var(--danger,#c65b54)',borderRadius:10,padding:'10px 12px',marginBottom:14,color:'var(--danger,#a83f38)'}},error),
 
     // Add form
     e('div',{style:{background:'var(--surface)',borderRadius:12,padding:16,marginBottom:20}},
       e('div',{style:{fontWeight:700,marginBottom:8}},'Новый сотрудник'),
       e('input',{className:'add-emp-input',placeholder:'Имя',style:{width:'100%',boxSizing:'border-box',marginBottom:8},
-        value:newName,onChange:ev=>setNewName(ev.target.value),
+        value:newName,onChange:ev=>setNewName(ev.target.value),disabled:adding,
         onKeyDown:ev=>ev.key==='Enter'&&add()}),
       shops.length>0 && e(ShopsCheckboxes,{shops,selected:newShops,onChange:setNewShops}),
-      e('button',{className:'btn-primary',onClick:add,
-        style:{marginTop:10,display:'flex',alignItems:'center',gap:8,opacity:(!newName.trim()||newShops.length===0)?0.5:1}},
-        e(SvgPlus,{size:18}),' Добавить')
+      shopsLoading
+        ? e('div',{style:{fontSize:12,color:'var(--muted)',marginTop:8}},'Загружаем список цехов…')
+        : shops.length===0
+          ? e('div',{style:{fontSize:12,color:'var(--muted)',marginTop:8}},'Нет доступных цехов')
+          : e('button',{className:'btn-primary',onClick:add,disabled:adding||!newName.trim()||newShops.length===0,
+            style:{marginTop:10,display:'flex',alignItems:'center',gap:8,opacity:(adding||!newName.trim()||newShops.length===0)?0.5:1}},
+            e(SvgPlus,{size:18}),adding?'Добавление…':' Добавить')
+    ),
+
+    e('div',{style:{display:'flex',gap:8,marginBottom:14}},
+      e('button',{className:view==='active'?'btn-primary':'btn-secondary',onClick:()=>{setView('active');setEditingId(null);setError('');}},
+        `Активные (${list.filter(emp=>membershipsFor(emp).some(shop=>isEmployeeActive(emp,shop))||(!membershipsFor(emp).length&&isEmployeeActive(emp))).length})`),
+      e('button',{className:view==='archived'?'btn-primary':'btn-secondary',onClick:()=>{setView('archived');setEditingId(null);setError('');}},
+        `Архив (${list.filter(emp=>membershipsFor(emp).some(shop=>!isEmployeeActive(emp,shop))||(!membershipsFor(emp).length&&!isEmployeeActive(emp))).length})`)
     ),
 
     // Grouped by shop
+    e('div',{style:{fontSize:11,color:'var(--muted)',marginBottom:8}},'Счётчики — уникальные сотрудники; один человек может учитываться и в активных, и в архиве, если статусы различаются по цехам.'),
     e('div',null,
-      shops.filter(s=>grouped[s]&&grouped[s].length>0).map(shop=>
+      shopsLoading
+        ? e('div',{className:'emp-list',style:{padding:16,color:'var(--muted)'}},'Загружаем сотрудников…')
+        : Object.values(grouped).every(rows=>rows.length===0)
+          ? e('div',{className:'emp-list',style:{padding:18,color:'var(--muted)'}},
+              view==='archived'?'В архиве пока нет сотрудников.':'Активных сотрудников пока нет.')
+          : Object.keys(grouped).filter(shop=>grouped[shop].length>0).map(shop=>
         e('div',{key:shop},
           e('div',{className:'shop-group-header'},shop+` (${grouped[shop].length})`),
-          e('div',{className:'emp-list'}, grouped[shop].map(emp=>renderEmpRow(emp)))
+          e('div',{className:'emp-list'}, grouped[shop].map(emp=>renderEmpRow(emp,shop)))
         )
       )
     )
@@ -9161,7 +9282,9 @@ function ShiftReportPanel({dk, allEmployees, onClose}) {
     })();
   },[dk]);
 
-  const exportShift=()=>{
+  const exportShift=async()=>{
+    try { await window.ensureExcelLibrary(); }
+    catch(err) { alert(err.message); return; }
     if(!data) return;
     const hdr=['Цех','Станция','Заготовка','План уп','Выполнено','Сотрудники'];
     const rows=[];
@@ -9343,8 +9466,9 @@ function TechcardsTab({shift, allTechcards, activeTcEE, activeTcUD, onApplyTechc
     setMessageFn('');
     setParsedFn(null);
     const reader=new FileReader();
-    reader.onload=(ev)=>{
+    reader.onload=async(ev)=>{
       try {
+        await window.ensureExcelLibrary();
         const wb=XLSX.read(ev.target.result,{type:'array'});
         const ws=wb.Sheets[wb.SheetNames[0]];
         const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
@@ -9732,6 +9856,29 @@ function getDHItems(catalog, itemPackLines) {
   return result;
 }
 
+// Причины текущих заготовок, включая отдельные строки фасовки.
+// prev-* относится к перенесённым заданиям, а не к текущему плану ДХ.
+function calcDHSkipReasons(skipReasons) {
+  const labels = {no_material:'Нет сырья', no_time:'Не успели'};
+  const reasons = {};
+  Object.entries(skipReasons || {}).forEach(([key, reason]) => {
+    if (/^(prev|precut|zames)-/.test(key) || !labels[reason]) return;
+    const match = key.match(/^.+-(\d+)-pl-\d+$/) || key.match(/^.+-(\d+)$/);
+    if (!match) return;
+    const id = Number(match[1]);
+    const list = reasons[id] || (reasons[id] = []);
+    if (!list.includes(labels[reason])) list.push(labels[reason]);
+  });
+  return reasons;
+}
+
+function renderDHSkipReasons(reasons) {
+  if (!reasons?.length) return null;
+  return e('div', {style:{marginTop:4, fontSize:12, fontWeight:600,
+    color:'var(--danger,#b91c1c)', whiteSpace:'normal'}},
+    'Причина невыполнения: '+reasons.join('; '));
+}
+
 // Подвкладка "Факты смены"
 function DXFactsTab({dateKey, archiveIndex}) {
   const today = new Date().toISOString().slice(0, 10);
@@ -9825,6 +9972,7 @@ function DXFactsTab({dateKey, archiveIndex}) {
   }, [selDate]);
 
   const factTotals = useMemo(() => calcFactTotals(shiftData?.shift?.facts), [shiftData]);
+  const skipReasons = useMemo(() => calcDHSkipReasons(shiftData?.shift?.skipReasons), [shiftData]);
 
   const getFactVal = (itemId) =>
     factInputs[itemId] !== undefined ? factInputs[itemId] : String(factTotals[itemId] ?? '');
@@ -9966,7 +10114,8 @@ function DXFactsTab({dateKey, archiveIndex}) {
               return e('tr', {key: item.id, style:{borderBottom:'1px solid var(--border,#e5e7eb)',
                   background: done ? 'var(--ok-bg,#f0fdf4)' : 'var(--bg)'}},
                 e('td', {style:{padding:'8px 12px', color:'var(--muted)', fontSize:12}}, item.id),
-                e('td', {style:{padding:'8px 12px'}}, item.name),
+                e('td', {style:{padding:'8px 12px'}}, item.name,
+                  renderDHSkipReasons(skipReasons[item.id])),
                 e('td', {style:{padding:'8px 12px', textAlign:'right', color:'var(--muted)'}}, planNum || '—'),
                 e('td', {style:{padding:'8px 12px', textAlign:'right'}},
                   e('input', {
@@ -9983,7 +10132,8 @@ function DXFactsTab({dateKey, archiveIndex}) {
             manualItems.map(it =>
               e('tr', {key: it.uid, style:{borderBottom:'1px solid var(--border,#e5e7eb)', background:'var(--bg)'}},
                 e('td', {style:{padding:'8px 12px', color:'var(--muted)', fontSize:12}}, it.id ? String(it.id) : '—'),
-                e('td', {style:{padding:'8px 12px'}}, it.name),
+                e('td', {style:{padding:'8px 12px'}}, it.name,
+                  renderDHSkipReasons(skipReasons[it.id])),
                 e('td', {style:{padding:'8px 12px', textAlign:'right'}},
                   e('input', {
                     type:'number', min:0, step:1, value:it.plan||'',
@@ -10146,6 +10296,7 @@ function DXDistributionTab({dateKey}) {
   const dhItems = shiftData?.dhItems || [];
   const factTotals = shiftData?.factTotals || {};
   const manualItems = shiftData?.shift?.manualDhItems || [];
+  const skipReasons = useMemo(() => calcDHSkipReasons(shiftData?.shift?.skipReasons), [shiftData]);
 
   // Строим единый список: dhItems + manualItems, каждый с plan и fact
   const allRows = useMemo(() => {
@@ -10160,13 +10311,7 @@ function DXDistributionTab({dateKey}) {
       seen.add(it.id || it.uid);
       rows.push({ id: it.id || it.uid, name: it.name, plan: Number(it.plan) || 0, fact: factTotals[it.id] || Number(it.fact) || 0, stationKey: null, isManual: true });
     });
-    // Позиции из factTotals, которых нет в dhItems/manual
-    Object.entries(factTotals).forEach(([idStr, fact]) => {
-      const id = Number(idStr);
-      if (seen.has(id) || !fact) return;
-      seen.add(id);
-      rows.push({ id, name: String(id), plan: 0, fact, stationKey: null, isManual: false });
-    });
+    // Наличие факта в цехе не делает позицию ДХ: не добавляем остальные factTotals.
     return rows;
   }, [dhItems, manualItems, factTotals]);
 
@@ -10267,7 +10412,8 @@ function DXDistributionTab({dateKey}) {
               const keyX = String(id) + '_X';
               const mainRow = e('tr', {key: keyMain, style:{borderBottom: excess > 0 ? 'none' : '1px solid var(--border,#e5e7eb)'}},
                 e('td', {style:{padding:'8px 12px', color:'var(--muted)', fontSize:12}}, id),
-                e('td', {style:{padding:'8px 12px'}}, name),
+                e('td', {style:{padding:'8px 12px'}}, name,
+                  renderDHSkipReasons(skipReasons[id])),
                 e('td', {style:{padding:'8px 12px', textAlign:'right', color:'var(--muted)'}},
                   plan ? `${plan} уп` : '—'),
                 e('td', {style:{padding:'8px 12px', textAlign:'right', color: excess > 0 ? 'var(--danger,#dc2626)' : 'var(--muted)'}},
@@ -11213,6 +11359,7 @@ function IssuanceTab({dateKey, activeTcEE, activeTcUD, shift}) {
     const reader = new FileReader();
     reader.onload = async (ev) => {
       try {
+        await window.ensureExcelLibrary();
         const parsed = parseIssuanceXlsx(ev.target.result);
         if (!parsed.length) { setError('Не найдено позиций с категорией Мясо/Рыба в блоках Производство/Резерв'); return; }
         setIssuanceItems(parsed);
@@ -11585,8 +11732,10 @@ function PhotoPickerButton({onFiles, uploading, label, style}) {
   const [open, setOpen] = useState(false);
 
   const pick = (ref) => {
+    // Keep the native picker inside the tap handler: mobile browsers may block
+    // file-input clicks deferred through a timer.
+    if(ref.current) ref.current.click();
     setOpen(false);
-    setTimeout(() => ref.current && ref.current.click(), 50);
   };
   const onInput = (ev) => {
     if(!ev.target.files||!ev.target.files.length) return;
@@ -11597,6 +11746,7 @@ function PhotoPickerButton({onFiles, uploading, label, style}) {
 
   return e('div',{style:{position:'relative',display:'inline-block'}},
     e('button',{
+      type:'button',
       onClick:()=>setOpen(o=>!o),
       disabled:!!uploading,
       style:{padding:'7px 14px',borderRadius:8,border:'1.5px dashed var(--border)',
@@ -11610,12 +11760,12 @@ function PhotoPickerButton({onFiles, uploading, label, style}) {
       e('div',{style:{position:'absolute',bottom:'calc(100% + 6px)',left:0,zIndex:1000,
         background:'var(--surface)',border:'1.5px solid var(--border)',borderRadius:12,
         boxShadow:'0 4px 20px rgba(0,0,0,0.15)',overflow:'hidden',minWidth:200}},
-        e('button',{onClick:()=>pick(cameraRef),
+        e('button',{type:'button',onClick:()=>pick(cameraRef),
           style:{display:'flex',alignItems:'center',gap:10,width:'100%',padding:'13px 16px',
             border:'none',background:'transparent',color:'var(--text)',fontSize:14,
             cursor:'pointer',textAlign:'left',borderBottom:'1px solid var(--border)'}},
           '📷 Сфотографировать'),
-        e('button',{onClick:()=>pick(galleryRef),
+        e('button',{type:'button',onClick:()=>pick(galleryRef),
           style:{display:'flex',alignItems:'center',gap:10,width:'100%',padding:'13px 16px',
             border:'none',background:'transparent',color:'var(--text)',fontSize:14,
             cursor:'pointer',textAlign:'left'}},
@@ -13511,7 +13661,7 @@ function ReadyFoodTab({onCountChange}) {
 }
 
 // Страница технолога
-function TechnologistPage({initialActId=null}) {
+function TechnologistPage({initialActId=null,standalone=false}) {
   const [tab,setTab]=useState(initialActId?'acts':'tasks');
   const [date,setDate]=useState(todayISO);
   const [tasks,setTasks]=useState([]);
@@ -13659,7 +13809,8 @@ function TechnologistPage({initialActId=null}) {
 
   return e(React.Fragment,null,
 
-    e('div',{style:{padding:'16px',maxWidth:tab==='prorabotki'?1600:960,margin:'0 auto'}},
+    e('div',{className:standalone&&tab==='prorabotki'?'tech-prorabotki-standalone':'',
+      style:{padding:'16px',maxWidth:tab==='prorabotki'?1060:960,margin:'0 auto'}},
     // Табы
     e('div',{className:'mgr-tabs',style:{marginBottom:20}},
       e('button',{className:'mgr-tab'+(tab==='tasks'?' active':''),onClick:()=>setTab('tasks')},
@@ -15044,6 +15195,31 @@ function ActsPage({isManager=false, initialActId=null, onActDeleted, onCountChan
 // ============================================================
 // APP ROOT
 // ============================================================
+async function loadTrackerInitialData(date) {
+  const stationConfig = (async () => {
+    try {
+      const r = await fetch('/api/config/stations');
+      if (r.ok) return (await r.json()).config || {};
+    } catch (_) {}
+    return {};
+  })();
+  const precutIds = (async () => {
+    try {
+      const r = await fetch('/api/precut');
+      if (r.ok) return (await r.json()).ids || [];
+    } catch (_) {}
+    return [];
+  })();
+  const [employees, archiveIndex, techcards, config, ids, existing] = await Promise.all([
+    loadEmployeesGlobal(), loadShiftIndex(), loadTechCards(), stationConfig, precutIds, loadShift(date),
+  ]);
+  const shift = existing || emptyShiftData(date);
+  const [tcEE, tcUD] = await Promise.all([
+    shift.techcardId ? loadTechCard(shift.techcardId) : null,
+    shift.udTechcardId ? loadTechCard(shift.udTechcardId) : null,
+  ]);
+  return { employees, archiveIndex, techcards, config, ids, shift, tcEE, tcUD };
+}
 
 function App() {
   return e(AppInner, {});
@@ -15060,6 +15236,7 @@ function AppInner({}) {
 
   const [loading,setLoading]=useState(true);
   const [today]=useState(todayKey);
+  const [initialError,setInitialError]=useState('');
   const [viewDate,setViewDate]=useState(todayKey);
   const [mode,setMode]=useState(shopParam?'kitchen':(isManager||isKitchenManager)?'manager':'home'); // home | kitchen | manager
   const [selectedShop,setSelectedShop]=useState(null);
@@ -15077,25 +15254,17 @@ function AppInner({}) {
   // Load initial data
   useEffect(()=>{
     (async()=>{
-      const emps=await loadEmployeesGlobal();
-      setAllEmployees(emps);
-      const idx=await loadShiftIndex();
-      setArchiveIndex(idx);
-      const tcs=await loadTechCards();
-      setAllTechcards(tcs);
-      try{const r=await fetch('/api/config/stations');if(r.ok){const{config}=await r.json();setGlobalStationConfig(config||{});}}catch(_){}
-      try{const r=await fetch('/api/precut');if(r.ok){const{ids}=await r.json();setPrecutConfig(new Set(ids));}}catch(_){}
-      const existing=await loadShift(today);
-      let loadedShift=existing||emptyShiftData(today);
-      setShift(loadedShift);
-      if(loadedShift.techcardId){
-        const tc=await loadTechCard(loadedShift.techcardId);
-        if(tc) setActiveTcEE(tc);
-      }
-      if(loadedShift.udTechcardId){
-        const tc=await loadTechCard(loadedShift.udTechcardId);
-        if(tc) setActiveTcUD(tc);
-      }
+      let data;
+      try { data=await loadTrackerInitialData(today); }
+      catch(err) { setInitialError(err.message||'Не удалось загрузить трекер'); return; }
+      setAllEmployees(data.employees);
+      setArchiveIndex(data.archiveIndex);
+      setAllTechcards(data.techcards);
+      setGlobalStationConfig(data.config);
+      setPrecutConfig(new Set(data.ids));
+      setShift(data.shift);
+      if(data.tcEE) setActiveTcEE(data.tcEE);
+      if(data.tcUD) setActiveTcUD(data.tcUD);
       setLoading(false);
     })();
   },[]);
@@ -15118,6 +15287,11 @@ function AppInner({}) {
     ws.onmessage=(e)=>{
       try {
         const msg=JSON.parse(e.data);
+        if(msg.type==='employees_updated'){
+          loadEmployeesGlobal().then(setAllEmployees).catch(()=>{
+            setToast('Не удалось обновить сотрудников. Обновите страницу.');
+          });
+        }
         // Игнорируем собственные апдейты (clientId совпадает с нашим)
         if(msg.type==='shift_updated' && msg.date===shift.date && msg.clientId!==MY_CLIENT_ID){
           // Мержим входящий shift с локальным: true в doneFlags не откатывается назад,
@@ -15150,6 +15324,21 @@ function AppInner({}) {
     return ()=>ws.close();
   },[shift.date]);
 
+  useEffect(()=>{
+    const refreshEmployees=()=>{
+      if(document.visibilityState==='hidden') return;
+      loadEmployeesGlobal().then(setAllEmployees).catch(()=>{
+        setToast('Не удалось обновить сотрудников. Обновите страницу.');
+      });
+    };
+    window.addEventListener('focus',refreshEmployees);
+    document.addEventListener('visibilitychange',refreshEmployees);
+    return ()=>{
+      window.removeEventListener('focus',refreshEmployees);
+      document.removeEventListener('visibilitychange',refreshEmployees);
+    };
+  },[]);
+
   // Expose persist to save bar
   persistShiftRef.fn=persistShift;
 
@@ -15164,7 +15353,7 @@ function AppInner({}) {
 
   const handleEmployeesChange=(list)=>{
     setAllEmployees(list);
-    // Серверное сохранение делается в EmployeesTab напрямую (add/remove по отдельности)
+    // EmployeesTab persists individual changes; this catalog also retains archived names.
   };
 
   const openArchiveDate=async(dk)=>{
@@ -15231,7 +15420,7 @@ function AppInner({}) {
         
       )
     ),
-    e(TechnologistPage,{initialActId:actIdParam})
+    e(TechnologistPage,{initialActId:actIdParam,standalone:true})
   );
   if(isProduct) return e('div',null,
     e('div',{className:'topnav'},
@@ -15244,6 +15433,9 @@ function AppInner({}) {
     e(ProductJournalPage,{initialActId:actIdParam})
   );
 
+  if(initialError) return e('div',{className:'empty-state',style:{marginTop:60}},
+    e('div',{role:'alert',style:{color:'var(--danger)'}},initialError),
+    e('button',{className:'btn-secondary',onClick:()=>location.reload(),style:{marginTop:12}},'Повторить загрузку'));
   // Менеджер кухни — нужна загрузка данных смены, поэтому рендерим после loading
   if(isKitchenManager && loading) return e('div',{className:'empty-state',style:{marginTop:60}},'Загрузка…');
   if(isKitchenManager) return e('div',null,
@@ -15365,7 +15557,18 @@ function AppInner({}) {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(e(App,null));
+class AppErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error) { console.error('Application render failed:', error); }
+  render() {
+    if (this.state.error) return e('div',{className:'empty-state',style:{marginTop:60}},
+      e('div',{role:'alert'},'Не удалось открыть приложение: '+this.state.error.message),
+      e('button',{className:'btn-secondary',style:{marginTop:12},onClick:()=>location.reload()},'Повторить загрузку'));
+    return this.props.children;
+  }
+}
+ReactDOM.createRoot(document.getElementById('root')).render(e(AppErrorBoundary,null,e(App,null)));
 
 </script>
 </body>

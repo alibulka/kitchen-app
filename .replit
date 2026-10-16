@@ -49,6 +49,7 @@ FACTS_SHEETS_ENABLED = "true"
 PRORABOTKI_WRITE_ENABLED = "true"
 ACT_NOTIFICATIONS_ENABLED = "true"
 ACT_NOTIFICATION_ENDPOINT = "https://api-new.elementaree.ru/replit/notification/send"
+DH_SPREADSHEET_ID = "1CbQzuYzJ7vfzNfm3tb1UgyvIZO8Rh7bI9dXlMgv0FSQ"
 
 [userenv.development]
 ACT_NOTIFICATIONS_ENABLED = "true"

@@ -9,14 +9,18 @@ test('only result columns, correct boundaries and numeric masses', () => {
   const first = buildData('236716915:225', 'Мясо', fields);
   const second = buildData('184249890:822', 'Другое', fields);
   assert.deepEqual(first.map(x => x.range), ['B','D','G','H','O','Q','R','T','X','Z'].map(c=>`'Мясо'!${c}225`));
-  assert.deepEqual(second.map(x => x.range), ['C','D','E','L','O','P','Q','S','V'].map(c=>`'Другое'!${c}822`));
+  assert.deepEqual(second.map(x => x.range), ['B','D','E','F','M','P','Q','R','T','W'].map(c=>`'Другое'!${c}822`));
   assert.ok(!first.some(x => /![MP]225$/.test(x.range)), 'New M/P columns must be untouched');
-  assert.ok(!second.some(x => /![JM]822$/.test(x.range)), 'New J/M columns must be untouched');
+  assert.ok(!second.some(x => /![ACKN]822$/.test(x.range)), 'ID, purpose, acceptance weight and task must be untouched');
   assert.equal(first[5].values[0][0], 100);
   assert.equal(first[6].values[0][0], 80);
   assert.equal(first[7].values[0][0], 0.2);
   assert.equal(first[9].values[0][0], 'Комментарий 1\nКомментарий 2');
-  for (const [id, data, percentIndex] of [['236716915:225', first, 7], ['184249890:822', second, 6]]) {
+  assert.equal(second[0].values[0][0], 'Сырьё');
+  assert.equal(second[5].values[0][0], 100);
+  assert.equal(second[6].values[0][0], 80);
+  assert.equal(second[9].values[0][0], 'Комментарий 1\nКомментарий 2');
+  for (const [id, data, percentIndex] of [['236716915:225', first, 7], ['184249890:822', second, 7]]) {
     const requests = buildRequests(id, data);
     assert.equal(requests.length, data.length);
     const pct = requests[percentIndex].updateCells;
@@ -27,6 +31,9 @@ test('only result columns, correct boundaries and numeric masses', () => {
     assert.equal(pct.range.endRowIndex - pct.range.startRowIndex, 1);
     assert.equal(pct.range.endColumnIndex - pct.range.startColumnIndex, 1);
     assert.equal(requests[0].updateCells.fields, 'userEnteredValue');
+    const expectedColumns = id.startsWith('184249890:') ? [1,3,4,5,12,15,16,17,19,22]
+      : [1,3,6,7,14,16,17,19,23,25];
+    assert.deepEqual(requests.map(r => r.updateCells.range.startColumnIndex), expectedColumns);
   }
   assert.deepEqual(buildData('184249890:822', 'Другое', { conclusion: '', grossMass: null }), []);
   assert.equal(targetFor('184249890:815').row, 815);
@@ -51,6 +58,58 @@ test('development write disabled before any database or Google calls', async () 
   } finally {
     if (old === undefined) delete process.env.PRORABOTKI_WRITE_ENABLED;
     else process.env.PRORABOTKI_WRITE_ENABLED = old;
+  }
+});
+
+test('saving an act from the shifted sheet writes material and results to the new columns without touching IDs', async () => {
+  const { JWT } = require('google-auth-library');
+  const { SOURCES } = require('../lib/prorabotki-sheets');
+  const originalRequest = JWT.prototype.request;
+  const oldFlag = process.env.PRORABOTKI_WRITE_ENABLED;
+  process.env.PRORABOTKI_WRITE_ENABLED = 'true';
+  const act = {
+    id: 42, source_row: '184249890:id:900', source_product_name: 'Исходное название',
+    product_name: 'Новое название', raw_material: 'Сырьё Manage', manufacturer: 'Завод',
+    supplier: 'Поставщик', date: '2026-10-01', gross_mass: 100, defrost_mass: 80,
+    conclusion: 'Подходит',
+  };
+  const row = [900, 'Старое сырьё', 'Цель', 'Исходное название'];
+  const writes = [];
+  const pool = {
+    async query(sql) {
+      if (sql.includes('JOIN act_fields')) return { rows: [{ label: 'Вкус', value: 'Хороший' }] };
+      if (sql.startsWith('UPDATE')) return { rows: [] };
+      return { rows: [act] };
+    },
+  };
+  pool.withTransaction = fn => fn(pool);
+  JWT.prototype.request = async function(request) {
+    if (request.method === 'POST') {
+      writes.push(request.data.requests);
+      return { data: {} };
+    }
+    if (!request.url.includes('/values/')) {
+      return { data: { sheets: SOURCES.map(s => ({ properties: { sheetId: s.gid, title: s.title } })) } };
+    }
+    const range = decodeURIComponent(request.url.split('/values/')[1]);
+    if (!range.includes("'ни рыба ни мясо'")) return { data: { values: [] } };
+    return { data: { values: range.endsWith(':A') ? [[900]] : [row] } };
+  };
+  try {
+    assert.deepEqual(await syncActSafely(pool, 42), { status: 'synced', cells: 10 });
+    assert.equal(writes.length, 1, 'Existing ID must not be rewritten');
+    const cells = writes[0].map(r => r.updateCells);
+    assert.deepEqual(cells.map(c => c.range.startColumnIndex), [1,3,4,5,12,15,16,17,19,22]);
+    assert.ok(cells.every(c => c.range.sheetId === 184249890 &&
+      c.range.startRowIndex === 814 && c.range.endRowIndex === 815));
+    assert.equal(cells[0].rows[0].values[0].userEnteredValue.stringValue, 'Сырьё Manage');
+    assert.equal(cells[1].rows[0].values[0].userEnteredValue.stringValue, 'Новое название');
+    assert.equal(cells[7].rows[0].values[0].userEnteredValue.numberValue, 0.2);
+    assert.equal(cells[9].rows[0].values[0].userEnteredValue.stringValue, 'Вкус: Хороший');
+  } finally {
+    JWT.prototype.request = originalRequest;
+    if (oldFlag === undefined) delete process.env.PRORABOTKI_WRITE_ENABLED;
+    else process.env.PRORABOTKI_WRITE_ENABLED = oldFlag;
   }
 });
 

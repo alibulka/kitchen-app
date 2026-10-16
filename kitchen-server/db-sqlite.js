@@ -82,6 +82,14 @@ sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_tt_status_date ON technologist_tasks
   }
 }
 
+// Archive individual shop memberships without removing the employee identity.
+{
+  const cols = sqlite.prepare('PRAGMA table_info(employees)').all();
+  if (cols.length > 0 && !cols.some(c => c.name === 'archived_shops')) {
+    sqlite.exec("ALTER TABLE employees ADD COLUMN archived_shops TEXT NOT NULL DEFAULT '[]'");
+  }
+}
+
 // Добавляем ud_techcard_id к shifts если нет
 {
   const cols = sqlite.prepare('PRAGMA table_info(shifts)').all();
@@ -229,6 +237,14 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS shift_dh_storage (
 {
   const dhCols = sqlite.prepare('PRAGMA table_info(shift_dh_storage)').all().map(c => c.name);
   if (!dhCols.includes('label_date')) sqlite.exec('ALTER TABLE shift_dh_storage ADD COLUMN label_date TEXT');
+  if (!dhCols.includes('to_kitchen_excess')) sqlite.exec('ALTER TABLE shift_dh_storage ADD COLUMN to_kitchen_excess REAL NOT NULL DEFAULT 0');
+  if (!dhCols.includes('label_date_excess')) sqlite.exec('ALTER TABLE shift_dh_storage ADD COLUMN label_date_excess TEXT');
+}
+{
+  const cols = sqlite.prepare('PRAGMA table_info(shifts)').all().map(c => c.name);
+  if (cols.length && !cols.includes('extra_json')) {
+    sqlite.exec("ALTER TABLE shifts ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'");
+  }
 }
 
 // Миграция: process_description в ready_food_wrappers

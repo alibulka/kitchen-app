@@ -1,6 +1,14 @@
 const crypto = require('crypto');
 
-const SPREADSHEET_ID = '1abYpnMeyHrhzvh0bmFCMEp3bGHO1Y11tFkBhsKFz1pw';
+const LEGACY_SPREADSHEET_ID = '1abYpnMeyHrhzvh0bmFCMEp3bGHO1Y11tFkBhsKFz1pw';
+const SPREADSHEET_ID = process.env.DH_SPREADSHEET_ID || LEGACY_SPREADSHEET_ID;
+
+// Row numbers belong to a particular spreadsheet, not just to a tab title.
+// Keep existing legacy mappings intact, but never reuse them in a new file.
+function sheetRowKey(sheetName) {
+  return SPREADSHEET_ID === LEGACY_SPREADSHEET_ID
+    ? sheetName : `${SPREADSHEET_ID}:${sheetName}`;
+}
 
 const FETCH_TIMEOUT_MS = 15000;
 
@@ -55,6 +63,9 @@ async function findFirstEmptyRowInColA(token, sheetName, headerRows = 2) {
     { headers: { Authorization: `Bearer ${token}` } }
   );
   const data = await resp.json();
+  if (!resp.ok || data.error) {
+    throw new Error(data.error?.message || `Не удалось прочитать лист «${sheetName}»: HTTP ${resp.status}`);
+  }
   const values = data.values || [];
   // Ищем последнюю непустую строку в колонке A начиная с конца
   for (let i = values.length - 1; i >= headerRows; i--) {
@@ -102,4 +113,4 @@ async function updateRowInSheet(token, sheetName, rowNum, cells) {
   return writeCellsToSheet(token, sheetName, [{ rowNum, cells }]);
 }
 
-module.exports = { getAccessToken, fetchWithTimeout, isoToDDMMYYYY, findFirstEmptyRowInColA, writeCellsToSheet, updateRowInSheet, SPREADSHEET_ID };
+module.exports = { getAccessToken, fetchWithTimeout, isoToDDMMYYYY, findFirstEmptyRowInColA, writeCellsToSheet, updateRowInSheet, SPREADSHEET_ID, sheetRowKey };

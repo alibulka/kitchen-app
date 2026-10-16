@@ -11,9 +11,9 @@ const SOURCES = [
     grossMass: 16, defrostMass: 17, defrostPercent: 19, conclusion: 23, comment: 25,
   } },
   { gid: 184249890, title: 'ни рыба ни мясо', startRow: 815, columns: {
-    purpose: 1, name: 2, manufacturer: 3, supplier: 4,
-    arrivalDate: 8, deadline: 10, workDate: 11, processingTask: 12,
-    grossMass: 14, defrostMass: 15, defrostPercent: 16, conclusion: 18, comment: 21,
+    material: 1, purpose: 2, name: 3, manufacturer: 4, supplier: 5,
+    arrivalDate: 9, deadline: 11, workDate: 12, processingTask: 13,
+    grossMass: 15, defrostMass: 16, defrostPercent: 17, conclusion: 19, comment: 22,
   } },
 ];
 

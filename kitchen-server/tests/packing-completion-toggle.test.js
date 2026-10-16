@@ -20,7 +20,7 @@ function text(tree) {
   return (tree.children || []).map(text).join('');
 }
 
-function packing({ qty = 33, warehouse = 2, fact, done = false, yesterdayFact } = {}) {
+function packing({ qty = 33, warehouse = 2, fact, done = false, yesterdayFact, employees = [{ id: 1, name: 'Работник' }] } = {}) {
   const itemKey = 'packing-3875';
   const key = `${itemKey}-pl-0`;
   const state = [null, null, {}];
@@ -50,6 +50,7 @@ function packing({ qty = 33, warehouse = 2, fact, done = false, yesterdayFact } 
     },
   };
   vm.createContext(context);
+  vm.runInContext(html.slice(html.indexOf('function getEmployeeShops('), html.indexOf('function getShopEmployees(')), context);
   vm.runInContext(html.slice(start, end), context);
   vm.runInContext(`${html.slice(handlerStart, handlerEnd)};this.onLineEmp=onLineEmp;`, context);
   const render = () => {
@@ -57,7 +58,7 @@ function packing({ qty = 33, warehouse = 2, fact, done = false, yesterdayFact } 
     return context.PackTable({
       packLines: context.packLines, prevLineData: context.prevLineData, itemKey,
       facts: context.shift.facts, doneFlags: context.shift.doneFlags, doneBy: context.shift.doneBy,
-      shopEmployees: [{ id: 1, name: 'Работник' }], onLineEmp: context.onLineEmp,
+      shopEmployees: employees, onLineEmp: context.onLineEmp,
       onFactChange: (k, value) => { context.shift.facts[k] = value; },
       skipReasons: context.shift.skipReasons, skipTimes: context.shift.skipTimes,
       onLineSkip: (k, reason) => { context.shift.skipReasons[k] = reason; },
@@ -71,6 +72,19 @@ function packing({ qty = 33, warehouse = 2, fact, done = false, yesterdayFact } 
   };
   return { context, key, itemKey, state, render, clickEmployee };
 }
+
+test('archived packing employee has no selectable button, but prior marks retain a read-only name and fact', () => {
+  const employees = [{ id: 1, name: 'Работник', active: 0 }, { id: 2, name: 'Активный', active: 1 }];
+  const before = packing({ employees });
+  assert.ok(!nodes(before.render()).some(n => n.type === 'button' && text(n).includes('Работник')));
+  const history = packing({ employees, done: true, fact: 33 });
+  const snapshot = JSON.stringify(history.context.shift);
+  const tree = history.render();
+  assert.ok(nodes(tree).some(n => n.type === 'span' && text(n) === 'Работник (архив)'));
+  assert.ok(!nodes(tree).some(n => n.type === 'button' && text(n).includes('Работник')));
+  assert.ok(nodes(tree).some(n => n.type === 'button' && text(n).includes('Активный')));
+  assert.equal(JSON.stringify(history.context.shift), snapshot);
+});
 
 test('done → undone → done does not request shortage reason for the full production plan with warehouse stock', () => {
   const p = packing();
