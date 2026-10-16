@@ -14993,74 +14993,19 @@ function ActsPage({isManager=false, initialActId=null, onActDeleted, onCountChan
 // ============================================================
 // APP ROOT
 // ============================================================
-// ── Авторизация ───────────────────────────────────────────────────────────────
-
-function getStoredAuth() {
-  try { return JSON.parse(localStorage.getItem('kitchen_auth') || 'null'); } catch { return null; }
-}
-function setStoredAuth(data) {
-  if (data) localStorage.setItem('kitchen_auth', JSON.stringify(data));
-  else localStorage.removeItem('kitchen_auth');
-}
-
-function LoginPage({ onLogin }) {
-  const [login, setLogin] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async (ev) => {
-    ev.preventDefault();
-    setError(''); setLoading(true);
-    try {
-      const r = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ login: login.trim().toLowerCase(), password }),
-      });
-      const d = await r.json();
-      if (!r.ok) { setError(d.error || 'Ошибка входа'); setLoading(false); return; }
-      setStoredAuth(d);
-      onLogin(d);
-    } catch { setError('Нет связи с сервером'); setLoading(false); }
-  };
-
-  return e('div', { style: { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' } },
-    e('div', { style: { width: 340, background: 'var(--bg2)', borderRadius: 14, padding: '36px 32px', boxShadow: '0 4px 24px rgba(0,0,0,.12)' } },
-      e('div', { style: { fontSize: 22, fontWeight: 700, marginBottom: 24, color: 'var(--text)' } }, '🍳 Кухонный трекер'),
-      e('form', { onSubmit: handleSubmit },
-        e('div', { style: { marginBottom: 14 } },
-          e('label', { style: { fontSize: 13, color: 'var(--text-muted)', display: 'block', marginBottom: 4 } }, 'Логин'),
-          e('input', { value: login, onChange: ev => setLogin(ev.target.value), autoFocus: true, autoComplete: 'username',
-            style: { width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 15, boxSizing: 'border-box' } }),
-        ),
-        e('div', { style: { marginBottom: 20 } },
-          e('label', { style: { fontSize: 13, color: 'var(--text-muted)', display: 'block', marginBottom: 4 } }, 'Пароль / PIN'),
-          e('input', { type: 'password', value: password, onChange: ev => setPassword(ev.target.value), autoComplete: 'current-password',
-            style: { width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 15, boxSizing: 'border-box' } }),
-        ),
-        error && e('div', { style: { color: '#dc2626', fontSize: 13, marginBottom: 12 } }, error),
-        e('button', { type: 'submit', disabled: loading,
-          style: { width: '100%', padding: '11px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 15, fontWeight: 600, cursor: loading ? 'wait' : 'pointer' } },
-          loading ? 'Вход...' : 'Войти'),
-      ),
-    ),
-  );
-}
 
 function App() {
-  return e(AppInner, { auth: {role:'manager', name:'', shop:null}, onLogout: ()=>{} });
+  return e(AppInner, {});
 }
 
-function AppInner({ auth, onLogout }) {
-  // Tablet lock: ?shop=KEY pins this device to one workshop
+function AppInner({}) {
   const shopParam=useMemo(()=>new URLSearchParams(location.search).get('shop'),[]);
-  const roleParam='manager';
+  const roleParam=useMemo(()=>new URLSearchParams(location.search).get('role')||'manager',[]);
   const actIdParam=useMemo(()=>{ const v=new URLSearchParams(location.search).get('actId'); return v?Number(v):null; },[]);
-  const isManager=true;
-  const isTechnologist=false;
-  const isProduct=false;
-  const isKitchenManager=false;
+  const isManager=roleParam==='manager';
+  const isTechnologist=roleParam==='technologist';
+  const isProduct=roleParam==='product';
+  const isKitchenManager=roleParam==='kitchen_manager';
 
   const [loading,setLoading]=useState(true);
   const [today]=useState(todayKey);
@@ -15233,7 +15178,6 @@ function AppInner({ auth, onLogout }) {
       e('div',{className:'topnav-right'},
         e('div',{className:'date-pill'},formatDateRu(today)),
         e('span',{style:{color:'rgba(255,255,255,.7)',fontSize:13}},auth.name),
-        e('button',{onClick:onLogout,style:{background:'rgba(255,255,255,.15)',border:'none',borderRadius:6,color:'#fff',padding:'4px 10px',fontSize:13,cursor:'pointer'}},'Выйти')
       )
     ),
     e(TechnologistPage,{initialActId:actIdParam})
@@ -15244,7 +15188,6 @@ function AppInner({ auth, onLogout }) {
       e('div',{className:'topnav-right'},
         e('div',{className:'date-pill'},formatDateRu(today)),
         e('span',{style:{color:'rgba(255,255,255,.7)',fontSize:13}},auth.name),
-        e('button',{onClick:onLogout,style:{background:'rgba(255,255,255,.15)',border:'none',borderRadius:6,color:'#fff',padding:'4px 10px',fontSize:13,cursor:'pointer'}},'Выйти')
       )
     ),
     e(ProductJournalPage,{initialActId:actIdParam})
@@ -15260,7 +15203,6 @@ function AppInner({ auth, onLogout }) {
       e('div',{className:'topnav-right'},
         e('div',{className:'date-pill'},formatDateRu(today)),
         e('span',{style:{color:'rgba(255,255,255,.7)',fontSize:13}},auth.name),
-        e('button',{onClick:onLogout,style:{background:'rgba(255,255,255,.15)',border:'none',borderRadius:6,color:'#fff',padding:'4px 10px',fontSize:13,cursor:'pointer'}},'Выйти')
       )
     ),
     e(KitchenManagerPage,{
@@ -15308,12 +15250,10 @@ function AppInner({ auth, onLogout }) {
             onClick:()=>{setViewDate(today);loadShift(today).then(d=>{if(d)setShift(d);});setMode('manager');}
           },'📊 Управляющий'),
           e('div',{className:'date-pill'},isArchive?'Архив: '+formatDateRu(viewDate):formatDateRu(today)),
-          e('button',{onClick:onLogout,style:{background:'rgba(255,255,255,.15)',border:'none',borderRadius:6,color:'#fff',padding:'4px 10px',fontSize:13,cursor:'pointer'}},'Выйти')
         ) :
         // Кухня: только дата + выход
         e(React.Fragment,null,
           e('div',{className:'date-pill'},formatDateRu(today)),
-          !shopParam && e('button',{onClick:onLogout,style:{background:'rgba(255,255,255,.15)',border:'none',borderRadius:6,color:'#fff',padding:'4px 10px',fontSize:13,cursor:'pointer'}},'Выйти')
         )
       )
     ),
