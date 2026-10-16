@@ -11781,6 +11781,14 @@ function QualityChecklist({task, onSave, onClose, onReferenceAdded, onPhotosChan
   return e('div',{style:{paddingTop:12}},
     lightbox&&e(Lightbox,{photos:lightbox.photos,startIndex:lightbox.index,onClose:()=>setLightbox(null)}),
 
+    // Описание технологического процесса (только для ГЕ)
+    task.company==='ГЕ'&&task.process_description&&e('div',{style:{
+      marginBottom:14,padding:'10px 14px',background:'var(--bg)',borderRadius:10,
+      border:'1.5px solid var(--border)'}},
+      e('div',{style:{fontSize:12,fontWeight:700,color:'var(--muted)',marginBottom:6,textTransform:'uppercase',letterSpacing:'0.05em'}},'Описание технологического процесса'),
+      e('div',{style:{fontSize:13,whiteSpace:'pre-wrap',lineHeight:1.6}},task.process_description)
+    ),
+
     // Двухколоночный лейаут: чекпоинты слева, эталонное фото справа
     e('div',{style:{display:'flex',gap:20,alignItems:'flex-start'}},
 
@@ -12012,6 +12020,7 @@ function AddTasksDialog({standards, todayTasks, date, onAdd, onClose}) {
 // Вкладка «Библиотека эталонов»
 function CreateStandardFromItemDialog({onClose, onCreated}) {
   const [query,setQuery]=useState('');
+  const [source,setSource]=useState('items'); // 'items' | 'products' | 'wrappers'
   const [allItems,setAllItems]=useState([]);
   const [loadingItems,setLoadingItems]=useState(true);
   const [selected,setSelected]=useState(null);
@@ -12033,14 +12042,28 @@ function CreateStandardFromItemDialog({onClose, onCreated}) {
     setPhotos(ps=>{URL.revokeObjectURL(ps[i].url);return ps.filter((_,j)=>j!==i);});
   };
 
-  useEffect(()=>{
-    (async()=>{
+  const loadSource=async(src)=>{
+    setLoadingItems(true); setSelected(null); setQuery('');
+    if(src==='items'){
       const r=await fetch('/api/quality/items?q=');
       const d=await r.json();
-      setAllItems(d.items||[]);
-      setLoadingItems(false);
-    })();
-  },[]);
+      setAllItems((d.items||[]).map(it=>({item_id:it.item_id,name:it.name})));
+      setCompany('EE');
+    } else if(src==='products'){
+      const r=await fetch('/api/ready-food/products');
+      const d=await r.json();
+      setAllItems((d.products||[]).map(it=>({item_id:it.id,name:it.name})));
+      setCompany('блюдо');
+    } else {
+      const r=await fetch('/api/ready-food/wrappers');
+      const d=await r.json();
+      setAllItems((d.wrappers||[]).map(it=>({item_id:it.wrapper_id,name:it.wrapper_name})));
+      setCompany('ГЕ');
+    }
+    setLoadingItems(false);
+  };
+
+  useEffect(()=>{loadSource('items');},[]);
 
   const filtered=query.trim()
     ? allItems.filter(it=>it.name.toLowerCase().includes(query.toLowerCase())||String(it.item_id).includes(query))
@@ -12071,7 +12094,15 @@ function CreateStandardFromItemDialog({onClose, onCreated}) {
 
   return e('div',{style:{background:'var(--surface)',borderRadius:16,padding:24,width:'100%',maxWidth:560,
       maxHeight:'90vh',display:'flex',flexDirection:'column',boxSizing:'border-box'}},
-    e('div',{style:{fontWeight:700,fontSize:16,marginBottom:16}},'Создать эталон из заготовки'),
+    e('div',{style:{fontWeight:700,fontSize:16,marginBottom:12}},'Создать эталон'),
+    e('div',{style:{display:'flex',gap:6,marginBottom:12,flexWrap:'wrap'}},
+      [{key:'items',label:'Заготовки EE/УД'},{key:'products',label:'🍽️ Блюда'},{key:'wrappers',label:'🥣 Заготовки блюд'}]
+      .map(s=>e('button',{key:s.key,onClick:()=>{setSource(s.key);loadSource(s.key);},
+        style:{padding:'5px 12px',borderRadius:7,border:'1.5px solid var(--border)',fontSize:12,cursor:'pointer',
+          background:source===s.key?'var(--accent)':'transparent',
+          color:source===s.key?'white':'var(--text)',fontWeight:source===s.key?700:400}}
+        ,s.label))
+    ),
 
     !selected
     ? e('div',{style:{display:'flex',flexDirection:'column',flex:1,minHeight:0}},
@@ -12108,8 +12139,11 @@ function CreateStandardFromItemDialog({onClose, onCreated}) {
           e('button',{onClick:()=>setSelected(null),
             style:{background:'none',border:'none',color:'var(--muted)',cursor:'pointer',fontSize:13}},'✕ изменить')
         ),
-        e('select',{value:company,onChange:ev=>setCompany(ev.target.value),style:inputStyle},
-          e('option',{value:'EE'},'EE'),e('option',{value:'УД'},'УД')),
+        source==='items'
+          ? e('select',{value:company,onChange:ev=>setCompany(ev.target.value),style:inputStyle},
+              e('option',{value:'EE'},'EE'),e('option',{value:'УД'},'УД'))
+          : e('div',{style:{...inputStyle,padding:'9px 12px',background:'var(--hover)',color:'var(--muted)',fontSize:13}},
+              'Компания: '+company),
         e('textarea',{placeholder:'Внешний вид',value:appearance,onChange:ev=>setAppearance(ev.target.value),
           rows:2,style:{...inputStyle,resize:'vertical'}}),
         e('textarea',{placeholder:'Цвет',value:color,onChange:ev=>setColor(ev.target.value),
@@ -12219,7 +12253,7 @@ function LibraryTab({standards, onReload}) {
       e('button',{onClick:()=>setShowCreateFromItem(true),
         style:{padding:'8px 18px',borderRadius:10,border:'1.5px solid var(--accent)',background:'var(--accent)',
           color:'white',fontWeight:700,fontSize:13,cursor:'pointer'}},
-        '+ Создать эталон из заготовки')
+        '+ Создать эталон')
     ),
 
     // Поиск — sticky, прилипает под навбаром при прокрутке
@@ -12229,7 +12263,8 @@ function LibraryTab({standards, onReload}) {
         e('input',{type:'text',className:'filter-input',placeholder:'Поиск по ID или названию…',
           style:{flex:1,minWidth:180},value:search,onChange:ev=>setSearch(ev.target.value)}),
         e('select',{className:'filter-input',value:company,onChange:ev=>setCompany(ev.target.value)},
-          e('option',{value:''},'Все'),e('option',{value:'EE'},'EE'),e('option',{value:'УД'},'УД'))
+          e('option',{value:''},'Все'),e('option',{value:'EE'},'EE'),e('option',{value:'УД'},'УД'),
+          e('option',{value:'блюдо'},'Блюда'),e('option',{value:'ГЕ'},'Заготовки блюд'))
       ),
       e('div',{style:{fontSize:13,color:'var(--muted)',marginTop:6}},`${filtered.length} эталонов`)
     ),
@@ -12426,6 +12461,12 @@ function StandardCard({s, onToggleAlways, onReload, onDelete}) {
 
           // ── Режим просмотра ──
           : e('div',{style:{display:'flex',flexDirection:'column',gap:4}},
+              s.company==='ГЕ'&&s.process_description&&e('div',{style:{
+                marginBottom:8,padding:'8px 12px',background:'var(--bg)',borderRadius:8,
+                border:'1.5px solid var(--border)'}},
+                e('div',{style:{fontSize:11,fontWeight:700,color:'var(--muted)',textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:4}},'Описание технологического процесса'),
+                e('div',{style:{fontSize:13,whiteSpace:'pre-wrap',lineHeight:1.5}},s.process_description)
+              ),
               BASE_CRITERIA.map(c=>e('div',{key:c.key,style:{fontSize:13,color:'var(--text)',lineHeight:'1.5'}},
                 e('span',{style:{fontWeight:600,color:'var(--muted)',marginRight:4}},c.label+':'),
                 c.val||e('span',{style:{color:'var(--muted)',fontStyle:'italic'}},'—')
@@ -12950,6 +12991,12 @@ function TechnologistManagerTasks({onCountChange}){
   const [error,setError]=useState('');
   const [editing,setEditing]=useState(null);
   const [text,setText]=useState('');
+  const [showCreate,setShowCreate]=useState(false);
+  const [newTitle,setNewTitle]=useState('');
+  const [newDesc,setNewDesc]=useState('');
+  const [newDate,setNewDate]=useState(todayISO());
+  const [creating,setCreating]=useState(false);
+  const [createError,setCreateError]=useState('');
   const load=async()=>{
     setLoading(true);setError('');
     try{
@@ -12975,6 +13022,20 @@ function TechnologistManagerTasks({onCountChange}){
       setEditing(null);setText('');await load();
     }catch(err){setError(err.message);}
   };
+  const createTask=async()=>{
+    if(!newTitle.trim()){setCreateError('Укажите заголовок');return;}
+    if(!newDesc.trim()){setCreateError('Укажите описание');return;}
+    if(!newDate){setCreateError('Укажите дату');return;}
+    setCreating(true);setCreateError('');
+    try{
+      await technologistTaskRequest('/','technologist',{
+        method:'POST',body:JSON.stringify({title:newTitle.trim(),description:newDesc.trim(),planned_date:newDate})
+      });
+      setShowCreate(false);setNewTitle('');setNewDesc('');setNewDate(todayISO());
+      await load();
+    }catch(err){setCreateError(err.message);}finally{setCreating(false);}
+  };
+
   const active=tasks.filter(t=>t.status==='new');
   const closed=tasks.filter(t=>t.status==='completed'||t.status==='cancelled');
   const list=items=>e(TechnologistTaskDateGroups,{tasks:items,renderTask:task=>
@@ -12994,10 +13055,36 @@ function TechnologistManagerTasks({onCountChange}){
           )
     )})
   });
+  const inputStyle={width:'100%',padding:'8px 10px',borderRadius:8,border:'1.5px solid var(--border)',
+    background:'var(--bg)',color:'var(--text)',fontSize:14,boxSizing:'border-box',marginBottom:10};
+
   return e('div',null,
+    // Форма создания нового задания
+    showCreate&&e('div',{style:{background:'var(--surface)',border:'1.5px solid var(--border)',
+        borderRadius:12,padding:18,marginBottom:20}},
+      e('div',{style:{fontWeight:700,fontSize:15,marginBottom:12}},'Новое задание'),
+      createError&&e('div',{style:{color:'#B91C1C',fontSize:13,marginBottom:8}},createError),
+      e('input',{type:'text',placeholder:'Заголовок *',value:newTitle,onChange:ev=>setNewTitle(ev.target.value),style:inputStyle}),
+      e('textarea',{placeholder:'Описание *',value:newDesc,onChange:ev=>setNewDesc(ev.target.value),
+        rows:3,style:{...inputStyle,resize:'vertical'}}),
+      e('input',{type:'date',value:newDate,onChange:ev=>setNewDate(ev.target.value),style:{...inputStyle,width:'auto'}}),
+      e('div',{style:{display:'flex',gap:8,marginTop:4}},
+        e('button',{onClick:createTask,disabled:creating,
+          style:{padding:'8px 18px',border:0,borderRadius:8,background:'var(--accent)',color:'#fff',fontWeight:700,cursor:'pointer'}},
+          creating?'Сохранение…':'Создать'),
+        e('button',{onClick:()=>{setShowCreate(false);setCreateError('');},
+          style:{padding:'8px 14px',border:'1.5px solid var(--border)',borderRadius:8,background:'transparent',color:'var(--text)',cursor:'pointer'}},
+          'Отмена')
+      )
+    ),
     error&&e('div',{style:{color:'#B91C1C',fontSize:13,marginBottom:10}},error),
     loading?e('div',{className:'empty-state'},'Загрузка…'):e(React.Fragment,null,
-      e('div',{style:{fontSize:17,fontWeight:750,marginBottom:10}},`Новые задания (${active.length})`),
+      e('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12}},
+        e('div',{style:{fontSize:17,fontWeight:750}},`Новые задания (${active.length})`),
+        !showCreate&&e('button',{onClick:()=>{setShowCreate(true);setCreateError('');},
+          style:{padding:'7px 16px',border:0,borderRadius:8,background:'var(--accent)',color:'#fff',fontWeight:700,cursor:'pointer',fontSize:13}},
+          '+ Создать задание')
+      ),
       active.length?list(active):e('div',{className:'empty-state',style:{marginBottom:22}},'Новых заданий нет'),
       e('div',{style:{fontSize:17,fontWeight:750,margin:'24px 0 10px'}},`Выполненные и отменённые (${closed.length})`),
       closed.length?list(closed):e('div',{className:'empty-state'},'Завершённых заданий нет')
@@ -13173,6 +13260,11 @@ function RFTaskCard({task, isOpen, onToggle, onDelete, onSave, onReferenceAdded,
           technologists.map(emp=>e('option',{key:emp.id,value:emp.id},emp.name))
         )
       ),
+      // Описание технологического процесса (только для заготовок ГЕ)
+      task.company==='ГЕ'&&task.process_description&&e('div',{style:{marginBottom:12,padding:'10px 12px',background:'var(--bg)',borderRadius:8,border:'1.5px solid var(--border)'}},
+        e('div',{style:{fontSize:12,fontWeight:600,color:'var(--muted)',marginBottom:6}},'Описание технологического процесса'),
+        e('div',{style:{fontSize:13,whiteSpace:'pre-wrap',lineHeight:1.5}},task.process_description)
+      ),
       // Эталонные фото
       (task.ref_photos||[]).length>0&&e('div',{style:{marginBottom:12}},
         e('div',{style:{fontSize:12,fontWeight:600,color:'var(--muted)',marginBottom:6}},'Эталонные фото'),
@@ -13239,240 +13331,181 @@ function RFTaskCard({task, isOpen, onToggle, onDelete, onSave, onReferenceAdded,
 }
 
 // Вкладка Готовая еда
-function ReadyFoodTab() {
-  const [subTab,setSubTab]=useState('tasks');
-  const [date,setDate]=useState(todayISO);
-  const [tasks,setTasks]=useState([]);
-  const [standards,setStandards]=useState([]);
-  const [products,setProducts]=useState([]);
-  const [wrappers,setWrappers]=useState([]);
-  const [technologists,setTechnologists]=useState([]);
+function ReadyFoodTab({onCountChange}) {
+  const [subTab,setSubTab]=useState('dishes'); // 'dishes' | 'wrappers'
+  const [date,setDate]=useState(todayISO());
+  const [allTasks,setAllTasks]=useState([]);
   const [loading,setLoading]=useState(true);
   const [openTaskId,setOpenTaskId]=useState(null);
-  const [showAddTask,setShowAddTask]=useState(null); // standard_id
-  const [editStd,setEditStd]=useState(null); // null=list, 'new-product'/'new-wrapper'/standard_obj
-  const [stdTypeFilter,setStdTypeFilter]=useState('product');
+  const [showAdd,setShowAdd]=useState(false); // 'dishes'|'wrappers'|false
+  const [dishStandards,setDishStandards]=useState(null);
+  const [wrapperStandards,setWrapperStandards]=useState(null);
+  const [addSearch,setAddSearch]=useState('');
+  const [adding,setAdding]=useState(false);
 
-  const loadAll=async(d)=>{
+  const loadTasks=async(d)=>{
     setLoading(true);
-    const [tr,sr,pr,wr,er]=await Promise.all([
-      fetch(`/api/ready-food/tasks?date=${d}`).then(r=>r.json()),
-      fetch('/api/ready-food/standards').then(r=>r.json()),
-      fetch('/api/ready-food/products').then(r=>r.json()),
-      fetch('/api/ready-food/wrappers').then(r=>r.json()),
-      fetch('/api/employees').then(r=>r.json()).catch(()=>({employees:[]})),
-    ]);
-    setTasks(tr.tasks||[]);
-    setStandards(sr.standards||[]);
-    setProducts(pr.products||[]);
-    setWrappers(wr.wrappers||[]);
-    setTechnologists((er.employees||[]).filter(e=>e.shop==='Технолог'||e.shop==='Главный технолог'));
+    if(d===todayISO()){
+      // Синхронизируем план из Google Sheets (создаём эталоны и задания если нет)
+      await fetch(`/api/ready-food/today-plan?date=${d}`).catch(()=>{});
+    }
+    const r=await fetch(`/api/quality/tasks?date=${d}`).then(r=>r.json()).catch(()=>({tasks:[]}));
+    const tasks=(r.tasks||[]).filter(t=>t.company==='блюдо'||t.company==='ГЕ');
+    setAllTasks(tasks);
+    if(onCountChange){
+      const done=tasks.filter(t=>t.status==='done').length;
+      onCountChange([done,tasks.length]);
+    }
     setLoading(false);
   };
 
-  useEffect(()=>{loadAll(date);},[date]);
+  useEffect(()=>{loadTasks(date);},[date]);
 
-  // Автосоздание заданий по "проверять каждый день"
-  useEffect(()=>{
-    if(!standards.length||loading) return;
-    const alwaysCheck=standards.filter(s=>s.always_check&&!tasks.some(t=>t.standard_id===s.id));
-    if(!alwaysCheck.length) return;
-    (async()=>{
-      for(const s of alwaysCheck){
-        await fetch('/api/ready-food/tasks',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({date,standard_id:s.id})});
-      }
-      const tr=await fetch(`/api/ready-food/tasks?date=${date}`).then(r=>r.json());
-      setTasks(tr.tasks||[]);
-    })();
-  },[standards,date]);
-
-  const addTask=async(stdId)=>{
-    await fetch('/api/ready-food/tasks',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({date,standard_id:stdId})});
-    const tr=await fetch(`/api/ready-food/tasks?date=${date}`).then(r=>r.json());
-    setTasks(tr.tasks||[]);
-    setShowAddTask(null);
+  const openAdd=async(type)=>{
+    setAddSearch('');
+    setShowAdd(type);
+    if(type==='dishes'&&!dishStandards){
+      const r=await fetch('/api/quality/standards?company=блюдо').then(r=>r.json()).catch(()=>({standards:[]}));
+      setDishStandards(r.standards||[]);
+    }
+    if(type==='wrappers'&&!wrapperStandards){
+      const r=await fetch('/api/quality/standards?company=%D0%93%D0%95').then(r=>r.json()).catch(()=>({standards:[]}));
+      setWrapperStandards(r.standards||[]);
+    }
   };
 
-  const deleteTask=async(id)=>{
-    if(!confirm('Удалить задание?')) return;
-    await fetch(`/api/ready-food/tasks/${id}`,{method:'DELETE'});
-    setTasks(prev=>prev.filter(t=>t.id!==id));
+  const addTask=async(std)=>{
+    setAdding(true);
+    try{
+      await fetch('/api/quality/tasks',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({date,standard_id:std.id})});
+      await loadTasks(date);
+      setShowAdd(false);
+    }finally{setAdding(false);}
   };
+
+  const tasks=allTasks.filter(t=>subTab==='dishes'?t.company==='блюдо':t.company==='ГЕ');
+  const pending=tasks.filter(t=>t.status==='pending'||t.status==='overdue'||!t.status);
+  const done=tasks.filter(t=>t.status==='done');
+
+  const dishesDone=allTasks.filter(t=>t.company==='блюдо'&&t.status==='done').length;
+  const dishesTotal=allTasks.filter(t=>t.company==='блюдо').length;
+  const wrDone=allTasks.filter(t=>t.company==='ГЕ'&&t.status==='done').length;
+  const wrTotal=allTasks.filter(t=>t.company==='ГЕ').length;
 
   const onSave=(taskId,status,results)=>{
-    setTasks(prev=>prev.map(t=>t.id===taskId?{...t,status,results}:t));
+    setAllTasks(prev=>prev.map(t=>t.id===taskId?{...t,status,results}:t));
   };
   const onPhotosChanged=(taskId,photos)=>{
-    setTasks(prev=>prev.map(t=>t.id===taskId?{...t,photos}:t));
+    setAllTasks(prev=>prev.map(t=>t.id===taskId?{...t,photos}:t));
   };
   const onReferenceAdded=(stdId,photo,delFilename)=>{
-    setTasks(prev=>prev.map(t=>{
+    setAllTasks(prev=>prev.map(t=>{
       if(t.standard_id!==stdId) return t;
       const rp=delFilename
         ?(t.ref_photos||[]).filter(p=>p.filename!==delFilename)
         :(t.ref_photos||[]).some(p=>p.filename===photo?.filename)?t.ref_photos:[...(t.ref_photos||[]),photo];
       return {...t,ref_photos:rp};
     }));
-    setStandards(prev=>prev.map(s=>{
-      if(s.id!==stdId) return s;
-      const rp=delFilename
-        ?(s.ref_photos||[]).filter(p=>p.filename!==delFilename)
-        :(s.ref_photos||[]).some(p=>p.filename===photo?.filename)?s.ref_photos:[...(s.ref_photos||[]),photo];
-      return {...s,ref_photos:rp};
-    }));
   };
-
-  const pending=tasks.filter(t=>t.status==='pending'||t.status==='overdue');
-  const done=tasks.filter(t=>t.status==='done');
-  const filteredStds=standards.filter(s=>s.item_type===stdTypeFilter);
+  const deleteTask=async(id)=>{
+    if(!confirm('Удалить задание?')) return;
+    await fetch(`/api/quality/tasks/${id}`,{method:'DELETE'});
+    setAllTasks(prev=>prev.filter(t=>t.id!==id));
+  };
 
   const tabBtn=(key,label)=>e('button',{
     className:'mgr-tab'+(subTab===key?' active':''),
     onClick:()=>setSubTab(key)
   },label);
 
-  return e('div',null,
-    e('div',{style:{display:'flex',gap:0,borderBottom:'2px solid var(--border)',marginBottom:20}},
-      tabBtn('tasks',`📋 Задания${tasks.length>0?` ${done.length}/${tasks.length}`:''}`),
-      tabBtn('standards','📚 Эталоны')
-    ),
+  const existingDishStdIds=new Set(allTasks.filter(t=>t.company==='блюдо').map(t=>t.standard_id));
+  const existingWrStdIds=new Set(allTasks.filter(t=>t.company==='ГЕ').map(t=>t.standard_id));
+  const filterAvailable=(list,existingIds)=>(list||[]).filter(s=>{
+    if(existingIds.has(s.id)) return false;
+    if(!addSearch) return true;
+    return s.name.toLowerCase().includes(addSearch.toLowerCase());
+  });
+  const availableDishes=filterAvailable(dishStandards,existingDishStdIds);
+  const availableWrappers=filterAvailable(wrapperStandards,existingWrStdIds);
+  const addDialogStandards=showAdd==='dishes'?availableDishes:availableWrappers;
+  const addDialogLoaded=showAdd==='dishes'?dishStandards!==null:wrapperStandards!==null;
 
-    // ── Задания ──
-    subTab==='tasks'&&e(React.Fragment,null,
-      e('div',{style:{display:'flex',alignItems:'center',gap:12,marginBottom:20}},
-        e('input',{type:'date',className:'filter-input',value:date,
-          onChange:ev=>setDate(ev.target.value),style:{fontSize:15}}),
-        e('button',{onClick:()=>setDate(todayISO()),
-          style:{padding:'7px 14px',borderRadius:8,border:'1.5px solid var(--border)',
-            background:'transparent',color:'var(--text)',fontSize:13,cursor:'pointer'}},'Сегодня')
-      ),
-      loading?e('div',{className:'empty-state'},'Загрузка…'):e(React.Fragment,null,
-        e('div',{style:{marginBottom:24}},
-          e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}},
-            e('div',{style:{fontWeight:700,fontSize:16}},`К проверке (${pending.length})`),
-            e('button',{onClick:()=>setShowAddTask(true),
-              style:{padding:'7px 16px',borderRadius:10,border:'none',background:'var(--accent)',
-                color:'white',fontWeight:700,fontSize:13,cursor:'pointer'}},'+ Добавить')
-          ),
-          showAddTask&&e('div',{style:{marginBottom:16,padding:14,background:'var(--surface)',
-            border:'1.5px solid var(--border)',borderRadius:12}},
-            e('div',{style:{fontSize:13,fontWeight:600,marginBottom:10}},'Выберите эталон'),
-            e('div',{style:{display:'flex',gap:8,marginBottom:10}},
-              e('button',{onClick:()=>setStdTypeFilter('product'),
-                style:{padding:'5px 12px',borderRadius:7,border:'1.5px solid var(--border)',
-                  background:stdTypeFilter==='product'?'var(--accent)':'transparent',
-                  color:stdTypeFilter==='product'?'white':'var(--text)',cursor:'pointer',fontSize:12}},'🍽️ Блюда'),
-              e('button',{onClick:()=>setStdTypeFilter('wrapper'),
-                style:{padding:'5px 12px',borderRadius:7,border:'1.5px solid var(--border)',
-                  background:stdTypeFilter==='wrapper'?'var(--accent)':'transparent',
-                  color:stdTypeFilter==='wrapper'?'white':'var(--text)',cursor:'pointer',fontSize:12}},'🥣 Заготовки')
+  return e('div',null,
+    // Диалог добавления блюда / заготовки
+    showAdd&&e('div',{style:{position:'fixed',inset:0,background:'rgba(0,0,0,0.45)',
+        display:'flex',alignItems:'center',justifyContent:'center',padding:'5vh 16px',zIndex:1000}},
+      e('div',{style:{background:'var(--bg)',borderRadius:16,padding:24,width:'100%',maxWidth:480,
+          maxHeight:'80vh',display:'flex',flexDirection:'column',gap:12}},
+        e('div',{style:{fontWeight:700,fontSize:16,marginBottom:4}},
+          showAdd==='dishes'?'Добавить блюдо':'Добавить заготовку'),
+        e('input',{type:'text',className:'filter-input',placeholder:'Поиск…',
+          value:addSearch,onChange:ev=>setAddSearch(ev.target.value),autoFocus:true}),
+        !addDialogLoaded
+          ?e('div',{className:'empty-state'},'Загрузка…')
+          :addDialogStandards.length===0
+            ?e('div',{style:{color:'var(--muted)',fontSize:13,textAlign:'center',padding:'20px 0'}},
+              'Нет доступных '+(showAdd==='dishes'?'блюд':'заготовок'))
+            :e('div',{style:{overflowY:'auto',flex:1,display:'flex',flexDirection:'column',gap:6}},
+              addDialogStandards.map(s=>e('button',{key:s.id,
+                onClick:()=>!adding&&addTask(s),
+                disabled:adding,
+                style:{padding:'10px 14px',textAlign:'left',border:'1.5px solid var(--border)',
+                  background:'var(--bg)',color:'var(--text)',borderRadius:10,cursor:'pointer',fontSize:13}},
+                s.name))
             ),
-            filteredStds.length===0
-              ?e('div',{style:{color:'var(--muted)',fontSize:13}},'Нет эталонов этого типа')
-              :e('div',{style:{display:'flex',flexDirection:'column',gap:6,maxHeight:300,overflowY:'auto'}},
-                filteredStds.filter(s=>!tasks.some(t=>t.standard_id===s.id)).map(s=>
-                  e('button',{key:s.id,onClick:()=>addTask(s.id),
-                    style:{padding:'8px 12px',textAlign:'left',border:'1.5px solid var(--border)',
-                      background:'var(--bg)',color:'var(--text)',borderRadius:8,cursor:'pointer',fontSize:13}},
-                    s.name)
-                )
-              ),
-            e('button',{onClick:()=>setShowAddTask(null),
-              style:{marginTop:10,padding:'6px 14px',border:'1.5px solid var(--border)',
-                background:'transparent',color:'var(--text)',borderRadius:8,cursor:'pointer',fontSize:13}},'Закрыть')
-          ),
-          pending.length===0
-            ?e('div',{style:{padding:'20px',textAlign:'center',color:'var(--muted)',fontSize:14,
-                border:'1.5px dashed var(--border)',borderRadius:12}},'Нет заданий на этот день')
-            :e('div',{style:{display:'flex',flexDirection:'column',gap:10}},
-              pending.map(t=>e(RFTaskCard,{key:t.id,task:t,isOpen:openTaskId===t.id,
-                onToggle:()=>setOpenTaskId(v=>v===t.id?null:t.id),
-                onDelete:deleteTask,onSave,onReferenceAdded,onPhotosChanged,
-                technologists,
-                onAssign:async(taskId,empId)=>{
-                  setTasks(prev=>prev.map(t=>t.id===taskId?{...t,assigned_to:empId}:t));
-                }}))
-            )
-        ),
-        done.length>0&&e('div',null,
-          e('div',{style:{fontWeight:700,fontSize:16,marginBottom:10}},`Выполнено (${done.length})`),
-          e('div',{style:{display:'flex',flexDirection:'column',gap:10}},
-            done.map(t=>e(RFTaskCard,{key:t.id,task:t,isOpen:openTaskId===t.id,
-              onToggle:()=>setOpenTaskId(v=>v===t.id?null:t.id),
-              onDelete:deleteTask,onSave,onReferenceAdded,onPhotosChanged,
-              technologists,
-              onAssign:async(taskId,empId)=>{
-                setTasks(prev=>prev.map(t=>t.id===taskId?{...t,assigned_to:empId}:t));
-              }}))
-          )
-        )
+        e('button',{onClick:()=>setShowAdd(false),
+          style:{marginTop:4,padding:'8px 16px',border:'1.5px solid var(--border)',
+            background:'transparent',color:'var(--text)',borderRadius:9,cursor:'pointer',fontSize:13}},
+          'Отмена')
       )
     ),
 
-    // ── Эталоны ──
-    subTab==='standards'&&e(React.Fragment,null,
-      editStd
-        ?e(RFStandardForm,{
-            standard:typeof editStd==='object'&&editStd!==null&&editStd!=='new-product'&&editStd!=='new-wrapper'?editStd:null,
-            itemType:typeof editStd==='string'?editStd.replace('new-',''):editStd?.item_type||'product',
-            products,wrappers,
-            onSave:async()=>{
-              const sr=await fetch('/api/ready-food/standards').then(r=>r.json());
-              setStandards(sr.standards||[]);
-              setEditStd(null);
-            },
-            onCancel:()=>setEditStd(null)
-          })
-        :e(React.Fragment,null,
-          e('div',{style:{display:'flex',gap:8,marginBottom:16,alignItems:'center',flexWrap:'wrap'}},
-            e('button',{onClick:()=>setStdTypeFilter('product'),
-              style:{padding:'6px 14px',borderRadius:8,border:'1.5px solid var(--border)',
-                background:stdTypeFilter==='product'?'var(--accent)':'transparent',
-                color:stdTypeFilter==='product'?'white':'var(--text)',cursor:'pointer',fontSize:13}},'🍽️ Блюда'),
-            e('button',{onClick:()=>setStdTypeFilter('wrapper'),
-              style:{padding:'6px 14px',borderRadius:8,border:'1.5px solid var(--border)',
-                background:stdTypeFilter==='wrapper'?'var(--accent)':'transparent',
-                color:stdTypeFilter==='wrapper'?'white':'var(--text)',cursor:'pointer',fontSize:13}},'🥣 Заготовки'),
-            e('button',{onClick:()=>setEditStd('new-'+stdTypeFilter),
-              style:{marginLeft:'auto',padding:'7px 16px',border:'none',background:'var(--accent)',
-                color:'white',borderRadius:9,fontWeight:700,cursor:'pointer',fontSize:13}},
-              '+ Новый эталон')
-          ),
-          loading?e('div',{className:'empty-state'},'Загрузка…'):
-          filteredStds.length===0
-            ?e('div',{style:{padding:'30px',textAlign:'center',color:'var(--muted)',fontSize:14,
-                border:'1.5px dashed var(--border)',borderRadius:12}},
-              'Нет эталонов. ',
-              e('span',{style:{color:'var(--accent)',cursor:'pointer'},onClick:()=>setEditStd('new-'+stdTypeFilter)},'Создать первый эталон'))
-            :e('div',{style:{display:'flex',flexDirection:'column',gap:8}},
-              filteredStds.map(s=>e('div',{key:s.id,
-                style:{border:'1.5px solid var(--border)',borderRadius:10,padding:'12px 14px',
-                  background:'var(--surface)',display:'flex',alignItems:'center',gap:12}},
-                e('div',{style:{flex:1,minWidth:0}},
-                  e('div',{style:{fontWeight:600,fontSize:14,marginBottom:2,overflow:'hidden',
-                    textOverflow:'ellipsis',whiteSpace:'nowrap'}},s.name),
-                  e('div',{style:{fontSize:12,color:'var(--muted)'}},
-                    [s.appearance&&'Вид',s.color&&'Цвет',s.taste_smell&&'Вкус',s.consistency&&'Конс.',
-                     ...((s.extra_fields||[]).map(f=>typeof f==='string'?f:f.name))]
-                    .filter(Boolean).join(' · ')||'Нет описания')
-                ),
-                s.always_check&&e('span',{style:{fontSize:11,padding:'2px 7px',borderRadius:10,
-                  background:'var(--ok-bg)',color:'var(--ok)',fontWeight:600,flexShrink:0}},'Каждый день'),
-                e('button',{onClick:()=>setEditStd(s),
-                  style:{padding:'6px 12px',border:'1.5px solid var(--border)',background:'transparent',
-                    color:'var(--text)',borderRadius:8,cursor:'pointer',fontSize:12,flexShrink:0}},'✏️ Изменить'),
-                e('button',{onClick:async()=>{
-                    if(!confirm('Удалить эталон?')) return;
-                    await fetch(`/api/ready-food/standards/${s.id}`,{method:'DELETE'});
-                    setStandards(prev=>prev.filter(x=>x.id!==s.id));
-                  },
-                  style:{padding:'6px 12px',border:'1.5px solid #EF4444',background:'transparent',
-                    color:'#EF4444',borderRadius:8,cursor:'pointer',fontSize:12,flexShrink:0}},'🗑️')
-              ))
-            )
+    e('div',{style:{display:'flex',gap:0,borderBottom:'2px solid var(--border)',marginBottom:16}},
+      tabBtn('dishes',`🍽️ Блюда${dishesTotal>0?' '+dishesDone+'/'+dishesTotal:''}`),
+      tabBtn('wrappers',`🥣 Заготовки${wrTotal>0?' '+wrDone+'/'+wrTotal:''}`)
+    ),
+
+    e('div',{style:{display:'flex',alignItems:'center',gap:12,marginBottom:16}},
+      e('input',{type:'date',className:'filter-input',value:date,
+        onChange:ev=>setDate(ev.target.value),style:{fontSize:15}}),
+      e('button',{onClick:()=>setDate(todayISO()),
+        style:{padding:'7px 14px',borderRadius:8,border:'1.5px solid var(--border)',
+          background:'transparent',color:'var(--text)',fontSize:13,cursor:'pointer'}},'Сегодня'),
+      e('button',{onClick:()=>openAdd(subTab==='dishes'?'dishes':'wrappers'),
+        style:{marginLeft:'auto',padding:'7px 16px',border:'none',background:'var(--accent)',
+          color:'white',borderRadius:9,fontWeight:700,cursor:'pointer',fontSize:13}},
+        subTab==='dishes'?'+ Добавить блюдо':'+ Добавить заготовку')
+    ),
+
+    loading?e('div',{className:'empty-state'},'Загрузка…'):e(React.Fragment,null,
+      pending.length===0&&done.length===0
+        ?e('div',{style:{padding:'30px',textAlign:'center',color:'var(--muted)',fontSize:14,
+            border:'1.5px dashed var(--border)',borderRadius:12}},
+          subTab==='dishes'
+            ?e(React.Fragment,null,'Нет заданий на этот день. ',
+              e('span',{style:{color:'var(--accent)',cursor:'pointer'},onClick:()=>openAdd('dishes')},'Добавить блюдо'))
+            :e(React.Fragment,null,'Нет заданий на этот день. ',
+              e('span',{style:{color:'var(--accent)',cursor:'pointer'},onClick:()=>openAdd('wrappers')},'Добавить заготовку')))
+        :null,
+      pending.length>0&&e('div',{style:{marginBottom:20}},
+        e('div',{style:{fontWeight:600,fontSize:15,marginBottom:10,color:'var(--muted)'}},
+          `К проверке (${pending.length})`),
+        e('div',{style:{display:'flex',flexDirection:'column',gap:10}},
+          pending.map(t=>e(QualityTaskCard,{key:t.id,task:t,isOpen:openTaskId===t.id,
+            onToggle:()=>setOpenTaskId(v=>v===t.id?null:t.id),
+            onDelete:deleteTask,onSave,onReferenceAdded,onPhotosChanged}))
         )
+      ),
+      done.length>0&&e('div',null,
+        e('div',{style:{fontWeight:600,fontSize:15,marginBottom:10,color:'var(--muted)'}},
+          `Выполнено (${done.length})`),
+        e('div',{style:{display:'flex',flexDirection:'column',gap:10}},
+          done.map(t=>e(QualityTaskCard,{key:t.id,task:t,isOpen:openTaskId===t.id,
+            onToggle:()=>setOpenTaskId(v=>v===t.id?null:t.id),
+            onDelete:deleteTask,onSave,onReferenceAdded,onPhotosChanged}))
+        )
+      )
     )
   );
 }
@@ -13494,6 +13527,7 @@ function TechnologistPage({initialActId=null}) {
   const [actBySheetId,setActBySheetId]=useState({});
   const [managerTaskCount,setManagerTaskCount]=useState(null); // [done,total]
   const [prorabotkaCount,setProrabotkaCount]=useState(null); // [done,total]
+  const [readyFoodCount,setReadyFoodCount]=useState(null); // [done,total]
   const [showScrollTop,setShowScrollTop]=useState(false);
   useEffect(()=>{
     const onScroll=()=>setShowScrollTop(window.scrollY>300);
@@ -13543,6 +13577,19 @@ function TechnologistPage({initialActId=null}) {
       const done=list.filter(t=>t.status==='completed').length;
       setManagerTaskCount([done,list.length]);
     }).catch(()=>{});
+  },[]);
+
+  // Предзагрузка счётчика Готовой еды (только для сегодняшней даты)
+  useEffect(()=>{
+    const d=todayISO();
+    (async()=>{
+      try{
+        await fetch(`/api/ready-food/today-plan?date=${d}`);
+        const r=await fetch(`/api/quality/tasks?date=${d}`).then(r=>r.json()).catch(()=>({tasks:[]}));
+        const tasks=(r.tasks||[]).filter(t=>t.company==='блюдо'||t.company==='ГЕ');
+        setReadyFoodCount([tasks.filter(t=>t.status==='done').length,tasks.length]);
+      }catch(e){}
+    })();
   },[]);
 
   // Авто-создание заданий для "проверять всегда" — только если позиция есть в сегодняшней смене
@@ -13597,10 +13644,13 @@ function TechnologistPage({initialActId=null}) {
     }));
   };
 
+  const mainTasks=tasks.filter(t=>t.company!=='блюдо'&&t.company!=='ГЕ');
   const todayStandardIds=new Set(tasks.map(t=>t.standard_id));
-  const pending=tasks.filter(t=>t.status==='pending'||t.status==='overdue');
-  const done=tasks.filter(t=>t.status==='done');
-  const filteredCarryover=carryoverTasks.filter(t=>!todayStandardIds.has(t.standard_id));
+  const pending=mainTasks.filter(t=>t.status==='pending'||t.status==='overdue');
+  const done=mainTasks.filter(t=>t.status==='done');
+  const filteredCarryover=carryoverTasks.filter(t=>!todayStandardIds.has(t.standard_id)&&t.company!=='блюдо'&&t.company!=='ГЕ');
+  const tasksDoneAll=done.length+filteredCarryover.filter(t=>t.status==='done').length;
+  const tasksTotalAll=mainTasks.length+filteredCarryover.length;
 
   const reloadStandards=async()=>{
     const sr=await fetch('/api/quality/standards').then(r=>r.json());
@@ -13613,12 +13663,13 @@ function TechnologistPage({initialActId=null}) {
     // Табы
     e('div',{className:'mgr-tabs',style:{marginBottom:20}},
       e('button',{className:'mgr-tab'+(tab==='tasks'?' active':''),onClick:()=>setTab('tasks')},
-        '📋 Задания'+(tasks.length>0?` ${done.length}/${tasks.length}`:'')
+        '📋 Задания'+(tasksTotalAll>0?` ${tasksDoneAll}/${tasksTotalAll}`:'')
       ),
       e('button',{className:'mgr-tab'+(tab==='managerTasks'?' active':''),onClick:()=>setTab('managerTasks')},
         '📝 От управляющего'+(managerTaskCount!=null?` ${managerTaskCount[0]}/${managerTaskCount[1]}`:'')
       ),
-      e('button',{className:'mgr-tab'+(tab==='readyFood'?' active':''),onClick:()=>setTab('readyFood')},'🍽️ Готовая еда'),
+      e('button',{className:'mgr-tab'+(tab==='readyFood'?' active':''),onClick:()=>setTab('readyFood')},
+        '🍽️ Готовая еда'+(readyFoodCount!=null?` ${readyFoodCount[0]}/${readyFoodCount[1]}`:'')),
       e('button',{className:'mgr-tab'+(tab==='library'?' active':''),onClick:()=>setTab('library')},'📚 Библиотека эталонов'),
       e('button',{className:'mgr-tab'+(tab==='acts'?' active':''),onClick:()=>{setOpenActId(null);setTab('acts');}},'🧪 Акты проработки'),
       e('button',{className:'mgr-tab'+(tab==='prorabotki'?' active':''),onClick:()=>setTab('prorabotki')},
@@ -13694,7 +13745,7 @@ function TechnologistPage({initialActId=null}) {
       )
     ),
     tab==='managerTasks'&&e(TechnologistManagerTasks,{onCountChange:(d,t)=>setManagerTaskCount([d,t])}),
-    tab==='readyFood'&&e(ReadyFoodTab),
+    tab==='readyFood'&&e(ReadyFoodTab,{onCountChange:c=>setReadyFoodCount(c)}),
 
     // Вкладка Библиотека
     tab==='library'&&e(LibraryTab,{standards,onReload:async()=>{await reloadStandards();}}),

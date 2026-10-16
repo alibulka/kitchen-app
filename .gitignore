@@ -12,3 +12,7 @@ node_modules/
 .env*
 uploads/
 .claude/
+kitchen-server/google-credentials.json
+kitchen-server/lib/telegram.js
+kitchen-server/lib/meat-issuance-sheet.js
+kitchen-server/routes/auth.js

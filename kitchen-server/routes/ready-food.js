@@ -6,6 +6,8 @@ const multer = require('multer');
 const { pool } = require('../db');
 const objectStorage = require('../lib/objectStorage');
 
+const READY_FOOD_SHEET_ID = '17dptA8JzNKKAf-xfRuFvTD56-se4_O56DlnYD-_Qxe4';
+
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
@@ -20,6 +22,14 @@ function makeFilename(originalname) {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
 }
 
+async function savePhoto(filename, buffer) {
+  try {
+    await objectStorage.putObject(filename, buffer);
+  } catch {
+    fs.writeFileSync(path.join(UPLOADS_DIR, filename), buffer);
+  }
+}
+
 async function deletePhotoIfUnused(filename) {
   const [{ rows: t }, { rows: s }] = await Promise.all([
     pool.query('SELECT id FROM rf_task_photos WHERE filename=$1 LIMIT 1', [filename]),
@@ -32,6 +42,95 @@ async function deletePhotoIfUnused(filename) {
 }
 
 // ─── Список блюд и заготовок ──────────────────────────────────────────────────
+
+// GET /api/ready-food/today-plan?date=YYYY-MM-DD
+// 1. Читает "Техкарта продукты (cron)" — сегодняшние блюда
+// 2. Среди них берёт только те у которых quality_standards.always_check=1
+// 3. Создаёт quality_tasks для таких блюд
+// 4. По ready_food_wrappers находит заготовки этих блюд и создаёт tasks для их ГЕ-эталонов
+router.get('/today-plan', async (req, res) => {
+  const { date } = req.query;
+  if (!date) return res.status(400).json({ error: 'date required' });
+  try {
+    const { getAccessToken, fetchWithTimeout } = require('../lib/sheets-utils');
+    const token = await getAccessToken();
+
+    // Читаем только блюда из "Техкарта продукты (cron)"
+    const range = encodeURIComponent(`'Техкарта продукты (cron)'!A:B`);
+    const r = await fetchWithTimeout(
+      `https://sheets.googleapis.com/v4/spreadsheets/${READY_FOOD_SHEET_ID}/values/${range}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const data = await r.json();
+    if (data.error) throw new Error(data.error.message);
+
+    // Row 0: дата, Row 1: заголовки, Row 2+: данные
+    const planItemIds = (data.values || []).slice(2)
+      .filter(row => row[0])
+      .map(row => Number(row[0]));
+
+    if (!planItemIds.length) return res.json({ ok: true, dishes: 0, wrappers: 0 });
+
+    // Эталоны блюд с always_check=1 у которых item_id есть в плане
+    const ph1 = planItemIds.map((_, i) => `$${i + 1}`).join(',');
+    const { rows: dishStds } = await pool.query(
+      `SELECT id, item_id FROM quality_standards WHERE company='блюдо' AND always_check=1 AND item_id IN (${ph1})`,
+      planItemIds
+    );
+
+    // Собираем все standard_id которые должны быть в плане
+    const shouldHaveStdIds = new Set();
+
+    for (const std of dishStds) {
+      shouldHaveStdIds.add(std.id);
+
+      const { rows: wrappers } = await pool.query(
+        'SELECT wrapper_id FROM ready_food_wrappers WHERE product_id=$1', [std.item_id]
+      );
+      if (!wrappers.length) continue;
+
+      const wrapperIds = wrappers.map(w => w.wrapper_id);
+      const ph2 = wrapperIds.map((_, i) => `$${i + 1}`).join(',');
+      const { rows: wrStds } = await pool.query(
+        `SELECT id FROM quality_standards WHERE company='ГЕ' AND item_id IN (${ph2})`,
+        wrapperIds
+      );
+      for (const ws of wrStds) shouldHaveStdIds.add(ws.id);
+    }
+
+    // Удаляем pending-задания за эту дату которых больше нет в плане
+    const { rows: existingTasks } = await pool.query(
+      `SELECT qt.id, qt.standard_id FROM quality_tasks qt
+       JOIN quality_standards qs ON qs.id = qt.standard_id
+       WHERE qt.date=$1 AND qs.company IN ('блюдо','ГЕ') AND qt.status='pending'`,
+      [date]
+    );
+    for (const t of existingTasks) {
+      if (!shouldHaveStdIds.has(t.standard_id)) {
+        await pool.query('DELETE FROM quality_tasks WHERE id=$1', [t.id]);
+      }
+    }
+
+    // Создаём задания которых ещё нет
+    let dishCount = 0, wrapperCount = 0;
+    for (const stdId of shouldHaveStdIds) {
+      const { rows: [ex] } = await pool.query(
+        'SELECT id FROM quality_tasks WHERE date=$1 AND standard_id=$2 LIMIT 1',
+        [date, stdId]
+      );
+      if (!ex) {
+        await pool.query('INSERT INTO quality_tasks(date,standard_id) VALUES($1,$2)', [date, stdId]);
+      }
+      const { rows: [s] } = await pool.query('SELECT company FROM quality_standards WHERE id=$1', [stdId]);
+      if (s?.company === 'блюдо') dishCount++; else wrapperCount++;
+    }
+
+    res.json({ ok: true, dishes: dishCount, wrappers: wrapperCount });
+  } catch (err) {
+    console.error('[today-plan]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // GET /api/ready-food/products — все блюда
 router.get('/products', async (req, res) => {
@@ -191,7 +290,7 @@ router.post('/standards/:id/photos', upload.single('photo'), async (req, res) =>
     const { id } = req.params;
     if (!req.file) return res.status(400).json({ error: 'no file' });
     const filename = makeFilename(req.file.originalname);
-    await objectStorage.putObject(filename, req.file.buffer, req.file.mimetype);
+    await savePhoto(filename, req.file.buffer);
     await pool.query('INSERT INTO rf_standard_photos(standard_id, filename) VALUES($1,$2)', [id, filename]);
     res.json({ ok: true, filename });
   } catch (err) {
@@ -219,9 +318,11 @@ router.get('/tasks', async (req, res) => {
 
     const { rows: tasks } = await pool.query(
       `SELECT t.*, s.name as standard_name, s.item_id, s.item_type,
-              s.appearance, s.color, s.taste_smell, s.consistency
+              s.appearance, s.color, s.taste_smell, s.consistency,
+              rfw.process_description
        FROM rf_tasks t
        JOIN rf_standards s ON s.id = t.standard_id
+       LEFT JOIN ready_food_wrappers rfw ON rfw.wrapper_id = s.item_id AND s.item_type = 'wrapper'
        WHERE t.date = $1 ORDER BY t.id`,
       [date]
     );
@@ -317,7 +418,7 @@ router.post('/tasks/:id/photos', upload.single('photo'), async (req, res) => {
     const { id } = req.params;
     if (!req.file) return res.status(400).json({ error: 'no file' });
     const filename = makeFilename(req.file.originalname);
-    await objectStorage.putObject(filename, req.file.buffer, req.file.mimetype);
+    await savePhoto(filename, req.file.buffer);
     await pool.query('INSERT INTO rf_task_photos(task_id, filename) VALUES($1,$2)', [id, filename]);
     res.json({ ok: true, filename });
   } catch (err) {

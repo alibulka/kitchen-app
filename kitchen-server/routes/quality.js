@@ -31,6 +31,14 @@ function makeFilename(originalname) {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
 }
 
+async function savePhoto(filename, buffer) {
+  try {
+    await objectStorage.putObject(filename, buffer);
+  } catch {
+    fs.writeFileSync(path.join(UPLOADS_DIR, filename), buffer);
+  }
+}
+
 // One image may be used both in a check and in its standard.
 async function deletePhotoFileIfUnused(filename, client = pool) {
   const [{ rows: taskPhotos }, { rows: standardPhotos }] = await Promise.all([
@@ -77,8 +85,8 @@ router.get('/standards', async (req, res) => {
   try {
     const { company } = req.query;
     const { rows } = company
-      ? await pool.query('SELECT * FROM quality_standards WHERE company=$1 ORDER BY name', [company])
-      : await pool.query('SELECT * FROM quality_standards ORDER BY company, name');
+      ? await pool.query(`SELECT qs.*, rfw.process_description FROM quality_standards qs LEFT JOIN (SELECT DISTINCT wrapper_id, process_description FROM ready_food_wrappers) rfw ON rfw.wrapper_id = qs.item_id AND qs.company = 'ГЕ' WHERE qs.company=$1 ORDER BY qs.name`, [company])
+      : await pool.query(`SELECT qs.*, rfw.process_description FROM quality_standards qs LEFT JOIN (SELECT DISTINCT wrapper_id, process_description FROM ready_food_wrappers) rfw ON rfw.wrapper_id = qs.item_id AND qs.company = 'ГЕ' ORDER BY qs.company, qs.name`);
 
     const ids = rows.map(r => r.id);
     let fields = [], stdPhotos = [];
@@ -483,9 +491,11 @@ router.get('/tasks', async (req, res) => {
     const { date } = req.query;
     const { rows } = await pool.query(`
       SELECT qt.*, qs.name, qs.company, qs.appearance, qs.color, qs.taste_smell, qs.consistency,
-             qs.item_id, qs.always_check
+             qs.item_id, qs.always_check,
+             rfw.process_description
       FROM quality_tasks qt
       JOIN quality_standards qs ON qs.id = qt.standard_id
+      LEFT JOIN (SELECT DISTINCT wrapper_id, process_description FROM ready_food_wrappers) rfw ON rfw.wrapper_id = qs.item_id AND qs.company = 'ГЕ'
       WHERE qt.date = $1
       ORDER BY qt.id
     `, [date]);
@@ -605,7 +615,7 @@ router.post('/tasks/:id/photos', upload.array('photos', 10), async (req, res) =>
     const saved = [];
     for (const file of (req.files || [])) {
       const filename = makeFilename(file.originalname);
-      await objectStorage.putObject(filename, file.buffer);
+      await savePhoto(filename, file.buffer);
       const { rows: [photo] } = await pool.query(
         'INSERT INTO quality_photos(task_id,filename) VALUES($1,$2) RETURNING id,task_id,filename',
         [taskId, filename]
@@ -668,7 +678,7 @@ router.post('/standards/:id/photos', upload.array('photos', 10), async (req, res
     const saved = [];
     for (const file of (req.files || [])) {
       const filename = makeFilename(file.originalname);
-      await objectStorage.putObject(filename, file.buffer);
+      await savePhoto(filename, file.buffer);
       await pool.query(
         'INSERT INTO quality_standard_photos(standard_id,filename) VALUES($1,$2)',
         [standardId, filename]

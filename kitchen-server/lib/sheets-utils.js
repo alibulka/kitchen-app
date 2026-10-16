@@ -102,4 +102,4 @@ async function updateRowInSheet(token, sheetName, rowNum, cells) {
   return writeCellsToSheet(token, sheetName, [{ rowNum, cells }]);
 }
 
-module.exports = { getAccessToken, isoToDDMMYYYY, findFirstEmptyRowInColA, writeCellsToSheet, updateRowInSheet, SPREADSHEET_ID };
+module.exports = { getAccessToken, fetchWithTimeout, isoToDDMMYYYY, findFirstEmptyRowInColA, writeCellsToSheet, updateRowInSheet, SPREADSHEET_ID };

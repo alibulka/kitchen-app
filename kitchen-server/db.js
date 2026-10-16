@@ -561,6 +561,7 @@ async function initDb(pool) {
       PRIMARY KEY (wrapper_id, product_id)
     )
   `);
+  try { await pool.query(`ALTER TABLE ready_food_wrappers ADD COLUMN process_description TEXT`); } catch(e) {}
   // Эталоны готовой еды (блюда и заготовки)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS rf_standards (

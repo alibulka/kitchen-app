@@ -42,7 +42,11 @@ router.get('/', async (req, res) => {
   }
 });
 
-router.post('/', requireRole('manager'), async (req, res) => {
+router.post('/', (req, res, next) => {
+  const role = req.get('x-user-role');
+  if (role !== 'manager' && role !== 'technologist') return res.status(403).json({ error: 'Недостаточно прав' });
+  next();
+}, async (req, res) => {
   const title = String(req.body?.title || '').trim();
   const plannedDate = String(req.body?.planned_date || '').trim();
   const description = String(req.body?.description || '').trim();
