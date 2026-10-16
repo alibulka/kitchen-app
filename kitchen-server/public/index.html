@@ -15049,26 +15049,18 @@ function LoginPage({ onLogin }) {
 }
 
 function App() {
-  // Авторизация
-  const [auth, setAuth] = useState(() => getStoredAuth());
-
-  const handleLogin = (data) => { setStoredAuth(data); setAuth(data); };
-  const handleLogout = () => { setStoredAuth(null); setAuth(null); };
-
-  if (!auth) return e(LoginPage, { onLogin: handleLogin });
-
-  return e(AppInner, { auth, onLogout: handleLogout });
+  return e(AppInner, { auth: {role:'manager', name:'', shop:null}, onLogout: ()=>{} });
 }
 
 function AppInner({ auth, onLogout }) {
-  // Tablet lock: ?shop=KEY pins this device to one workshop (legacy) или роль tablet из токена
-  const shopParam=useMemo(()=>auth.shop || new URLSearchParams(location.search).get('shop'),[auth]);
-  const roleParam=auth.role; // роль из токена, не из URL
+  // Tablet lock: ?shop=KEY pins this device to one workshop
+  const shopParam=useMemo(()=>new URLSearchParams(location.search).get('shop'),[]);
+  const roleParam='manager';
   const actIdParam=useMemo(()=>{ const v=new URLSearchParams(location.search).get('actId'); return v?Number(v):null; },[]);
-  const isManager=roleParam==='manager';
-  const isTechnologist=roleParam==='technologist';
-  const isProduct=roleParam==='product';
-  const isKitchenManager=roleParam==='kitchen_manager';
+  const isManager=true;
+  const isTechnologist=false;
+  const isProduct=false;
+  const isKitchenManager=false;
 
   const [loading,setLoading]=useState(true);
   const [today]=useState(todayKey);
