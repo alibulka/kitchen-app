@@ -7228,7 +7228,7 @@ function packLineDefaultFact(line, prevLine) {
 function PackTable({packLines, facts, onFactChange, itemKey,
                     doneFlags, doneBy, onLineEmp, shopEmployees,
                     skipReasons, skipTimes, onLineSkip, onLineClearSkip,
-                    prevLineData, hideCompanions}) {
+                    prevLineData, hideCompanions, isMeat}) {
   const [pickerFor, setPickerFor] = useState(null);
   const [pendingEmp, setPendingEmp] = useState(null); // {lineIdx, empId} — ждёт причину
   const [localFacts, setLocalFacts] = useState({}); // буфер ввода — не сохраняем при каждом нажатии
@@ -7362,22 +7362,15 @@ function PackTable({packLines, facts, onFactChange, itemKey,
               )
             ),
             pickerFor===i && e('tr',{key:`picker-${i}`},
-              e('td',{colSpan,style:{padding:'6px 8px',background:'var(--danger-bg)',borderTop:'1px solid var(--danger)'}},
-                e('div',{style:{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}},
-                  e('span',{style:{fontSize:12,color:'var(--danger)',fontWeight:600}},
-                    pendingEmp&&pendingEmp.lineIdx===i?'Укажи причину перед отметкой:':'Причина:'),
-                  ['no_material','no_time'].map(r=>e('button',{key:r,
-                    onClick:()=>{
-                      onLineSkip(k,r);setPickerFor(null);
-                      if(pendingEmp&&pendingEmp.lineIdx===i){onLineEmp(pendingEmp.lineIdx,pendingEmp.empId);setPendingEmp(null);}
-                    },
-                    style:{padding:'5px 12px',borderRadius:7,border:'1.5px solid var(--danger)',
-                      background:'white',color:'var(--danger)',fontSize:12,fontWeight:600,cursor:'pointer'}
-                  },SKIP_LABELS[r])),
-                  e('button',{onClick:()=>{setPickerFor(null);setPendingEmp(null);},
-                    style:{padding:'5px 8px',borderRadius:7,border:'1.5px solid var(--border)',
-                      background:'transparent',color:'var(--muted)',fontSize:12,cursor:'pointer'}},'Отмена')
-                )
+              e('td',{colSpan,style:{padding:0}},
+                e(SkipPicker,{
+                  isMeat, item:null,
+                  onSave:(reason)=>{
+                    onLineSkip(k,reason);setPickerFor(null);
+                    if(pendingEmp&&pendingEmp.lineIdx===i){onLineEmp(pendingEmp.lineIdx,pendingEmp.empId);setPendingEmp(null);}
+                  },
+                  onCancel:()=>{setPickerFor(null);setPendingEmp(null);},
+                })
               )
             ),
             hasEmps && !isDoneYesterday && !isCarryoverCompanion && e('tr',{key:`emp-${i}`},
@@ -7447,9 +7440,106 @@ function EmployeeToggles({employees, selectedIds, onToggle, warn}) {
 // ============================================================
 // ITEM CARD (всегда раскрыта, без инструкций)
 // ============================================================
-const SKIP_LABELS={'no_material':'Нет сырья','no_time':'Не успели'};
+const SKIP_LABELS={
+  'no_material':   'Нет сырья',
+  'no_time':       'Не успели',
+  'raw_not_norm':  'Сырьё не соответствует норме',
+  'partial_missing':'Частично нет сырья',
+  'waiting_defrost':'Ждёт разморозки',
+};
 
-function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, prevLineData, overridePackLines, keyPrefix, autoFillWeight, hideSkip}) {
+// Пикер причин невыполнения. Для мясного цеха — двухуровневый.
+// Использует ЛОКАЛЬНЫЙ state чтобы не зависеть от родителя.
+function SkipPicker({isMeat, item, onSave, onCancel}) {
+  const [topReason, setTopReason] = useState(null);
+  const [subReason, setSubReason] = useState(null);
+  const [detail, setDetail] = useState({});
+
+  const btnStyle=(active)=>({
+    padding:'6px 14px',borderRadius:8,fontSize:13,fontWeight:600,cursor:'pointer',
+    border:'1.5px solid '+(active?'var(--accent)':'var(--danger)'),
+    background:active?'var(--accent)':'white',
+    color:active?'white':'var(--danger)',
+  });
+  const subBtnStyle=(active)=>({
+    padding:'5px 12px',borderRadius:8,fontSize:12,fontWeight:600,cursor:'pointer',
+    border:'1.5px solid '+(active?'var(--accent)':'var(--border)'),
+    background:active?'var(--accent)':'var(--bg)',
+    color:active?'white':'var(--text)',
+  });
+
+  // Немясной цех — плоский список
+  if (!isMeat) return e('div',{style:{display:'flex',gap:8,padding:'10px 12px',background:'var(--danger-bg)',borderTop:'1px solid var(--danger)',flexWrap:'wrap',alignItems:'center'}},
+    e('span',{style:{fontSize:13,color:'var(--danger)',fontWeight:600}},'Причина:'),
+    ['no_material','no_time'].map(r=>e('button',{key:r,onClick:()=>onSave(r),style:btnStyle(false)},SKIP_LABELS[r])),
+    e('button',{onClick:onCancel,style:{padding:'6px 10px',borderRadius:8,border:'1.5px solid var(--border)',background:'transparent',color:'var(--muted)',fontSize:13,cursor:'pointer'}},'Отмена')
+  );
+
+  // Мясной цех — двухуровневый
+  const finalReason = topReason==='no_time' ? 'no_time' : subReason;
+  const canSave = topReason==='no_time' || (topReason==='no_material' && subReason);
+
+  return e('div',{style:{padding:'10px 12px',background:'var(--danger-bg)',borderTop:'1px solid var(--danger)'}},
+    // Уровень 1
+    e('div',{style:{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center',marginBottom:topReason==='no_material'?12:6}},
+      e('span',{style:{fontSize:13,color:'var(--danger)',fontWeight:600}},'Причина:'),
+      e('button',{style:btnStyle(topReason==='no_time'),
+        onClick:()=>{ setTopReason(t=>t==='no_time'?null:'no_time'); setSubReason(null); setDetail({}); }
+      },'⏱ Не успели'),
+      e('button',{style:btnStyle(topReason==='no_material'),
+        onClick:()=>{ setTopReason(t=>t==='no_material'?null:'no_material'); setSubReason(null); setDetail({}); }
+      },'🚫 Нет сырья'),
+      e('button',{onClick:onCancel,style:{padding:'6px 10px',borderRadius:8,border:'1.5px solid var(--border)',background:'transparent',color:'var(--muted)',fontSize:13,cursor:'pointer'}},'Отмена')
+    ),
+    // Уровень 2 — только если выбрано "Нет сырья"
+    topReason==='no_material' && e('div',{style:{marginLeft:8,paddingLeft:12,borderLeft:'2px solid var(--danger)',paddingBottom:8}},
+      e('div',{style:{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center',marginBottom:subReason?10:0}},
+        e('span',{style:{fontSize:12,color:'var(--muted)',fontWeight:600}},'Уточните:'),
+        e('button',{style:subBtnStyle(subReason==='raw_not_norm'),
+          onClick:()=>{ setSubReason(r=>r==='raw_not_norm'?null:'raw_not_norm'); setDetail({}); }
+        },'⚠ Сырьё не соответствует норме'),
+        e('button',{style:subBtnStyle(subReason==='partial_missing'),
+          onClick:()=>{ setSubReason(r=>r==='partial_missing'?null:'partial_missing'); setDetail({}); }
+        },'🔍 Частично нет сырья'),
+        e('button',{style:subBtnStyle(subReason==='waiting_defrost'),
+          onClick:()=>{ setSubReason(r=>r==='waiting_defrost'?null:'waiting_defrost'); setDetail({}); }
+        },'❄ Ждёт разморозки'),
+      ),
+      subReason==='raw_not_norm' && e('div',{style:{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginTop:6}},
+        e('span',{style:{fontSize:12,color:'var(--muted)'}},'Остаток некалиброванного сырья, кг:'),
+        e('input',{type:'text',inputMode:'decimal',placeholder:'0.0',value:detail.leftover_kg||'',
+          onChange:ev=>setDetail(p=>({...p,leftover_kg:ev.target.value})),
+          style:{width:80,padding:'4px 8px',borderRadius:6,border:'1px solid var(--border)',fontSize:13,background:'var(--bg)',color:'var(--text)'}}),
+        e('div',{style:{fontSize:11,color:'var(--accent)',width:'100%',marginTop:2}},'→ Статус: На согласовании с ПК')
+      ),
+      subReason==='partial_missing' && e('div',{style:{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginTop:6}},
+        e('span',{style:{fontSize:12,color:'var(--muted)'}},'Какого ингредиента нет:'),
+        (item&&item.ingredients&&item.ingredients.length>0)
+          ? e('select',{value:detail.ingredient_name||'',
+              onChange:ev=>setDetail(p=>({...p,ingredient_name:ev.target.value})),
+              style:{padding:'4px 8px',borderRadius:6,border:'1px solid var(--border)',fontSize:13,background:'var(--bg)',color:'var(--text)'}},
+              e('option',{value:''},'— выберите —'),
+              item.ingredients.map(ing=>e('option',{key:ing.id||ing.name,value:ing.name},ing.name))
+            )
+          : e('input',{type:'text',placeholder:'Название ингредиента',value:detail.ingredient_name||'',
+              onChange:ev=>setDetail(p=>({...p,ingredient_name:ev.target.value})),
+              style:{flex:1,padding:'4px 8px',borderRadius:6,border:'1px solid var(--border)',fontSize:13,background:'var(--bg)',color:'var(--text)'}}),
+      ),
+      subReason==='waiting_defrost' && e('div',{style:{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginTop:6}},
+        e('span',{style:{fontSize:12,color:'var(--muted)'}},'Сделано из охлажденки (кол-во):'),
+        e('input',{type:'text',inputMode:'decimal',placeholder:'0',value:detail.done_qty||'',
+          onChange:ev=>setDetail(p=>({...p,done_qty:ev.target.value})),
+          style:{width:80,padding:'4px 8px',borderRadius:6,border:'1px solid var(--border)',fontSize:13,background:'var(--bg)',color:'var(--text)'}}),
+      )
+    ),
+    canSave && e('button',{
+      onClick:()=>onSave(finalReason, detail),
+      style:{padding:'6px 18px',marginTop:8,borderRadius:8,border:'none',background:'var(--accent)',color:'white',fontWeight:700,fontSize:13,cursor:'pointer'}
+    },'Сохранить')
+  );
+}
+
+function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, prevLineData, overridePackLines, keyPrefix, autoFillWeight, hideSkip, isMeat}) {
   const itemKey=`${keyPrefix||''}${stationKey}-${item.id}`;
   const [noEmpWarn,setNoEmpWarn]=useState(false);
   const [showSkipPicker,setShowSkipPicker]=useState(false);
@@ -7649,20 +7739,11 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, prevLi
     ),
 
     // SKIP PICKER (only for items without pack lines)
-    packLines.length===0 && showSkipPicker && e('div',{style:{
-      display:'flex',gap:8,padding:'10px 12px',
-      background:'var(--danger-bg)',borderTop:'1px solid var(--danger)',flexWrap:'wrap'
-    }},
-      e('span',{style:{fontSize:13,color:'var(--danger)',fontWeight:600,alignSelf:'center'}},'Причина:'),
-      ['no_material','no_time'].map(r=>e('button',{key:r,
-        onClick:()=>doSkip(r),
-        style:{padding:'6px 14px',borderRadius:8,border:'1.5px solid var(--danger)',
-          background:'white',color:'var(--danger)',fontSize:13,fontWeight:600,cursor:'pointer'}
-      },SKIP_LABELS[r])),
-      e('button',{onClick:()=>setShowSkipPicker(false),
-        style:{padding:'6px 10px',borderRadius:8,border:'1.5px solid var(--border)',
-          background:'transparent',color:'var(--muted)',fontSize:13,cursor:'pointer'}},'Отмена')
-    ),
+    packLines.length===0 && showSkipPicker && e(SkipPicker,{
+      isMeat, item,
+      onSave:(reason,detail)=>{doSkip(reason);setShowSkipPicker(false);},
+      onCancel:()=>setShowSkipPicker(false),
+    }),
 
     // ПОДЗАГОТОВКИ (рекурсивно, любая глубина)
     (item.subPreps||[]).length>0 && e('div',{className:'card-section'},
@@ -7714,7 +7795,7 @@ function ItemCard({item, stationKey, shift, onShiftChange, shopEmployees, prevLi
                    onLineEmp,shopEmployees,
                    skipReasons:shift.skipReasons,skipTimes:shift.skipTimes,
                    onLineSkip,onLineClearSkip,prevLineData,
-                   hideCompanions:!!keyPrefix})
+                   hideCompanions:!!keyPrefix,isMeat})
     ),
 
     // Сотрудник — только для позиций без pack lines (старый режим)
@@ -7787,13 +7868,14 @@ const SUHOJ_FASOVKA_KEY = 'suhoj_tseh_ruchnaja_fasovka';
 const OVOSHCH_FASOVKA_KEY = 'ovoshchnoj_tseh_fasovka';
 
 
-function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robokopItems=[], precutConfig=new Set(), onPrecutConfigChange, shopParam}) {
+function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robokopItems=[], precutConfig=new Set(), onPrecutConfigChange, shopParam, isMeatOverride}) {
   const sourceKeyOf=(item)=>item.__sourceStationKey||station.key;
   const visualKeyOf=(item)=>item.__visualItemKey||(`${sourceKeyOf(item)}-${item.id}`);
   const carryKeyOf=(stationKey,itemId)=>`${stationKey}:${itemId}`;
   const isRuchnaya = station.key === RUCHNAYA_KEY;
   const isRobokop  = station.key === ROBOKOP_KEY;
   const isZamesStation = station.key.startsWith('suhoj_tseh_') || station.key === OVOSHCH_FASOVKA_KEY;
+  const isMeat = isMeatOverride != null ? isMeatOverride : (/мясн/i.test(station.key) || /myasnoj/i.test(station.key));
 
   const items=station.items||[];
 
@@ -8020,7 +8102,7 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robok
     return e('div',{
       key:visualKeyOf(item),
       className:'item-wrapper'+(sinking?' sinking':'')+(settled?' settled':'')
-    }, e(ItemCard,{item,stationKey:sourceKeyOf(item),shift,onShiftChange,shopEmployees,prevLineData}));
+    }, e(ItemCard,{item,stationKey:sourceKeyOf(item),shift,onShiftChange,shopEmployees,prevLineData,isMeat}));
   };
 
   const togglePrecut=(itemId)=>{
@@ -8036,7 +8118,7 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robok
     const settled=settledIds.has(visualKeyOf(item));
     const inPrecut=precutConfig.has(item.id);
     const showToggle=isRobokop && !shopParam && onPrecutConfigChange;
-    const card=e(ItemCard,{item,stationKey:sourceKeyOf(item),shift,onShiftChange,shopEmployees,prevLineData});
+    const card=e(ItemCard,{item,stationKey:sourceKeyOf(item),shift,onShiftChange,shopEmployees,prevLineData,isMeat});
     if(!showToggle) return e('div',{key:visualKeyOf(item),className:'item-wrapper'+(sinking?' sinking':'')+(settled?' settled':'')},card);
     return e('div',{key:visualKeyOf(item),className:'item-wrapper'+(sinking?' sinking':'')+(settled?' settled':''),style:{position:'relative'}},
       card,
@@ -8237,9 +8319,9 @@ function KitchenStationPage({station, shift, onShiftChange, shopEmployees, robok
 // ============================================================
 // KITCHEN SHOP PAGE (вкладки по станциям)
 // ============================================================
-function KitchenShopPage({shopGroup, shift, onShiftChange, allEmployees, onBack, shopGroups, isManager, precutConfig, onPrecutConfigChange, dateKey}) {
+function KitchenShopPage({shopGroup, shift, onShiftChange, allEmployees, onBack, shopGroups, isManager, precutConfig, onPrecutConfigChange, dateKey, activeTcEE, activeTcUD}) {
   const stations=shopGroup.stations||[];
-  const [stationIdx,setStationIdx]=useState(0); // -1 = вкладка отходов
+  const [stationIdx,setStationIdx]=useState(0); // -1 = отходы
   const isMeatShop = /мясной/i.test(shopGroup.shop);
   const activeStationIdx = stationIdx === -1 ? 0 : stationIdx;
   const station=stations[activeStationIdx]||stations[0];
@@ -8293,7 +8375,7 @@ function KitchenShopPage({shopGroup, shift, onShiftChange, allEmployees, onBack,
         className:'station-tab'+(stationIdx===-1?' active':''),
         onClick:()=>setStationIdx(-1),
         style:{marginLeft:'auto'}
-      },'🗑️ Отходы')
+      },'🗑️ Отходы'),
     ),
     stationIdx === -1
       ? e(RawWasteTab,{dateKey})
@@ -8302,7 +8384,8 @@ function KitchenShopPage({shopGroup, shift, onShiftChange, allEmployees, onBack,
           robokopItems: station.key===RUCHNAYA_KEY ? robokopItems : [],
           precutConfig: precutConfig||new Set(),
           onPrecutConfigChange,
-          shopParam: !isManager
+          shopParam: !isManager,
+          isMeatOverride: isMeatShop,
         })
   );
 }
@@ -10288,9 +10371,9 @@ function DXStorageTab({dateKey, shift, activeTcEE, activeTcUD, archiveIndex}) {
 // ============================================================
 
 function RawWasteTab({dateKey}) {
-  const [ingredients, setIngredients] = useState([]); // [{id, name}] из выдачи
-  const [waste, setWaste] = useState({}); // {ing_name → string}
-  const [saved, setSaved] = useState({}); // {ing_name → weight_kg} из БД
+  const [ingredients, setIngredients] = useState([]); // [{id, name, issuedKg}]
+  const [waste, setWaste] = useState({}); // {id → string} — отходы
+  const [leftover, setLeftover] = useState({}); // {id → string} — остаток
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState(null);
 
@@ -10298,34 +10381,27 @@ function RawWasteTab({dateKey}) {
     if (!dateKey) return;
     (async () => {
       try {
-        const [issR, wasteR] = await Promise.all([
-          fetch(`/api/raw-material/issuance/${dateKey}`),
+        const [sheetsR, wasteR, leftoverR] = await Promise.all([
+          fetch(`/api/raw-material/issuance-sheets/${dateKey}`),
           fetch(`/api/raw-material/waste/${dateKey}`),
+          fetch(`/api/raw-material/leftover/${dateKey}`),
         ]);
-        // Список ингредиентов из выдачи (уже отфильтрован по Мясо/Рыба)
-        if (issR.ok) {
-          const d = await issR.json();
-          // Схлопываем дубли — суммируем mass_g если позиция в Производстве и Резерве
-          const seen = new Map(); // id → {name, mass_g}
-          (d.items||[]).forEach(it => {
-            if (!seen.has(it.ingredient_id)) {
-              seen.set(it.ingredient_id, {name: it.ing_name, mass_g: it.mass_g || 0});
-            } else {
-              seen.get(it.ingredient_id).mass_g += it.mass_g || 0;
-            }
-          });
-          setIngredients([...seen.entries()].map(([id, v]) => ({id, name: v.name, mass_g: v.mass_g})));
+        if (sheetsR.ok) {
+          const d = await sheetsR.json();
+          setIngredients((d.items||[]).map(it => ({id: it.ingredient_id, name: it.ing_name, issuedKg: it.by_fact || 0})));
         }
-        // Ранее сохранённые отходы
+        // Ранее сохранённые отходы и остатки
         if (wasteR.ok) {
           const d = await wasteR.json();
-          const map = {}, inputs = {};
-          (d.items||[]).forEach(it => {
-            map[it.ing_name] = it.weight_kg;
-            inputs[it.ing_name] = String(it.weight_kg);
-          });
-          setSaved(map);
-          setWaste(inputs);
+          const wasteMap = {};
+          (d.items||[]).forEach(it => { wasteMap[it.ingredient_id] = String(it.weight_kg || ''); });
+          setWaste(wasteMap);
+        }
+        if (leftoverR.ok) {
+          const d = await leftoverR.json();
+          const leftMap = {};
+          (d.items||[]).forEach(it => { leftMap[it.ingredient_id] = String(it.weight_kg || ''); });
+          setLeftover(leftMap);
         }
       } catch(e) {}
     })();
@@ -10333,69 +10409,84 @@ function RawWasteTab({dateKey}) {
 
   async function handleSubmit() {
     setSaving(true);
-    const items = ingredients.map(ing => ({
-      ingredient_id: ing.id,
-      ing_name: ing.name,
-      weight_kg: parseFloat((waste[ing.name]||'').replace(',','.')) || 0,
+    const wasteItems = ingredients.map(ing => ({
+      ingredient_id: ing.id, ing_name: ing.name,
+      weight_kg: parseFloat((waste[ing.id]||'').replace(',','.')) || 0,
+    }));
+    const leftoverItems = ingredients.map(ing => ({
+      ingredient_id: ing.id, ing_name: ing.name,
+      weight_kg: parseFloat((leftover[ing.id]||'').replace(',','.')) || 0,
     }));
     try {
-      const r = await fetch(`/api/raw-material/waste/${dateKey}`, {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({items}),
-      });
-      if (r.ok) {
-        const newSaved = {};
-        items.forEach(it => { if(it.weight_kg > 0) newSaved[it.ing_name] = it.weight_kg; });
-        setSaved(newSaved);
+      const [r1, r2] = await Promise.all([
+        fetch(`/api/raw-material/waste/${dateKey}`, {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({items: wasteItems}),
+        }),
+        fetch(`/api/raw-material/leftover/${dateKey}`, {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({items: leftoverItems}),
+        }),
+      ]);
+      if (r1.ok && r2.ok) {
         setSavedAt(new Date().toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'}));
       }
     } catch(e) {}
     setSaving(false);
   }
 
-  const fmt = v => v != null ? v.toLocaleString('ru-RU', {minimumFractionDigits:1, maximumFractionDigits:2}) : '—';
+  const fmtKg2 = v => v > 0 ? v.toLocaleString('ru-RU', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—';
+
+  function NumInput({value, onChange}) {
+    return e('div', {style:{display:'flex',alignItems:'center',gap:4}},
+      e('input', {
+        type:'text', inputMode:'decimal',
+        value: value || '',
+        onChange: ev => onChange(ev.target.value),
+        placeholder: '0',
+        style:{
+          width:80, textAlign:'right', fontSize:15, fontWeight:700,
+          padding:'4px 8px', borderRadius:8,
+          border:'2px solid var(--border)',
+          background:'var(--bg)', color:'var(--text)', outline:'none',
+        },
+      }),
+      e('span', {style:{fontSize:12, color:'var(--muted)', whiteSpace:'nowrap'}}, 'кг'),
+    );
+  }
 
   return e('div', null,
     e('h2', {className:'page-title', style:{padding:'16px 16px 4px'}}, '🗑️ Отходы — Мясной цех'),
     e('p', {style:{color:'var(--muted)',fontSize:13,padding:'0 16px',marginBottom:12}},
-      'Взвесьте отходы и введите вес в кг. Нажмите «Отправить».'),
+      'Введите остаток и отходы по каждому виду сырья. Нажмите «Сохранить».'),
     !ingredients.length && e('div', {className:'empty-state'},
-      'Нет данных выдачи на эту дату. Сначала загрузите файл выдачи на вкладке «Выдача».'),
+      'Нет данных выдачи на эту дату. Загрузите данные из Google Sheets на вкладке «Выдача».'),
     !!ingredients.length && e('div', {className:'pack-table-wrap'},
       e('table', {className:'pack-table'},
         e('thead', null,
           e('tr', null,
             e('th', null, 'Сырьё'),
             e('th', {style:{width:110, textAlign:'right'}}, 'Выдано, кг'),
-            e('th', {style:{width:130, textAlign:'right'}}, 'Отходы, кг'),
+            e('th', {style:{width:150, textAlign:'right'}}, 'Остаток, кг'),
+            e('th', {style:{width:150, textAlign:'right'}}, 'Отходы, кг'),
           )
         ),
         e('tbody', null,
           ingredients.map(ing =>
-            e('tr', {key: ing.name},
+            e('tr', {key: ing.id},
               e('td', null, ing.name),
               e('td', {style:{textAlign:'right', fontWeight:600, fontVariantNumeric:'tabular-nums'}},
-                ing.mass_g > 0
-                  ? (ing.mass_g / 1000).toLocaleString('ru-RU', {minimumFractionDigits:2, maximumFractionDigits:2})
-                  : '—'),
+                fmtKg2(ing.issuedKg)),
               e('td', {style:{textAlign:'right'}},
-                e('div', {style:{display:'flex', alignItems:'center', justifyContent:'flex-end', gap:6}},
-                  e('input', {
-                    type:'text', inputMode:'decimal',
-                    value: waste[ing.name] || '',
-                    onChange: ev => setWaste(w => ({...w, [ing.name]: ev.target.value})),
-                    placeholder: '0',
-                    style:{
-                      width:90, textAlign:'right', fontSize:17, fontWeight:700,
-                      padding:'5px 10px', borderRadius:8,
-                      border:'2px solid var(--border)',
-                      background:'var(--bg)', color:'var(--text)',
-                      outline:'none',
-                    },
-                  }),
-                  e('span', {style:{fontSize:13, color:'var(--muted)'}}, 'кг'),
-                )
-              ),
+                e(NumInput, {
+                  value: leftover[ing.id],
+                  onChange: v => setLeftover(l => ({...l, [ing.id]: v})),
+                })),
+              e('td', {style:{textAlign:'right'}},
+                e(NumInput, {
+                  value: waste[ing.id],
+                  onChange: v => setWaste(w => ({...w, [ing.id]: v})),
+                })),
             )
           )
         )
@@ -10418,8 +10509,512 @@ function RawWasteTab({dateKey}) {
 }
 
 // ============================================================
+// SHORTAGE TAB — причины нехватки мясного цеха
+// ============================================================
+const SHORTAGE_REASONS = [
+  { key: 'didnt_have_time', label: 'Не успели', icon: '⏱️', detail: null },
+  { key: 'raw_not_norm',    label: 'Сырьё не соответствует норме', icon: '⚠️', detail: 'leftover_kg' },
+  { key: 'partial_missing', label: 'Частично нет сырья', icon: '🔍', detail: 'ingredient' },
+  { key: 'waiting_defrost', label: 'Ждёт разморозки', icon: '❄️', detail: 'done_qty' },
+];
+
+function ShortageTab({dateKey, shift, activeTcEE, activeTcUD}) {
+  const [items, setItems] = useState([]); // позиции мясного цеха
+  const [shortages, setShortages] = useState({}); // {stKey-itemId → {reason, detail}}
+  const [saving, setSaving] = useState(null);
+  const [savedAt, setSavedAt] = useState(null);
+
+  // Загружаем позиции мясного цеха из техкарты
+  useEffect(() => {
+    const tcId = activeTcEE?.id || activeTcUD?.id;
+    if (!tcId || !dateKey) return;
+    (async () => {
+      try {
+        const [tcResp, shortageResp] = await Promise.all([
+          fetch(`/api/techcards/${tcId}`),
+          fetch(`/api/raw-material/shortage/${dateKey}`),
+        ]);
+        if (tcResp.ok) {
+          const d = await tcResp.json();
+          const tc = d.techcard || d;
+          const meatItems = [];
+          (tc.stations || []).forEach(st => {
+            if (!/мясн/i.test(st.name)) return;
+            (st.items || []).forEach(item => {
+              // Находим главный ингредиент (наибольший по весу)
+              let mainIng = null, maxW = 0;
+              function collectIngs(obj) {
+                (obj.ingredients || []).forEach(ing => {
+                  if ((ing.planAmount || 0) > maxW) { maxW = ing.planAmount; mainIng = ing; }
+                });
+                (obj.subPreps || []).forEach(sp => collectIngs(sp));
+              }
+              collectIngs(item);
+              meatItems.push({
+                id: item.id, name: item.name, stationKey: st.key,
+                mainIng: mainIng?.name || null, mainIngId: mainIng?.id || null,
+                isDone: !!(shift?.doneFlags?.[`${st.key}-${item.id}`]),
+                allIngredients: (() => {
+                  const m = {};
+                  function ci(o) {
+                    (o.ingredients||[]).forEach(ing => { if(ing.id) m[ing.id]=ing.name; });
+                    (o.subPreps||[]).forEach(s=>ci(s));
+                  }
+                  ci(item); return Object.entries(m).map(([id,name])=>({id,name}));
+                })(),
+              });
+            });
+          });
+          setItems(meatItems);
+        }
+        if (shortageResp.ok) {
+          const d = await shortageResp.json();
+          const map = {};
+          d.items.forEach(it => { map[`${it.station_key}-${it.item_id}`] = {reason: it.reason, detail: it.detail || {}}; });
+          setShortages(map);
+        }
+      } catch(e) {}
+    })();
+  }, [dateKey, activeTcEE?.id, activeTcUD?.id]);
+
+  async function saveShortage(stKey, itemId, reason, detail) {
+    const k = `${stKey}-${itemId}`;
+    setSaving(k);
+    try {
+      if (!reason) {
+        await fetch(`/api/raw-material/shortage/${dateKey}/${encodeURIComponent(stKey)}/${encodeURIComponent(itemId)}`, {method:'DELETE'});
+        setShortages(prev => { const n={...prev}; delete n[k]; return n; });
+      } else {
+        await fetch(`/api/raw-material/shortage/${dateKey}`, {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({station_key: stKey, item_id: itemId, reason, detail: detail||{}}),
+        });
+        setShortages(prev => ({...prev, [k]: {reason, detail: detail||{}}}));
+      }
+      setSavedAt(new Date().toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}));
+    } catch(e) {}
+    setSaving(null);
+  }
+
+  const notDoneItems = items.filter(it => !it.isDone);
+
+  if (!activeTcEE?.id && !activeTcUD?.id) return e('div',{className:'empty-state'},'Нет активной техкарты.');
+  if (!items.length) return e('div',{className:'empty-state'},'Нет позиций мясного цеха в техкарте.');
+
+  return e('div',{style:{paddingBottom:40}},
+    e('div',{style:{padding:'16px 16px 8px',display:'flex',alignItems:'center',justifyContent:'space-between'}},
+      e('h2',{className:'page-title',style:{margin:0}},'⚠️ Причины нехватки — Мясной цех'),
+      savedAt && e('div',{style:{fontSize:12,color:'var(--muted)'}},'Сохранено '+savedAt)
+    ),
+    e('p',{style:{color:'var(--muted)',fontSize:13,padding:'0 16px 12px',margin:0}},
+      'Отметьте причины для позиций, которые не выполнены или выполнены не полностью.'),
+    notDoneItems.length === 0
+      ? e('div',{className:'empty-state'},'Все позиции выполнены ✓')
+      : e('div',{style:{padding:'0 16px'}},
+          notDoneItems.map(item => {
+            const k = `${item.stationKey}-${item.id}`;
+            const cur = shortages[k];
+            const curReason = cur?.reason || null;
+            return e('div',{key:k,style:{background:'var(--surface)',borderRadius:12,padding:16,marginBottom:12,border:'1px solid var(--border)'}},
+              e('div',{style:{fontWeight:600,fontSize:14,marginBottom:4}}, item.name),
+              item.mainIng && e('div',{style:{fontSize:12,color:'var(--muted)',marginBottom:10}},'Основное сырьё: '+item.mainIng),
+              // Выбор причины
+              e('div',{style:{display:'flex',flexWrap:'wrap',gap:8,marginBottom:curReason?12:0}},
+                SHORTAGE_REASONS.map(r =>
+                  e('button',{
+                    key:r.key,
+                    onClick:()=>saveShortage(item.stationKey,item.id, curReason===r.key ? null : r.key, null),
+                    disabled:saving===k,
+                    style:{
+                      padding:'6px 12px',borderRadius:20,border:'2px solid',fontSize:13,cursor:'pointer',
+                      borderColor: curReason===r.key ? 'var(--accent)' : 'var(--border)',
+                      background: curReason===r.key ? 'var(--accent)' : 'var(--bg)',
+                      color: curReason===r.key ? 'white' : 'var(--text)',
+                      fontWeight: curReason===r.key ? 700 : 400,
+                    }
+                  }, r.icon+' '+r.label)
+                )
+              ),
+              // Детали для выбранной причины
+              curReason === 'raw_not_norm' && e('div',{style:{marginTop:8}},
+                e('label',{style:{fontSize:13,color:'var(--muted)',display:'block',marginBottom:4}},'Остаток некалиброванного сырья, кг:'),
+                e('input',{
+                  type:'text',inputMode:'decimal',
+                  value: cur?.detail?.leftover_kg || '',
+                  onChange: ev => saveShortage(item.stationKey, item.id, curReason, {leftover_kg: ev.target.value}),
+                  style:{width:120,padding:'6px 10px',borderRadius:8,border:'1px solid var(--border)',fontSize:14,background:'var(--bg)',color:'var(--text)'},
+                  placeholder:'0.0'
+                }),
+                e('div',{style:{fontSize:12,color:'var(--muted)',marginTop:4}},'Статус: На согласовании с ПК'),
+              ),
+              curReason === 'partial_missing' && e('div',{style:{marginTop:8}},
+                e('label',{style:{fontSize:13,color:'var(--muted)',display:'block',marginBottom:4}},'Какого ингредиента не хватает:'),
+                e('select',{
+                  value: cur?.detail?.ingredient_id || '',
+                  onChange: ev => {
+                    const ing = item.allIngredients.find(i=>i.id===ev.target.value);
+                    saveShortage(item.stationKey, item.id, curReason, {ingredient_id: ev.target.value, ingredient_name: ing?.name||ev.target.value});
+                  },
+                  style:{padding:'6px 10px',borderRadius:8,border:'1px solid var(--border)',fontSize:14,background:'var(--bg)',color:'var(--text)',minWidth:200},
+                },
+                  e('option',{value:''},'Выберите ингредиент'),
+                  item.allIngredients.map(ing => e('option',{key:ing.id,value:ing.id},ing.name))
+                ),
+              ),
+              curReason === 'waiting_defrost' && e('div',{style:{marginTop:8}},
+                e('label',{style:{fontSize:13,color:'var(--muted)',display:'block',marginBottom:4}},'Выполнено из охлажденки (кг или шт):'),
+                e('input',{
+                  type:'text',inputMode:'decimal',
+                  value: cur?.detail?.done_qty || '',
+                  onChange: ev => saveShortage(item.stationKey, item.id, curReason, {done_qty: ev.target.value}),
+                  style:{width:120,padding:'6px 10px',borderRadius:8,border:'1px solid var(--border)',fontSize:14,background:'var(--bg)',color:'var(--text)'},
+                  placeholder:'0'
+                }),
+              ),
+            );
+          })
+        )
+  );
+}
+
+// ============================================================
+// ============================================================
+// ISSUANCE TABLE — таблица с разворачиваемыми строками
+// ============================================================
+const ISSUANCE_STATUS_BADGE = {
+  no_fact:    {label:'Не выполнено', bg:'#f3f4f6', color:'#6b7280'},
+  ok:         {label:'Сходится',     bg:'#dcfce7', color:'#16a34a'},
+  wait_waste: {label:'Ждём отходов', bg:'#fef9c3', color:'#92400e'},
+  done:       {label:'Выполнено',    bg:'#dcfce7', color:'#16a34a'},
+};
+const fmtKg  = n => (n||0).toLocaleString('ru-RU', {minimumFractionDigits:2, maximumFractionDigits:2});
+const fmtKg1 = n => (n||0).toLocaleString('ru-RU', {minimumFractionDigits:1, maximumFractionDigits:1});
+
+function IssuanceTable({ingRows}) {
+  const [expanded, setExpanded] = useState({});
+  const toggleRow = id => setExpanded(p => ({...p, [id]: !p[id]}));
+  const COLS = 10; // количество колонок в таблице
+
+  return e('div', {style:{padding:'0 20px'}},
+    e('div', {className:'pack-table-wrap'},
+      e('table', {className:'pack-table'},
+        e('thead', null, e('tr', null,
+          e('th', {style:{width:28}}),
+          e('th', {style:{width:60,color:'var(--muted)',fontSize:12}}, 'ID'),
+          e('th', null, 'Сырьё'),
+          e('th', {style:{width:130,textAlign:'right'}}, 'По менеджу, кг'),
+          e('th', {style:{width:130,textAlign:'right'}}, 'Выдано по факту, кг'),
+          e('th', {style:{width:130,textAlign:'right'}}, 'Расход по факту, кг'),
+          e('th', {style:{width:110,textAlign:'right'}}, 'Отходы, кг'),
+          e('th', {style:{width:100,textAlign:'right'}}, 'Остаток, кг'),
+          e('th', {style:{width:130}}, 'Статус'),
+          e('th', {style:{width:180}}, 'Нехватки'),
+        )),
+        e('tbody', null,
+          ingRows.flatMap(r => {
+            const badge = ISSUANCE_STATUS_BADGE[r.status] || {label:r.status,bg:'#f3f4f6',color:'#6b7280'};
+            const isOpen = !!expanded[r.id];
+            const hasDetail = r.itemBreakdown && r.itemBreakdown.length > 0;
+
+            const mainRow = e('tr', {key:r.id,
+              style:{cursor:hasDetail?'pointer':undefined, background:isOpen?'var(--surface-accent,#f8fafc)':undefined},
+              onClick: hasDetail ? ()=>toggleRow(r.id) : undefined,
+            },
+              e('td', {style:{textAlign:'center',color:'var(--muted)',fontSize:13,userSelect:'none'}},
+                hasDetail ? (isOpen ? '▾' : '▸') : null),
+              e('td', {style:{color:'var(--muted)',fontSize:12,fontVariantNumeric:'tabular-nums'}}, r.id),
+              e('td', {style:{fontWeight:500}}, r.name),
+              e('td', {style:{textAlign:'right',fontVariantNumeric:'tabular-nums',color:'var(--muted)'}}, r.fromManagerKg>0 ? fmtKg(r.fromManagerKg) : '—'),
+              e('td', {style:{textAlign:'right',fontWeight:600,fontVariantNumeric:'tabular-nums'}}, fmtKg(r.issuedKg)),
+              e('td', {style:{textAlign:'right',fontVariantNumeric:'tabular-nums'}}, r.consumedKg>0.001 ? fmtKg(r.consumedKg) : '—'),
+              e('td', {style:{textAlign:'right',fontVariantNumeric:'tabular-nums'}},
+                r.wasteKg > 0
+                  ? fmtKg(r.wasteKg)
+                  : e('span', {style:{background:'#fef9c3',color:'#92400e',padding:'1px 8px',borderRadius:4,fontSize:12,fontWeight:600}}, 'не внесено')),
+              e('td', {style:{textAlign:'right',fontWeight:600,fontVariantNumeric:'tabular-nums',
+                color: Math.abs(r.balance)<0.1 ? 'var(--muted)' : r.balance<0 ? 'var(--danger,#dc2626)' : 'var(--text)'}},
+                fmtKg(r.balance)),
+              e('td', null,
+                e('span', {style:{background:badge.bg,color:badge.color,padding:'2px 10px',borderRadius:20,fontSize:12,fontWeight:600,whiteSpace:'nowrap'}}, badge.label)),
+              e('td', null,
+                r.shortages && r.shortages.length > 0
+                  ? r.shortages.map((s,i) => e('span', {key:i, style:{display:'inline-block',background:'#fee2e2',color:'#991b1b',padding:'1px 7px',borderRadius:20,fontSize:11,fontWeight:600,marginRight:3,whiteSpace:'nowrap'}}, SKIP_LABELS[s]||s))
+                  : null),
+            );
+
+            if (!isOpen || !hasDetail) return [mainRow];
+
+            const detailRow = e('tr', {key:`${r.id}-detail`},
+              e('td', {colSpan: COLS,
+                style:{padding:0, background:'#f8fafc', borderBottom:'2px solid var(--border)'}},
+                e('div', {style:{padding:'6px 12px 10px 0', overflow:'hidden'}},
+                  e('table', {style:{width:'100%',borderCollapse:'collapse',fontSize:13,tableLayout:'fixed'}},
+                    e('colgroup', null,
+                      e('col', {style:{width:28}}),
+                      e('col', {style:{width:60}}),
+                      e('col', {style:{width:'auto'}}),
+                      e('col', {style:{width:80}}),
+                      e('col', {style:{width:80}}),
+                      e('col', {style:{width:140}}),
+                      e('col', {style:{width:160}}),
+                    ),
+                    e('thead', null, e('tr', {style:{color:'var(--muted)',fontSize:11,fontWeight:600}},
+                      e('th', null),
+                      e('th', null),
+                      e('th', {style:{textAlign:'left',padding:'4px 8px 4px 0',fontWeight:600}}, 'Заготовка'),
+                      e('th', {style:{textAlign:'right',padding:'4px 8px',fontWeight:600}}, 'План, шт'),
+                      e('th', {style:{textAlign:'right',padding:'4px 8px',fontWeight:600}}, 'Факт, шт'),
+                      e('th', {style:{textAlign:'right',padding:'4px 8px',fontWeight:600}}, 'Расход по техкарте, кг'),
+                      e('th', {style:{textAlign:'left',padding:'4px 8px',fontWeight:600}}, 'Нехватка'),
+                    )),
+                    e('tbody', null,
+                      r.itemBreakdown.map((b, i) => e('tr', {key:i,
+                        style:{borderTop:'1px solid var(--border)'}},
+                        e('td', null),
+                        e('td', null),
+                        e('td', {style:{padding:'5px 8px 5px 0', fontWeight:500}}, b.name),
+                        e('td', {style:{textAlign:'right',padding:'5px 8px',fontVariantNumeric:'tabular-nums',color:'var(--muted)'}}, b.plan || '—'),
+                        e('td', {style:{textAlign:'right',padding:'5px 8px',fontVariantNumeric:'tabular-nums',
+                          fontWeight: b.fact > 0 ? 600 : undefined,
+                          color: b.fact === 0 ? 'var(--muted)' : b.fact < b.plan ? 'var(--danger,#dc2626)' : '#16a34a'}},
+                          b.fact ?? '—'),
+                        e('td', {style:{textAlign:'right',padding:'5px 8px',fontVariantNumeric:'tabular-nums',fontWeight:600}},
+                          b.consumedG > 0.1 ? fmtKg(b.consumedG/1000) : '—'),
+                        e('td', {style:{padding:'5px 8px'}},
+                          b.skipReason
+                            ? e('span', {style:{background:'#fee2e2',color:'#991b1b',padding:'1px 7px',borderRadius:20,fontSize:11,fontWeight:600}}, SKIP_LABELS[b.skipReason]||b.skipReason)
+                            : null),
+                      ))
+                    )
+                  )
+                )
+              )
+            );
+
+            return [mainRow, detailRow];
+          })
+        )
+      )
+    )
+  );
+}
+
+// ============================================================
 // ISSUANCE TAB — сырьё и остатки мясного цеха
 // ============================================================
+
+// ============================================================
+// EXTRA REQUEST SECTION — допзапрос сырья (➕ к выданному)
+// ============================================================
+function ExtraRequestSection({dateKey, sheetsData, items, setItems}) {
+  const [ingId, setIngId]     = useState('');
+  const [weightStr, setWeight] = useState('');
+  const [saving, setSaving]   = useState(false);
+  const [err, setErr]         = useState('');
+
+  const ingOptions = sheetsData.map(it => ({id: it.ingredient_id, name: it.ing_name}));
+
+  async function handleAdd() {
+    const id = Number(ingId);
+    const kg = parseFloat(weightStr.replace(',','.'));
+    if (!id || !kg || kg <= 0) { setErr('Укажите сырьё и количество'); return; }
+    const ing = ingOptions.find(o => o.id === id);
+    setSaving(true); setErr('');
+    try {
+      const r = await fetch(`/api/raw-material/extra-request/${dateKey}`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ingredient_id:id, ing_name:ing?.name||'', weight_kg:kg}),
+      });
+      if (r.ok) {
+        const d = await r.json();
+        setItems(prev => [{id:d.id, ingredient_id:id, ing_name:ing?.name||'', weight_kg:kg, created_at:new Date().toISOString()}, ...prev]);
+        setIngId(''); setWeight('');
+      } else { setErr('Ошибка сохранения'); }
+    } catch(e) { setErr('Ошибка соединения'); }
+    setSaving(false);
+  }
+
+  async function handleDelete(id) {
+    await fetch(`/api/raw-material/extra-request/${dateKey}/${id}`, {method:'DELETE'});
+    setItems(prev => prev.filter(it => it.id !== id));
+  }
+
+  const fmtKg2 = v => v > 0 ? v.toLocaleString('ru-RU', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—';
+
+  return e('div', {style:{padding:'20px'}},
+    e('h3', {style:{margin:'0 0 4px',fontSize:16,fontWeight:700}}, 'Допзапрос сырья'),
+    e('p', {style:{margin:'0 0 16px',fontSize:13,color:'var(--muted)'}},
+      'Дополнительно запрошенное сырьё прибавляется к колонке «Выдано» в отчёте.'),
+    // Форма добавления
+    e('div', {style:{background:'var(--surface)',borderRadius:12,padding:16,border:'1px solid var(--border)',marginBottom:20}},
+      e('div', {style:{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end'}},
+        e('div', {style:{flex:'1 1 260px'}},
+          e('label', {style:{fontSize:12,color:'var(--muted)',display:'block',marginBottom:4}}, 'Сырьё'),
+          e('select', {
+            value: ingId,
+            onChange: ev => setIngId(ev.target.value),
+            style:{width:'100%',padding:'8px 10px',borderRadius:8,border:'1px solid var(--border)',
+              background:'var(--bg)',color:'var(--text)',fontSize:14},
+          },
+            e('option', {value:''}, '— выберите сырьё —'),
+            ingOptions.map(o => e('option', {key:o.id, value:o.id}, o.name))
+          ),
+        ),
+        e('div', {style:{flex:'0 0 130px'}},
+          e('label', {style:{fontSize:12,color:'var(--muted)',display:'block',marginBottom:4}}, 'Количество, кг'),
+          e('input', {
+            type:'text', inputMode:'decimal', placeholder:'0.00',
+            value: weightStr, onChange: ev => setWeight(ev.target.value),
+            style:{width:'100%',padding:'8px 10px',borderRadius:8,border:'1px solid var(--border)',
+              background:'var(--bg)',color:'var(--text)',fontSize:14,textAlign:'right'},
+          }),
+        ),
+        e('button', {
+          onClick: handleAdd, disabled: saving || !ingId || !weightStr,
+          style:{padding:'8px 20px',borderRadius:8,border:'none',fontWeight:700,fontSize:14,
+            background:'var(--accent)',color:'white',cursor:'pointer',whiteSpace:'nowrap',
+            opacity: (!ingId||!weightStr||saving) ? 0.5 : 1},
+        }, saving ? '...' : '+ Добавить'),
+      ),
+      err && e('div', {style:{color:'var(--danger,#dc2626)',fontSize:13,marginTop:8}}, err),
+    ),
+    // Список добавленных
+    items.length === 0
+      ? e('div', {className:'empty-state'}, 'Допзапросов ещё нет')
+      : e('div', {className:'pack-table-wrap'},
+          e('table', {className:'pack-table'},
+            e('thead', null, e('tr', null,
+              e('th', null, 'Сырьё'),
+              e('th', {style:{width:120,textAlign:'right'}}, 'Кол-во, кг'),
+              e('th', {style:{width:40}}),
+            )),
+            e('tbody', null,
+              items.map(it => e('tr', {key:it.id},
+                e('td', null, it.ing_name),
+                e('td', {style:{textAlign:'right',fontWeight:600}}, fmtKg2(it.weight_kg)),
+                e('td', {style:{textAlign:'center'}},
+                  e('button', {onClick:()=>handleDelete(it.id),
+                    style:{border:'none',background:'none',color:'var(--muted)',cursor:'pointer',fontSize:16,padding:'2px 4px'}},
+                    '✕')),
+              ))
+            )
+          )
+        )
+  );
+}
+
+// ============================================================
+// WRITEOFF SECTION — списание сырья (вычитается из выданного)
+// ============================================================
+function WriteoffSection({dateKey, sheetsData, items, setItems}) {
+  const [ingId, setIngId]     = useState('');
+  const [weightStr, setWeight] = useState('');
+  const [comment, setComment] = useState('');
+  const [saving, setSaving]   = useState(false);
+  const [err, setErr]         = useState('');
+
+  const ingOptions = sheetsData.map(it => ({id: it.ingredient_id, name: it.ing_name}));
+
+  async function handleAdd() {
+    const id = Number(ingId);
+    const kg = parseFloat(weightStr.replace(',','.'));
+    if (!id || !kg || kg <= 0) { setErr('Укажите сырьё и количество'); return; }
+    const ing = ingOptions.find(o => o.id === id);
+    setSaving(true); setErr('');
+    try {
+      const r = await fetch(`/api/raw-material/writeoff/${dateKey}`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ingredient_id:id, ing_name:ing?.name||'', weight_kg:kg, comment}),
+      });
+      if (r.ok) {
+        const d = await r.json();
+        setItems(prev => [{id:d.id, ingredient_id:id, ing_name:ing?.name||'', weight_kg:kg, comment, entered_at:new Date().toISOString()}, ...prev]);
+        setIngId(''); setWeight(''); setComment('');
+      } else { setErr('Ошибка сохранения'); }
+    } catch(e) { setErr('Ошибка соединения'); }
+    setSaving(false);
+  }
+
+  async function handleDelete(id) {
+    await fetch(`/api/raw-material/writeoff/${dateKey}/${id}`, {method:'DELETE'});
+    setItems(prev => prev.filter(it => it.id !== id));
+  }
+
+  const fmtKg2 = v => v > 0 ? v.toLocaleString('ru-RU', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—';
+
+  return e('div', {style:{padding:'20px'}},
+    e('h3', {style:{margin:'0 0 4px',fontSize:16,fontWeight:700}}, 'Списание сырья'),
+    e('p', {style:{margin:'0 0 16px',fontSize:13,color:'var(--muted)'}},
+      'Списанное сырьё вычитается из остатка в отчёте выдачи.'),
+    // Форма
+    e('div', {style:{background:'var(--surface)',borderRadius:12,padding:16,border:'1px solid var(--border)',marginBottom:20}},
+      e('div', {style:{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end'}},
+        e('div', {style:{flex:'1 1 260px'}},
+          e('label', {style:{fontSize:12,color:'var(--muted)',display:'block',marginBottom:4}}, 'Сырьё'),
+          e('select', {
+            value: ingId,
+            onChange: ev => setIngId(ev.target.value),
+            style:{width:'100%',padding:'8px 10px',borderRadius:8,border:'1px solid var(--border)',
+              background:'var(--bg)',color:'var(--text)',fontSize:14},
+          },
+            e('option', {value:''}, '— выберите сырьё —'),
+            ingOptions.map(o => e('option', {key:o.id, value:o.id}, o.name))
+          ),
+        ),
+        e('div', {style:{flex:'0 0 130px'}},
+          e('label', {style:{fontSize:12,color:'var(--muted)',display:'block',marginBottom:4}}, 'Количество, кг'),
+          e('input', {
+            type:'text', inputMode:'decimal', placeholder:'0.00',
+            value: weightStr, onChange: ev => setWeight(ev.target.value),
+            style:{width:'100%',padding:'8px 10px',borderRadius:8,border:'1px solid var(--border)',
+              background:'var(--bg)',color:'var(--text)',fontSize:14,textAlign:'right'},
+          }),
+        ),
+        e('div', {style:{flex:'1 1 200px'}},
+          e('label', {style:{fontSize:12,color:'var(--muted)',display:'block',marginBottom:4}}, 'Причина (необязательно)'),
+          e('input', {
+            type:'text', placeholder:'Причина списания...',
+            value: comment, onChange: ev => setComment(ev.target.value),
+            style:{width:'100%',padding:'8px 10px',borderRadius:8,border:'1px solid var(--border)',
+              background:'var(--bg)',color:'var(--text)',fontSize:14},
+          }),
+        ),
+        e('button', {
+          onClick: handleAdd, disabled: saving || !ingId || !weightStr,
+          style:{padding:'8px 20px',borderRadius:8,border:'none',fontWeight:700,fontSize:14,
+            background:'#dc2626',color:'white',cursor:'pointer',whiteSpace:'nowrap',
+            opacity: (!ingId||!weightStr||saving) ? 0.5 : 1},
+        }, saving ? '...' : '📤 Списать'),
+      ),
+      err && e('div', {style:{color:'var(--danger,#dc2626)',fontSize:13,marginTop:8}}, err),
+    ),
+    // Список
+    items.length === 0
+      ? e('div', {className:'empty-state'}, 'Списаний ещё нет')
+      : e('div', {className:'pack-table-wrap'},
+          e('table', {className:'pack-table'},
+            e('thead', null, e('tr', null,
+              e('th', null, 'Сырьё'),
+              e('th', {style:{width:120,textAlign:'right'}}, 'Кол-во, кг'),
+              e('th', null, 'Причина'),
+              e('th', {style:{width:40}}),
+            )),
+            e('tbody', null,
+              items.map(it => e('tr', {key:it.id},
+                e('td', null, it.ing_name),
+                e('td', {style:{textAlign:'right',fontWeight:600}}, fmtKg2(it.weight_kg)),
+                e('td', {style:{color:'var(--muted)',fontSize:13}}, it.comment||'—'),
+                e('td', {style:{textAlign:'center'}},
+                  e('button', {onClick:()=>handleDelete(it.id),
+                    style:{border:'none',background:'none',color:'var(--muted)',cursor:'pointer',fontSize:16,padding:'2px 4px'}},
+                    '✕')),
+              ))
+            )
+          )
+        )
+  );
+}
+
 function IssuanceTab({dateKey, activeTcEE, activeTcUD, shift}) {
   const today = new Date().toISOString().slice(0, 10);
   const [viewDate, setViewDate] = useState(dateKey || today);
@@ -10427,10 +11022,17 @@ function IssuanceTab({dateKey, activeTcEE, activeTcUD, shift}) {
 
   const [issuanceItems, setIssuanceItems] = useState(null); // null = не загружено ещё
   const [wasteItems, setWasteItems] = useState([]);
+  const [sheetsData, setSheetsData] = useState([]); // данные из Google Sheets (Из менеджа / По факту)
   const [fileName, setFileName] = useState('');
   const [error, setError] = useState('');
   const [shiftIngData, setShiftIngData] = useState(null);
   const [shiftLoading, setShiftLoading] = useState(false);
+  const [dbShortages, setDbShortages] = useState({}); // {stKey-itemId → {reason, detail}}
+  const [sheetsLoading, setSheetsLoading] = useState(false);
+  const [sheetsLoadedAt, setSheetsLoadedAt] = useState(null);
+  const [issuanceSubTab, setIssuanceSubTab] = useState('report');
+  const [extraRequests, setExtraRequests] = useState([]);
+  const [writeoffs, setWriteoffs] = useState([]);
 
   function collectIngredients(obj, acc) {
     for (const ing of (obj.ingredients||[])) acc.push(ing);
@@ -10441,14 +11043,20 @@ function IssuanceTab({dateKey, activeTcEE, activeTcUD, shift}) {
   useEffect(() => {
     setIssuanceItems(null);
     setWasteItems([]);
+    setSheetsData([]);
+    setSheetsLoadedAt(null);
     setFileName('');
     setError('');
     setShiftIngData(null);
     (async () => {
       try {
-        const [issR, wasteR] = await Promise.all([
+        const [issR, wasteR, sheetsR, shortR, extraR, writeoffR] = await Promise.all([
           fetch(`/api/raw-material/issuance/${viewDate}`),
           fetch(`/api/raw-material/waste/${viewDate}`),
+          fetch(`/api/raw-material/issuance-sheets/${viewDate}`),
+          fetch(`/api/raw-material/shortage/${viewDate}`),
+          fetch(`/api/raw-material/extra-request/${viewDate}`),
+          fetch(`/api/raw-material/writeoff/${viewDate}`),
         ]);
         if (issR.ok) {
           const d = await issR.json();
@@ -10456,16 +11064,49 @@ function IssuanceTab({dateKey, activeTcEE, activeTcUD, shift}) {
             setIssuanceItems(d.items);
             setFileName('(загружено из базы)');
           } else {
-            setIssuanceItems([]); // нет данных для этой даты
+            setIssuanceItems([]);
           }
         }
         if (wasteR.ok) {
           const d = await wasteR.json();
           setWasteItems(d.items || []);
         }
+        if (sheetsR.ok) {
+          const d = await sheetsR.json();
+          if (d.items?.length) {
+            setSheetsData(d.items);
+            setSheetsLoadedAt(d.items[0]?.loaded_at || null);
+          }
+        }
+        if (shortR.ok) {
+          const d = await shortR.json();
+          const map = {};
+          (d.items || []).forEach(s => { map[`${s.station_key}-${s.item_id}`] = s; });
+          setDbShortages(map);
+        }
+        if (extraR.ok) { const d = await extraR.json(); setExtraRequests(d.items || []); }
+        if (writeoffR.ok) { const d = await writeoffR.json(); setWriteoffs(d.items || []); }
       } catch(e) {}
     })();
   }, [viewDate]);
+
+  async function loadFromSheets() {
+    setSheetsLoading(true);
+    setError('');
+    try {
+      const r = await fetch(`/api/raw-material/issuance-sheets/${viewDate}`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({}),
+      });
+      const d = await r.json();
+      if (!r.ok) { setError(d.error || 'Ошибка загрузки из таблицы'); }
+      else {
+        setSheetsData(d.items || []);
+        setSheetsLoadedAt(new Date().toISOString());
+      }
+    } catch(e) { setError('Ошибка соединения: ' + e.message); }
+    setSheetsLoading(false);
+  }
 
   // Загружаем данные техкарты + фактов ДХ
   useEffect(() => {
@@ -10489,11 +11130,16 @@ function IssuanceTab({dateKey, activeTcEE, activeTcUD, shift}) {
           const dd = await dhResp.json();
           (dd.items||[]).forEach(it => { factMap[it.item_id] = it.to_kitchen||0; });
         }
-        // Факты из смены (pack-table, если нет ДХ/Склад записи)
+        // Факты из смены
         let shiftFacts = {};
+        let shiftSkipReasons = shift?.skipReasons || {};
         if (shiftResp.ok) {
           const sd = await shiftResp.json();
           shiftFacts = calcFactTotals(sd.shift?.facts || {});
+          // Пропуски: для архивных дат берём из API, для текущей — из пропса shift
+          if (!Object.keys(shiftSkipReasons).length) {
+            shiftSkipReasons = sd.shift?.skipReasons || {};
+          }
         }
 
         // Строим карту item_id → {planQty, ingredients: [{id,name,planAmount,unit}]}
@@ -10503,13 +11149,13 @@ function IssuanceTab({dateKey, activeTcEE, activeTcUD, shift}) {
 
         (tc.stations||[]).forEach(st => {
           (st.items||[]).forEach(item => {
-            if (!item.name.startsWith('ДХ')) return;
-            const lines = packLinesObj[item.id];
+            const ings = [];
+            collectIngredients(item, ings);
+            if (!ings.length) return;
+            const lines = packLinesObj[String(item.id)];
             const plan = lines != null
               ? (Array.isArray(lines) ? lines.reduce((s,l)=>s+(Number(l.qty)||0), 0) : (Number(lines.qty)||0))
               : (item.packPlan ? (Number(item.packPlan.qty)||0) : 0);
-            const ings = [];
-            collectIngredients(item, ings);
             // Схлопываем одинаковые ингредиенты
             const merged = {};
             ings.forEach(ing => {
@@ -10518,7 +11164,17 @@ function IssuanceTab({dateKey, activeTcEE, activeTcUD, shift}) {
               merged[ing.id].planAmount += ing.planAmount||0;
             });
             const fact = factMap[item.id] ?? shiftFacts[item.id] ?? 0;
-            ingMap[item.id] = {name:item.name, plan, fact, ingredients:Object.values(merged)};
+            // Собираем причины пропуска по item и по его pack-lines
+            const skipSet = new Set();
+            const itemSrKey = Object.keys(shiftSkipReasons).find(k => {
+              const m = k.match(/-(\d+)$/); return m && Number(m[1]) === item.id;
+            });
+            if (itemSrKey && shiftSkipReasons[itemSrKey]) skipSet.add(shiftSkipReasons[itemSrKey]);
+            Object.entries(shiftSkipReasons).forEach(([k, v]) => {
+              const m = k.match(/-(\d+)-pl-\d+$/);
+              if (m && Number(m[1]) === item.id && v) skipSet.add(v);
+            });
+            ingMap[item.id] = {name:item.name, plan, fact, skipReasons:[...skipSet], ingredients:Object.values(merged)};
           });
         });
         setShiftIngData(ingMap);
@@ -10576,40 +11232,113 @@ function IssuanceTab({dateKey, activeTcEE, activeTcUD, shift}) {
     setFileName('');
   }
 
+  // Карта данных из Google Sheets: ingredient_id → {from_manager, by_fact}
+  const sheetsMap = useMemo(() => {
+    const m = {};
+    sheetsData.forEach(it => { m[it.ingredient_id] = it; });
+    return m;
+  }, [sheetsData]);
+
   // Агрегируем данные по ингредиентам
+  // Источник выданного: приоритет — by_fact из Sheets, fallback — issuance Excel
   const ingRows = (() => {
-    if (!issuanceItems?.length) return [];
+    // Строим карту из обоих источников
     const map = {};
-    issuanceItems.forEach(it => {
-      if (!map[it.ingredient_id]) map[it.ingredient_id] = {id:it.ingredient_id, name:it.ing_name, issuedG:0, consumedG:0, wasteKg:0, writeoffKg:0};
+    // Из Google Sheets (основной источник)
+    sheetsData.forEach(it => {
+      if (!map[it.ingredient_id]) map[it.ingredient_id] = {
+        id: it.ingredient_id, name: it.ing_name,
+        fromManagerKg: it.from_manager || 0,
+        byFactKg: it.by_fact || 0,
+        issuedG: 0, consumedG: 0, wasteKg: 0, writeoffKg: 0,
+        source: 'sheets',
+      };
+    });
+    // Из Excel 1С (дополняем или создаём если нет в Sheets)
+    (issuanceItems || []).forEach(it => {
+      if (!map[it.ingredient_id]) {
+        map[it.ingredient_id] = {id:it.ingredient_id, name:it.ing_name, fromManagerKg:0, byFactKg:0, issuedG:0, consumedG:0, wasteKg:0, writeoffKg:0, source:'excel'};
+      }
       map[it.ingredient_id].issuedG += it.mass_g || 0;
     });
-    // Расход по факту: суммируем по всем ДХ-позициям
-    Object.values(shiftIngData || {}).forEach(dhItem => {
+    if (!Object.keys(map).length) return [];
+    // Расход по факту + причины пропуска: суммируем по всем позициям
+    Object.entries(shiftIngData || {}).forEach(([itemIdStr, dhItem]) => {
       const ratio = dhItem.plan > 0 ? (dhItem.fact || 0) / dhItem.plan : 0;
+      // Нехватка для этой позиции из dbShortages (по itemId)
+      const dbShortKey = Object.keys(dbShortages).find(k => { const m=k.match(/-(\d+)$/); return m && Number(m[1])===Number(itemIdStr); });
+      const dbShortReason = dbShortKey ? dbShortages[dbShortKey]?.reason : null;
       (dhItem.ingredients || []).forEach(ing => {
-        if (map[ing.id]) map[ing.id].consumedG += (ing.planAmount || 0) * ratio;
+        if (!map[ing.id]) return;
+        const consumed = (ing.planAmount || 0) * ratio;
+        map[ing.id].consumedG += consumed;
+        // Разбивка по позициям для детали
+        if (!map[ing.id].itemBreakdown) map[ing.id].itemBreakdown = [];
+        // Собираем нехватку: из shift.skipReasons или dbShortages
+        const skipReason = (dhItem.skipReasons && dhItem.skipReasons[0]) || dbShortReason || null;
+        map[ing.id].itemBreakdown.push({
+          itemId: Number(itemIdStr),
+          name: dhItem.name,
+          plan: dhItem.plan,
+          fact: dhItem.fact,
+          ingPlanAmount: ing.planAmount || 0,
+          consumedG: consumed,
+          skipReason,
+        });
+        // Агрегируем причины пропуска на ингредиент
+        const reasons = [...(dhItem.skipReasons||[])];
+        if (dbShortReason) reasons.push(dbShortReason);
+        reasons.forEach(r => {
+          if (!map[ing.id].skipSet) map[ing.id].skipSet = new Set();
+          map[ing.id].skipSet.add(r);
+        });
+      });
+    });
+    // Нехватки из управляющего UI (shift_item_shortage)
+    Object.entries(dbShortages).forEach(([k, s]) => {
+      // k = "station_key-itemId", извлекаем itemId как последний числовой сегмент
+      const m = k.match(/-(\d+)$/);
+      if (!m) return;
+      const itemId = Number(m[1]);
+      const dhItem = (shiftIngData || {})[itemId];
+      if (!dhItem) return;
+      dhItem.ingredients.forEach(ing => {
+        if (!map[ing.id]) return;
+        if (!map[ing.id].skipSet) map[ing.id].skipSet = new Set();
+        map[ing.id].skipSet.add(s.reason);
       });
     });
     // Отходы
     wasteItems.forEach(it => {
       if (map[it.ingredient_id]) map[it.ingredient_id].wasteKg = it.weight_kg || 0;
     });
+    // Допзапросы (+к выданному)
+    extraRequests.forEach(it => {
+      if (map[it.ingredient_id]) map[it.ingredient_id].extraKg = (map[it.ingredient_id].extraKg||0) + (it.weight_kg||0);
+      else map[it.ingredient_id] = {id:it.ingredient_id, name:it.ing_name, fromManagerKg:0, byFactKg:0, issuedG:0, consumedG:0, wasteKg:0, writeoffKg:0, extraKg:it.weight_kg||0, source:'extra'};
+    });
+    // Списания (-из выданного)
+    writeoffs.forEach(it => {
+      if (map[it.ingredient_id]) map[it.ingredient_id].writeoffKg = (map[it.ingredient_id].writeoffKg||0) + (it.weight_kg||0);
+    });
     return Object.values(map).map(r => {
-      const issuedKg = r.issuedG / 1000;
+      const shortages = r.skipSet ? [...r.skipSet] : [];
+      // Выдано: by_fact из Sheets + допзапросы; fallback issuedG из Excel
+      const baseIssuedKg = r.byFactKg > 0 ? r.byFactKg : r.issuedG / 1000;
+      const issuedKg = baseIssuedKg + (r.extraKg || 0);
       const consumedKg = r.consumedG / 1000;
       const balance = issuedKg - consumedKg - r.wasteKg - r.writeoffKg;
       let status;
       if (consumedKg < 0.001) {
-        status = 'no_fact';       // факт не внесён
+        status = 'no_fact';
       } else if (r.wasteKg > 0) {
-        status = 'done';          // отходы внесены → выполнено
+        status = 'done';
       } else if (Math.abs(balance) < 0.1) {
-        status = 'ok';            // сходится без отходов
+        status = 'ok';
       } else {
-        status = 'wait_waste';    // есть остаток, ждём отходов
+        status = 'wait_waste';
       }
-      return {...r, issuedKg, consumedKg, balance, status};
+      return {...r, issuedKg, consumedKg, balance, status, shortages, itemBreakdown: r.itemBreakdown||[]};
     });
   })();
 
@@ -10618,16 +11347,6 @@ function IssuanceTab({dateKey, activeTcEE, activeTcUD, shift}) {
     waste: a.waste+r.wasteKg, writeoff: a.writeoff+r.writeoffKg, balance: a.balance+r.balance,
   }), {issued:0,consumed:0,waste:0,writeoff:0,balance:0});
 
-
-  const STATUS_BADGE = {
-    no_fact:    {label:'Не выполнено', bg:'#f3f4f6', color:'#6b7280'},
-    ok:         {label:'Сходится',     bg:'#dcfce7', color:'#16a34a'},
-    wait_waste: {label:'Ждём отходов', bg:'#fef9c3', color:'#92400e'},
-    done:       {label:'Выполнено',    bg:'#dcfce7', color:'#16a34a'},
-  };
-
-  const fmtKg = n => n.toLocaleString('ru-RU', {minimumFractionDigits:2, maximumFractionDigits:2});
-  const fmtKg1 = n => n.toLocaleString('ru-RU', {minimumFractionDigits:1, maximumFractionDigits:1});
 
   // Навигация по датам
   function shiftViewDate(delta) {
@@ -10660,48 +11379,49 @@ function IssuanceTab({dateKey, activeTcEE, activeTcUD, shift}) {
       ),
     ),
 
-    // Блок загрузки файла — только сегодня и если файл ещё не загружен
-    isToday && !hasIssuance && e('div', {style:{padding:'0 20px 20px'}},
+    // Вкладки
+    e('div', {style:{display:'flex',gap:0,padding:'0 20px',borderBottom:'2px solid var(--border)',marginBottom:0}},
+      [
+        {key:'report',  label:'📋 Отчёт'},
+        {key:'extra',   label:'➕ Допзапрос'},
+        {key:'writeoff',label:'📤 Списание'},
+      ].map(t => e('button', {key:t.key, onClick:()=>setIssuanceSubTab(t.key),
+        style:{
+          padding:'9px 18px', fontSize:13, fontWeight:600, border:'none', background:'none', cursor:'pointer',
+          borderBottom: issuanceSubTab===t.key ? '2px solid var(--accent)' : '2px solid transparent',
+          color: issuanceSubTab===t.key ? 'var(--accent)' : 'var(--muted)',
+          marginBottom: -2,
+        }}, t.label))
+    ),
+
+    // Блок загрузки (только на вкладке Отчёт)
+    issuanceSubTab === 'report' && e('div', {style:{padding:'0 20px 20px'}},
       e('div', {style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}},
+        // Карточка: Google Sheets склада
         e('div', {style:{background:'var(--surface)',borderRadius:12,padding:20,border:'1px solid var(--border)'}},
-          e('h3', {style:{margin:'0 0 8px',fontSize:15,fontWeight:700}}, 'Файл выдачи'),
+          e('h3', {style:{margin:'0 0 8px',fontSize:15,fontWeight:700}}, '📊 Из таблицы склада'),
           e('p', {style:{margin:'0 0 12px',fontSize:13,color:'var(--muted)',lineHeight:1.5}},
-            'Выдача сырья на мясной цех за день. Загрузите отчёт из 1С.'),
-          e('label', {
-            style:{display:'block',border:'2px dashed var(--border)',borderRadius:8,padding:'24px 16px',
-              textAlign:'center',cursor:'pointer',background:'var(--bg)'},
-            onDragOver: ev => ev.preventDefault(),
-            onDrop: ev => { ev.preventDefault(); const f=ev.dataTransfer.files?.[0]; if(f) handleFile(f); },
-          },
-            e('div', {style:{fontWeight:600,marginBottom:4}}, 'Загрузить новый файл'),
-            e('div', {style:{fontSize:12,color:'var(--muted)'}}, 'Excel (.xlsx, .xls), можно перетащить сюда'),
-            e('input', {type:'file',accept:'.xlsx,.xls',style:{display:'none'},
-              onChange: ev => { const f=ev.target.files?.[0]; if(f) handleFile(f); ev.target.value=''; }})
-          ),
+            'Значения «Из менеджа» и «По факту» из Google Sheets склада.'),
+          sheetsData.length > 0
+            ? e('div', {style:{marginBottom:12}},
+                e('div', {style:{color:'var(--success,#16a34a)',fontWeight:600,fontSize:13,marginBottom:4}},
+                  `✓ Загружено ${sheetsData.length} позиций`),
+                sheetsLoadedAt && e('div', {style:{fontSize:12,color:'var(--muted)'}},
+                  'Обновлено: ' + new Date(sheetsLoadedAt).toLocaleString('ru-RU', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}))
+              )
+            : e('div', {style:{color:'var(--muted)',fontSize:13,marginBottom:12}}, 'Данные не загружены'),
+          e('button', {
+            onClick: loadFromSheets, disabled: sheetsLoading,
+            style:{width:'100%',padding:'10px',fontSize:14,fontWeight:600,borderRadius:8,border:'none',
+              background:'var(--accent)',color:'white',cursor:sheetsLoading?'default':'pointer',opacity:sheetsLoading?0.7:1},
+          }, sheetsLoading ? 'Загрузка...' : '🔄 Загрузить из таблицы'),
           error && e('div',{style:{color:'var(--danger,#dc2626)',fontSize:13,marginTop:8}}, error),
         ),
-        e('div', {style:{background:'var(--surface)',borderRadius:12,padding:20,border:'1px solid var(--border)'}},
-          e('h3', {style:{margin:'0 0 12px',fontSize:15,fontWeight:700}}, 'Загруженные файлы'),
-          e('div', {style:{color:'var(--muted)',fontSize:13}}, 'Файл не загружен'),
-        ),
       )
     ),
 
-    // Если файл загружен — показываем статус файла с кнопкой "Убрать" (только сегодня)
-    hasIssuance && e('div', {style:{padding:'0 20px 16px'}},
-      e('div', {style:{background:'#f0fdf4',border:'1px solid #86efac',borderRadius:10,padding:'12px 16px',display:'flex',alignItems:'center',justifyContent:'space-between',gap:12}},
-        e('div', null,
-          e('div', {style:{fontWeight:600,color:'#16a34a'}}, '✓ ' + (fileName && fileName !== '(загружено из базы)' ? fileName : 'Файл выдачи')),
-          e('div', {style:{fontSize:12,color:'var(--muted)',marginTop:2}}, `Применён · ${ingRows.length} позиций сырья`),
-        ),
-        isToday && e('button', {onClick:handleClearIssuance,
-          style:{padding:'4px 12px',border:'1px solid #86efac',borderRadius:6,background:'white',color:'#16a34a',cursor:'pointer',fontWeight:600,fontSize:13,whiteSpace:'nowrap'}},
-          'Убрать'),
-      )
-    ),
-
-    // Сводные карточки
-    e('div', {style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(130px,1fr))',gap:12,padding:'0 20px 16px'}},
+    // Сводные карточки (только на вкладке Отчёт)
+    issuanceSubTab === 'report' && e('div', {style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(130px,1fr))',gap:12,padding:'0 20px 16px'}},
       [
         {label:'Выдано',       v:totals.issued},
         {label:'Ушло в работу',v:totals.consumed},
@@ -10718,44 +11438,23 @@ function IssuanceTab({dateKey, activeTcEE, activeTcUD, shift}) {
       ))
     ),
 
+    // Основная таблица (только на вкладке Отчёт)
+    issuanceSubTab === 'report' && shiftLoading && e('div',{style:{color:'var(--muted)',padding:'12px 20px'}},'Загрузка данных...'),
+    issuanceSubTab === 'report' && ingRows.length > 0 && e(IssuanceTable, {ingRows}),
+    issuanceSubTab === 'report' && !ingRows.length && !shiftLoading &&
+      e('div', {className:'empty-state', style:{marginTop:40}}, 'Загрузите данные из Google Sheets чтобы увидеть сводку'),
 
-    // Основная таблица
-    shiftLoading && e('div',{style:{color:'var(--muted)',padding:'12px 20px'}},'Загрузка данных...'),
-    ingRows.length > 0 && e('div', {style:{padding:'0 20px'}},
-      e('div', {className:'pack-table-wrap'},
-        e('table', {className:'pack-table'},
-          e('thead', null, e('tr', null,
-            e('th', null, 'Сырьё'),
-            e('th', {style:{width:110,textAlign:'right'}}, 'Выдано, кг'),
-            e('th', {style:{width:130,textAlign:'right'}}, 'Расход по факту, кг'),
-            e('th', {style:{width:110,textAlign:'right'}}, 'Отходы, кг'),
-            e('th', {style:{width:100,textAlign:'right'}}, 'Остаток, кг'),
-            e('th', {style:{width:130}}, 'Статус'),
-          )),
-          e('tbody', null,
-            ingRows.map(r => {
-              const badge = STATUS_BADGE[r.status] || {label:r.status,bg:'#f3f4f6',color:'#6b7280'};
-              return e('tr', {key:r.id},
-                e('td', {style:{fontWeight:500}}, r.name),
-                e('td', {style:{textAlign:'right',fontWeight:600,fontVariantNumeric:'tabular-nums'}}, fmtKg(r.issuedKg)),
-                e('td', {style:{textAlign:'right',fontVariantNumeric:'tabular-nums'}}, r.consumedKg>0.001 ? fmtKg(r.consumedKg) : '—'),
-                e('td', {style:{textAlign:'right',fontVariantNumeric:'tabular-nums'}},
-                  r.wasteKg > 0
-                    ? fmtKg(r.wasteKg)
-                    : e('span', {style:{background:'#fef9c3',color:'#92400e',padding:'1px 8px',borderRadius:4,fontSize:12,fontWeight:600}}, 'не внесено')),
-                e('td', {style:{textAlign:'right',fontWeight:600,fontVariantNumeric:'tabular-nums',
-                  color: Math.abs(r.balance)<0.1 ? 'var(--muted)' : r.balance<0 ? 'var(--danger,#dc2626)' : 'var(--text)'}},
-                  fmtKg(r.balance)),
-                e('td', null,
-                  e('span', {style:{background:badge.bg,color:badge.color,padding:'2px 10px',borderRadius:20,fontSize:12,fontWeight:600,whiteSpace:'nowrap'}}, badge.label)),
-              );
-            })
-          )
-        )
-      )
-    ),
-    !issuanceItems?.length && !shiftLoading &&
-      e('div', {className:'empty-state', style:{marginTop:40}}, 'Загрузите файл выдачи, чтобы увидеть сводку'),
+    // Вкладка Допзапрос
+    issuanceSubTab === 'extra' && e(ExtraRequestSection, {
+      dateKey: viewDate, sheetsData,
+      items: extraRequests, setItems: setExtraRequests,
+    }),
+
+    // Вкладка Списание
+    issuanceSubTab === 'writeoff' && e(WriteoffSection, {
+      dateKey: viewDate, sheetsData,
+      items: writeoffs, setItems: setWriteoffs,
+    }),
   );
 }
 
@@ -10793,6 +11492,8 @@ function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesCh
         '🧪 Акты проработки'),
       e('button',{className:'mgr-tab'+(tab==='dh-storage'?' active':''),onClick:()=>switchTab('dh-storage')},
         '📦 ДХ / Склад'),
+      e('button',{className:'mgr-tab'+(tab==='issuance'?' active':''),onClick:()=>switchTab('issuance')},
+        '🥩 Выдача'),
     ),
     tab==='dashboard' && e(DashboardTab,{dateKey,shift,allEmployees,archiveIndex,activeTcEE,activeTcUD,globalStationConfig,shopGroups,precutConfig}),
     tab==='kitchen' && (
@@ -10800,7 +11501,7 @@ function ManagerPage({dateKey, shift, onShiftChange, allEmployees, onEmployeesCh
         ? e(KitchenShopPage,{
             shopGroup:selectedShop, shift, onShiftChange, allEmployees,
             isManager:true, shopGroups:workshopGroups,
-            dateKey,
+            dateKey, activeTcEE, activeTcUD,
             precutConfig, onPrecutConfigChange,
             onBack:(targetGroup)=>{
               if(targetGroup) setSelectedShop(targetGroup);
@@ -10847,7 +11548,7 @@ function KitchenManagerPage({dateKey, shift, onShiftChange, allTechcards, active
         ? e(KitchenShopPage, {
             shopGroup: selectedShop, shift, onShiftChange, allEmployees: [],
             isManager: true, shopGroups: workshopGroups,
-            dateKey,
+            dateKey, activeTcEE, activeTcUD,
             precutConfig, onPrecutConfigChange,
             onBack: (targetGroup) => {
               if (targetGroup) setSelectedShop(targetGroup);
@@ -11080,6 +11781,14 @@ function QualityChecklist({task, onSave, onClose, onReferenceAdded, onPhotosChan
   return e('div',{style:{paddingTop:12}},
     lightbox&&e(Lightbox,{photos:lightbox.photos,startIndex:lightbox.index,onClose:()=>setLightbox(null)}),
 
+    // Описание технологического процесса (только для ГЕ)
+    task.company==='ГЕ'&&task.process_description&&e('div',{style:{
+      marginBottom:14,padding:'10px 14px',background:'var(--bg)',borderRadius:10,
+      border:'1.5px solid var(--border)'}},
+      e('div',{style:{fontSize:12,fontWeight:700,color:'var(--muted)',marginBottom:6,textTransform:'uppercase',letterSpacing:'0.05em'}},'Описание технологического процесса'),
+      e('div',{style:{fontSize:13,whiteSpace:'pre-wrap',lineHeight:1.6}},task.process_description)
+    ),
+
     // Двухколоночный лейаут: чекпоинты слева, эталонное фото справа
     e('div',{style:{display:'flex',gap:20,alignItems:'flex-start'}},
 
@@ -11311,6 +12020,7 @@ function AddTasksDialog({standards, todayTasks, date, onAdd, onClose}) {
 // Вкладка «Библиотека эталонов»
 function CreateStandardFromItemDialog({onClose, onCreated}) {
   const [query,setQuery]=useState('');
+  const [source,setSource]=useState('items'); // 'items' | 'products' | 'wrappers'
   const [allItems,setAllItems]=useState([]);
   const [loadingItems,setLoadingItems]=useState(true);
   const [selected,setSelected]=useState(null);
@@ -11332,14 +12042,28 @@ function CreateStandardFromItemDialog({onClose, onCreated}) {
     setPhotos(ps=>{URL.revokeObjectURL(ps[i].url);return ps.filter((_,j)=>j!==i);});
   };
 
-  useEffect(()=>{
-    (async()=>{
+  const loadSource=async(src)=>{
+    setLoadingItems(true); setSelected(null); setQuery('');
+    if(src==='items'){
       const r=await fetch('/api/quality/items?q=');
       const d=await r.json();
-      setAllItems(d.items||[]);
-      setLoadingItems(false);
-    })();
-  },[]);
+      setAllItems((d.items||[]).map(it=>({item_id:it.item_id,name:it.name})));
+      setCompany('EE');
+    } else if(src==='products'){
+      const r=await fetch('/api/ready-food/products');
+      const d=await r.json();
+      setAllItems((d.products||[]).map(it=>({item_id:it.id,name:it.name})));
+      setCompany('блюдо');
+    } else {
+      const r=await fetch('/api/ready-food/wrappers');
+      const d=await r.json();
+      setAllItems((d.wrappers||[]).map(it=>({item_id:it.wrapper_id,name:it.wrapper_name})));
+      setCompany('ГЕ');
+    }
+    setLoadingItems(false);
+  };
+
+  useEffect(()=>{loadSource('items');},[]);
 
   const filtered=query.trim()
     ? allItems.filter(it=>it.name.toLowerCase().includes(query.toLowerCase())||String(it.item_id).includes(query))
@@ -11370,7 +12094,15 @@ function CreateStandardFromItemDialog({onClose, onCreated}) {
 
   return e('div',{style:{background:'var(--surface)',borderRadius:16,padding:24,width:'100%',maxWidth:560,
       maxHeight:'90vh',display:'flex',flexDirection:'column',boxSizing:'border-box'}},
-    e('div',{style:{fontWeight:700,fontSize:16,marginBottom:16}},'Создать эталон из заготовки'),
+    e('div',{style:{fontWeight:700,fontSize:16,marginBottom:12}},'Создать эталон'),
+    e('div',{style:{display:'flex',gap:6,marginBottom:12,flexWrap:'wrap'}},
+      [{key:'items',label:'Заготовки EE/УД'},{key:'products',label:'🍽️ Блюда'},{key:'wrappers',label:'🥣 Заготовки блюд'}]
+      .map(s=>e('button',{key:s.key,onClick:()=>{setSource(s.key);loadSource(s.key);},
+        style:{padding:'5px 12px',borderRadius:7,border:'1.5px solid var(--border)',fontSize:12,cursor:'pointer',
+          background:source===s.key?'var(--accent)':'transparent',
+          color:source===s.key?'white':'var(--text)',fontWeight:source===s.key?700:400}}
+        ,s.label))
+    ),
 
     !selected
     ? e('div',{style:{display:'flex',flexDirection:'column',flex:1,minHeight:0}},
@@ -11407,8 +12139,11 @@ function CreateStandardFromItemDialog({onClose, onCreated}) {
           e('button',{onClick:()=>setSelected(null),
             style:{background:'none',border:'none',color:'var(--muted)',cursor:'pointer',fontSize:13}},'✕ изменить')
         ),
-        e('select',{value:company,onChange:ev=>setCompany(ev.target.value),style:inputStyle},
-          e('option',{value:'EE'},'EE'),e('option',{value:'УД'},'УД')),
+        source==='items'
+          ? e('select',{value:company,onChange:ev=>setCompany(ev.target.value),style:inputStyle},
+              e('option',{value:'EE'},'EE'),e('option',{value:'УД'},'УД'))
+          : e('div',{style:{...inputStyle,padding:'9px 12px',background:'var(--hover)',color:'var(--muted)',fontSize:13}},
+              'Компания: '+company),
         e('textarea',{placeholder:'Внешний вид',value:appearance,onChange:ev=>setAppearance(ev.target.value),
           rows:2,style:{...inputStyle,resize:'vertical'}}),
         e('textarea',{placeholder:'Цвет',value:color,onChange:ev=>setColor(ev.target.value),
@@ -11518,7 +12253,7 @@ function LibraryTab({standards, onReload}) {
       e('button',{onClick:()=>setShowCreateFromItem(true),
         style:{padding:'8px 18px',borderRadius:10,border:'1.5px solid var(--accent)',background:'var(--accent)',
           color:'white',fontWeight:700,fontSize:13,cursor:'pointer'}},
-        '+ Создать эталон из заготовки')
+        '+ Создать эталон')
     ),
 
     // Поиск — sticky, прилипает под навбаром при прокрутке
@@ -11528,7 +12263,8 @@ function LibraryTab({standards, onReload}) {
         e('input',{type:'text',className:'filter-input',placeholder:'Поиск по ID или названию…',
           style:{flex:1,minWidth:180},value:search,onChange:ev=>setSearch(ev.target.value)}),
         e('select',{className:'filter-input',value:company,onChange:ev=>setCompany(ev.target.value)},
-          e('option',{value:''},'Все'),e('option',{value:'EE'},'EE'),e('option',{value:'УД'},'УД'))
+          e('option',{value:''},'Все'),e('option',{value:'EE'},'EE'),e('option',{value:'УД'},'УД'),
+          e('option',{value:'блюдо'},'Блюда'),e('option',{value:'ГЕ'},'Заготовки блюд'))
       ),
       e('div',{style:{fontSize:13,color:'var(--muted)',marginTop:6}},`${filtered.length} эталонов`)
     ),
@@ -11725,6 +12461,12 @@ function StandardCard({s, onToggleAlways, onReload, onDelete}) {
 
           // ── Режим просмотра ──
           : e('div',{style:{display:'flex',flexDirection:'column',gap:4}},
+              s.company==='ГЕ'&&s.process_description&&e('div',{style:{
+                marginBottom:8,padding:'8px 12px',background:'var(--bg)',borderRadius:8,
+                border:'1.5px solid var(--border)'}},
+                e('div',{style:{fontSize:11,fontWeight:700,color:'var(--muted)',textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:4}},'Описание технологического процесса'),
+                e('div',{style:{fontSize:13,whiteSpace:'pre-wrap',lineHeight:1.5}},s.process_description)
+              ),
               BASE_CRITERIA.map(c=>e('div',{key:c.key,style:{fontSize:13,color:'var(--text)',lineHeight:'1.5'}},
                 e('span',{style:{fontWeight:600,color:'var(--muted)',marginRight:4}},c.label+':'),
                 c.val||e('span',{style:{color:'var(--muted)',fontStyle:'italic'}},'—')
@@ -11849,7 +12591,7 @@ function ProrabotkaCreateActModal({task, onClose, onCreated}) {
 }
 
 // Вкладка Проработки — задания из Google Sheet
-function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
+function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId, onCountChange}) {
   const [tasks,setTasks]=useState(null);
   const [error,setError]=useState(null);
   const [search,setSearch]=useState('');
@@ -11859,11 +12601,13 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
   // actBySheetId/setActBySheetId приходят из TechnologistPage (общее состояние)
 
   useEffect(()=>{
+    let taskList=[];
     fetch('/api/prorabotki')
       .then(r=>r.json())
       .then(d=>{
         if(d.error) throw new Error(d.error);
-        setTasks(d.tasks||[]);
+        taskList=d.tasks||[];
+        setTasks(taskList);
         // ID initialization can migrate existing act links; load them afterwards.
         return fetch('/api/acts/acts');
       })
@@ -11873,6 +12617,10 @@ function ProrabotkaTab({onActCreated, actBySheetId, setActBySheetId}) {
         const map={};
         (d.acts||[]).forEach(a=>{ if(a.source_row) map[String(a.source_row)]=a; });
         setActBySheetId(map);
+        if(onCountChange){
+          const done=taskList.filter(t=>map[String(t.sheetId)]).length;
+          onCountChange(done,taskList.length);
+        }
       })
       .catch(e=>setError(e.message));
   },[]);
@@ -12237,15 +12985,29 @@ function ManagerTechnologistTasks(){
     )
   );
 }
-function TechnologistManagerTasks(){
+function TechnologistManagerTasks({onCountChange}){
   const [tasks,setTasks]=useState([]);
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState('');
   const [editing,setEditing]=useState(null);
   const [text,setText]=useState('');
+  const [showCreate,setShowCreate]=useState(false);
+  const [newTitle,setNewTitle]=useState('');
+  const [newDesc,setNewDesc]=useState('');
+  const [newDate,setNewDate]=useState(todayISO());
+  const [creating,setCreating]=useState(false);
+  const [createError,setCreateError]=useState('');
   const load=async()=>{
     setLoading(true);setError('');
-    try{const data=await technologistTaskRequest('/','technologist');setTasks(data.tasks||[]);}
+    try{
+      const data=await technologistTaskRequest('/','technologist');
+      const list=data.tasks||[];
+      setTasks(list);
+      if(onCountChange){
+        const done=list.filter(t=>t.status==='completed').length;
+        onCountChange(done,list.length);
+      }
+    }
     catch(err){setError(err.message);}
     finally{setLoading(false);}
   };
@@ -12260,6 +13022,20 @@ function TechnologistManagerTasks(){
       setEditing(null);setText('');await load();
     }catch(err){setError(err.message);}
   };
+  const createTask=async()=>{
+    if(!newTitle.trim()){setCreateError('Укажите заголовок');return;}
+    if(!newDesc.trim()){setCreateError('Укажите описание');return;}
+    if(!newDate){setCreateError('Укажите дату');return;}
+    setCreating(true);setCreateError('');
+    try{
+      await technologistTaskRequest('/','technologist',{
+        method:'POST',body:JSON.stringify({title:newTitle.trim(),description:newDesc.trim(),planned_date:newDate})
+      });
+      setShowCreate(false);setNewTitle('');setNewDesc('');setNewDate(todayISO());
+      await load();
+    }catch(err){setCreateError(err.message);}finally{setCreating(false);}
+  };
+
   const active=tasks.filter(t=>t.status==='new');
   const closed=tasks.filter(t=>t.status==='completed'||t.status==='cancelled');
   const list=items=>e(TechnologistTaskDateGroups,{tasks:items,renderTask:task=>
@@ -12279,13 +13055,457 @@ function TechnologistManagerTasks(){
           )
     )})
   });
+  const inputStyle={width:'100%',padding:'8px 10px',borderRadius:8,border:'1.5px solid var(--border)',
+    background:'var(--bg)',color:'var(--text)',fontSize:14,boxSizing:'border-box',marginBottom:10};
+
   return e('div',null,
+    // Форма создания нового задания
+    showCreate&&e('div',{style:{background:'var(--surface)',border:'1.5px solid var(--border)',
+        borderRadius:12,padding:18,marginBottom:20}},
+      e('div',{style:{fontWeight:700,fontSize:15,marginBottom:12}},'Новое задание'),
+      createError&&e('div',{style:{color:'#B91C1C',fontSize:13,marginBottom:8}},createError),
+      e('input',{type:'text',placeholder:'Заголовок *',value:newTitle,onChange:ev=>setNewTitle(ev.target.value),style:inputStyle}),
+      e('textarea',{placeholder:'Описание *',value:newDesc,onChange:ev=>setNewDesc(ev.target.value),
+        rows:3,style:{...inputStyle,resize:'vertical'}}),
+      e('input',{type:'date',value:newDate,onChange:ev=>setNewDate(ev.target.value),style:{...inputStyle,width:'auto'}}),
+      e('div',{style:{display:'flex',gap:8,marginTop:4}},
+        e('button',{onClick:createTask,disabled:creating,
+          style:{padding:'8px 18px',border:0,borderRadius:8,background:'var(--accent)',color:'#fff',fontWeight:700,cursor:'pointer'}},
+          creating?'Сохранение…':'Создать'),
+        e('button',{onClick:()=>{setShowCreate(false);setCreateError('');},
+          style:{padding:'8px 14px',border:'1.5px solid var(--border)',borderRadius:8,background:'transparent',color:'var(--text)',cursor:'pointer'}},
+          'Отмена')
+      )
+    ),
     error&&e('div',{style:{color:'#B91C1C',fontSize:13,marginBottom:10}},error),
     loading?e('div',{className:'empty-state'},'Загрузка…'):e(React.Fragment,null,
-      e('div',{style:{fontSize:17,fontWeight:750,marginBottom:10}},`Новые задания (${active.length})`),
+      e('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12}},
+        e('div',{style:{fontSize:17,fontWeight:750}},`Новые задания (${active.length})`),
+        !showCreate&&e('button',{onClick:()=>{setShowCreate(true);setCreateError('');},
+          style:{padding:'7px 16px',border:0,borderRadius:8,background:'var(--accent)',color:'#fff',fontWeight:700,cursor:'pointer',fontSize:13}},
+          '+ Создать задание')
+      ),
       active.length?list(active):e('div',{className:'empty-state',style:{marginBottom:22}},'Новых заданий нет'),
       e('div',{style:{fontSize:17,fontWeight:750,margin:'24px 0 10px'}},`Выполненные и отменённые (${closed.length})`),
       closed.length?list(closed):e('div',{className:'empty-state'},'Завершённых заданий нет')
+    )
+  );
+}
+
+// ─── Готовая еда ──────────────────────────────────────────────────────────────
+
+// Форма создания/редактирования эталона готовой еды
+function RFStandardForm({standard, itemType, products, wrappers, onSave, onCancel}) {
+  const [name,setName]=useState(standard?.name||'');
+  const [itemId,setItemId]=useState(standard?.item_id||'');
+  const [appearance,setAppearance]=useState(standard?.appearance||'');
+  const [color,setColor]=useState(standard?.color||'');
+  const [tasteSmell,setTasteSmell]=useState(standard?.taste_smell||'');
+  const [consistency,setConsistency]=useState(standard?.consistency||'');
+  const [alwaysCheck,setAlwaysCheck]=useState(!!standard?.always_check);
+  const [extraFields,setExtraFields]=useState(standard?.extra_fields||[]);
+  const [newField,setNewField]=useState('');
+  const [saving,setSaving]=useState(false);
+  const [error,setError]=useState('');
+
+  const listItems = itemType==='product' ? products : wrappers;
+
+  const addField=()=>{
+    const f=newField.trim();
+    if(!f) return;
+    setExtraFields(prev=>[...prev,{name:f,description:''}]);
+    setNewField('');
+  };
+
+  const save=async()=>{
+    if(!name.trim()){setError('Введите название');return;}
+    setSaving(true);setError('');
+    try{
+      const body={name:name.trim(),item_id:itemId||null,item_type:itemType,
+        appearance:appearance||null,color:color||null,taste_smell:tasteSmell||null,
+        consistency:consistency||null,always_check:alwaysCheck,extra_fields:extraFields};
+      const url=standard?`/api/ready-food/standards/${standard.id}`:'/api/ready-food/standards';
+      const r=await fetch(url,{method:standard?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const d=await r.json();
+      if(!r.ok) throw new Error(d.error||r.status);
+      onSave(standard?standard.id:d.id);
+    }catch(err){setError(err.message);}finally{setSaving(false);}
+  };
+
+  const fieldStyle={width:'100%',padding:'8px 10px',borderRadius:8,border:'1.5px solid var(--border)',
+    background:'var(--bg)',color:'var(--text)',fontSize:14,boxSizing:'border-box'};
+  const labelStyle={fontSize:12,fontWeight:600,color:'var(--muted)',marginBottom:4,display:'block'};
+
+  return e('div',{style:{background:'var(--surface)',border:'1.5px solid var(--border)',borderRadius:12,padding:20}},
+    error&&e('div',{style:{color:'#B91C1C',fontSize:13,marginBottom:10}},error),
+    e('label',{style:labelStyle},'Название *'),
+    e('input',{value:name,onChange:ev=>setName(ev.target.value),style:{...fieldStyle,marginBottom:12},placeholder:'Название блюда или заготовки'}),
+    e('label',{style:labelStyle},itemType==='product'?'Блюдо':'Заготовка'),
+    e('select',{value:itemId,onChange:ev=>setItemId(Number(ev.target.value)||''),style:{...fieldStyle,marginBottom:12}},
+      e('option',{value:''},'— не выбрано —'),
+      listItems.map(it=>e('option',{key:it.id||it.wrapper_id,value:it.id||it.wrapper_id},
+        it.name||it.wrapper_name))
+    ),
+    [['appearance','Внешний вид',appearance,setAppearance],
+     ['color','Цвет',color,setColor],
+     ['taste_smell','Вкус и запах',tasteSmell,setTasteSmell],
+     ['consistency','Консистенция',consistency,setConsistency]]
+    .map(([key,label,val,setter])=>e('div',{key,style:{marginBottom:12}},
+      e('label',{style:labelStyle},label),
+      e('textarea',{value:val,onChange:ev=>setter(ev.target.value),rows:2,
+        style:{...fieldStyle,resize:'vertical'}})
+    )),
+    e('label',{style:{...labelStyle,marginBottom:8}},
+      e('input',{type:'checkbox',checked:alwaysCheck,onChange:ev=>setAlwaysCheck(ev.target.checked),style:{marginRight:6}}),
+      'Проверять каждый день автоматически'
+    ),
+    e('div',{style:{marginBottom:12}},
+      e('div',{style:{fontSize:13,fontWeight:600,marginBottom:8}},'Дополнительные поля'),
+      extraFields.map((f,i)=>e('div',{key:i,style:{display:'flex',gap:8,alignItems:'center',marginBottom:6}},
+        e('span',{style:{flex:1,fontSize:13,padding:'6px 10px',background:'var(--hover)',borderRadius:7}},typeof f==='string'?f:f.name),
+        e('button',{onClick:()=>setExtraFields(prev=>prev.filter((_,j)=>j!==i)),
+          style:{padding:'4px 8px',border:'none',background:'#FEE2E2',color:'#B91C1C',borderRadius:6,cursor:'pointer',fontSize:12}},'✕')
+      )),
+      e('div',{style:{display:'flex',gap:8}},
+        e('input',{value:newField,onChange:ev=>setNewField(ev.target.value),
+          onKeyDown:ev=>ev.key==='Enter'&&addField(),
+          placeholder:'Новое поле…',style:{...fieldStyle,flex:1}}),
+        e('button',{onClick:addField,style:{padding:'8px 14px',border:'none',background:'var(--accent)',
+          color:'white',borderRadius:8,cursor:'pointer',fontWeight:600,whiteSpace:'nowrap'}},'+')
+      )
+    ),
+    e('div',{style:{display:'flex',gap:10,marginTop:16}},
+      e('button',{onClick:save,disabled:saving,style:{padding:'9px 20px',border:'none',background:'var(--ok)',
+        color:'white',borderRadius:9,fontWeight:700,cursor:'pointer'}},saving?'Сохранение…':'Сохранить'),
+      e('button',{onClick:onCancel,style:{padding:'9px 16px',border:'1.5px solid var(--border)',
+        background:'transparent',color:'var(--text)',borderRadius:9,cursor:'pointer'}},'Отмена')
+    )
+  );
+}
+
+// Карточка задания готовой еды (аналог QualityTaskCard)
+function RFTaskCard({task, isOpen, onToggle, onDelete, onSave, onReferenceAdded, onPhotosChanged, technologists, onAssign}) {
+  const [results,setResults]=useState(()=>{
+    const map={};
+    (task.results||[]).forEach(r=>{map[r.field_name]={result:r.result||'',comment:r.comment||'',action:r.action||''};});
+    return map;
+  });
+  const [saving,setSaving]=useState(false);
+  const [uploading,setUploading]=useState(false);
+  const [refUploading,setRefUploading]=useState(false);
+
+  const stdFields=[
+    {name:'appearance',label:'Внешний вид',value:task.appearance},
+    {name:'color',label:'Цвет',value:task.color},
+    {name:'taste_smell',label:'Вкус и запах',value:task.taste_smell},
+    {name:'consistency',label:'Консистенция',value:task.consistency},
+    ...(task.extra_fields||[]).map(f=>({name:typeof f==='string'?f:f.name,label:typeof f==='string'?f:f.name,value:null})),
+  ].filter(f=>f.value||!(f.name in {appearance:1,color:1,taste_smell:1,consistency:1})||task.status!=='done');
+
+  const allFilled=stdFields.length===0||stdFields.every(f=>(results[f.name]?.result||'').trim());
+
+  const saveTask=async(status)=>{
+    setSaving(true);
+    try{
+      const res=Object.entries(results).map(([field_name,v])=>({field_name,...v}));
+      await fetch(`/api/ready-food/tasks/${task.id}/save`,{method:'PATCH',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({status,results:res})});
+      onSave(task.id,status,res);
+    }finally{setSaving(false);}
+  };
+
+  const uploadPhoto=async(file,isRef)=>{
+    if(isRef) setRefUploading(true); else setUploading(true);
+    const fd=new FormData(); fd.append('photo',file);
+    const url=isRef?`/api/ready-food/standards/${task.standard_id}/photos`:`/api/ready-food/tasks/${task.id}/photos`;
+    const r=await fetch(url,{method:'POST',body:fd});
+    const d=await r.json();
+    if(isRef) { onReferenceAdded&&onReferenceAdded(task.standard_id,{filename:d.filename}); setRefUploading(false); }
+    else { onPhotosChanged&&onPhotosChanged(task.id,[...(task.photos||[]),{filename:d.filename}]); setUploading(false); }
+  };
+
+  const deletePhoto=async(filename,isRef)=>{
+    if(!confirm('Удалить фото?')) return;
+    const url=isRef?`/api/ready-food/standards/${task.standard_id}/photos/${filename}`:`/api/ready-food/tasks/${task.id}/photos/${filename}`;
+    await fetch(url,{method:'DELETE'});
+    if(isRef) onReferenceAdded&&onReferenceAdded(task.standard_id,null,filename);
+    else onPhotosChanged&&onPhotosChanged(task.id,(task.photos||[]).filter(p=>p.filename!==filename));
+  };
+
+  const statusColor=task.status==='done'?'var(--ok)':task.status==='overdue'?'var(--danger)':'var(--accent)';
+  const statusLabel=task.status==='done'?'Выполнено':task.status==='overdue'?'Просрочено':'Ожидает';
+  const typeLabel=task.item_type==='product'?'🍽️ Блюдо':'🥣 Заготовка';
+
+  return e('div',{style:{border:'1.5px solid var(--border)',borderRadius:12,overflow:'hidden',background:'var(--surface)'}},
+    e('div',{onClick:onToggle,style:{display:'flex',alignItems:'center',gap:10,padding:'12px 14px',cursor:'pointer',userSelect:'none'}},
+      e('span',{style:{fontSize:12,padding:'2px 8px',borderRadius:20,border:`1.5px solid ${statusColor}`,color:statusColor,fontWeight:700,flexShrink:0}},statusLabel),
+      e('span',{style:{fontSize:11,color:'var(--muted)',flexShrink:0}},typeLabel),
+      e('span',{style:{fontWeight:600,fontSize:14,flex:1,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},task.standard_name||task.name||'—'),
+      e('span',{style:{fontSize:18,color:'var(--muted)',flexShrink:0}},isOpen?'▲':'▼')
+    ),
+    isOpen&&e('div',{style:{borderTop:'1px solid var(--border)',padding:'14px 14px'}},
+      // Назначить
+      e('div',{style:{marginBottom:12}},
+        technologists&&technologists.length>0&&e('select',{
+          value:task.assigned_to||'',
+          onChange:async ev=>{
+            await fetch(`/api/ready-food/tasks/${task.id}/assign`,{method:'PATCH',
+              headers:{'Content-Type':'application/json'},body:JSON.stringify({assigned_to:ev.target.value||null})});
+            onAssign&&onAssign(task.id,ev.target.value||null);
+          },
+          style:{padding:'6px 10px',borderRadius:8,border:'1.5px solid var(--border)',background:'var(--bg)',color:'var(--text)',fontSize:13}
+        },
+          e('option',{value:''},'— Назначить технолога —'),
+          technologists.map(emp=>e('option',{key:emp.id,value:emp.id},emp.name))
+        )
+      ),
+      // Описание технологического процесса (только для заготовок ГЕ)
+      task.company==='ГЕ'&&task.process_description&&e('div',{style:{marginBottom:12,padding:'10px 12px',background:'var(--bg)',borderRadius:8,border:'1.5px solid var(--border)'}},
+        e('div',{style:{fontSize:12,fontWeight:600,color:'var(--muted)',marginBottom:6}},'Описание технологического процесса'),
+        e('div',{style:{fontSize:13,whiteSpace:'pre-wrap',lineHeight:1.5}},task.process_description)
+      ),
+      // Эталонные фото
+      (task.ref_photos||[]).length>0&&e('div',{style:{marginBottom:12}},
+        e('div',{style:{fontSize:12,fontWeight:600,color:'var(--muted)',marginBottom:6}},'Эталонные фото'),
+        e('div',{style:{display:'flex',gap:8,flexWrap:'wrap'}},
+          (task.ref_photos||[]).map(p=>e('img',{key:p.filename,src:`/api/quality/photos/${p.filename}`,
+            style:{width:72,height:72,objectFit:'cover',borderRadius:8,border:'1.5px solid var(--border)',cursor:'pointer'}}))
+        )
+      ),
+      // Поля проверки
+      stdFields.map(f=>e('div',{key:f.name,style:{marginBottom:12}},
+        e('div',{style:{fontSize:13,fontWeight:600,marginBottom:4}},f.label,
+          f.value&&e('span',{style:{fontSize:12,color:'var(--muted)',fontWeight:400,marginLeft:6}},'Эталон: '+f.value)
+        ),
+        e('textarea',{value:results[f.name]?.result||'',
+          onChange:ev=>setResults(p=>({...p,[f.name]:{...(p[f.name]||{}),result:ev.target.value}})),
+          rows:2,placeholder:'Результат проверки…',
+          style:{width:'100%',padding:'7px 10px',borderRadius:8,border:'1.5px solid var(--border)',
+            background:'var(--bg)',color:'var(--text)',resize:'vertical',fontSize:13,boxSizing:'border-box'}})
+      )),
+      // Фото
+      e('div',{style:{marginBottom:12}},
+        e('div',{style:{fontSize:12,fontWeight:600,color:'var(--muted)',marginBottom:6}},'Фото проверки'),
+        e('div',{style:{display:'flex',gap:8,flexWrap:'wrap',marginBottom:6}},
+          (task.photos||[]).map(p=>e('div',{key:p.filename,style:{position:'relative'}},
+            e('img',{src:`/api/quality/photos/${p.filename}`,
+              style:{width:72,height:72,objectFit:'cover',borderRadius:8,border:'1.5px solid var(--border)'}}),
+            e('button',{onClick:()=>deletePhoto(p.filename,false),
+              style:{position:'absolute',top:-6,right:-6,width:20,height:20,borderRadius:'50%',
+                border:'none',background:'#EF4444',color:'white',fontSize:11,cursor:'pointer',
+                display:'flex',alignItems:'center',justifyContent:'center',padding:0}},'✕')
+          ))
+        ),
+        e('label',{style:{display:'inline-flex',alignItems:'center',gap:6,padding:'7px 14px',
+          borderRadius:9,border:'1.5px solid var(--border)',cursor:'pointer',fontSize:13}},
+          uploading?'Загрузка…':'📷 Добавить фото',
+          !uploading&&e('input',{type:'file',accept:'image/*',style:{display:'none'},
+            onChange:ev=>ev.target.files[0]&&uploadPhoto(ev.target.files[0],false)})
+        )
+      ),
+      // Добавить эталонное фото
+      e('div',{style:{marginBottom:14}},
+        e('label',{style:{display:'inline-flex',alignItems:'center',gap:6,padding:'7px 14px',
+          borderRadius:9,border:'1.5px solid var(--border)',cursor:'pointer',fontSize:13,color:'var(--muted)'}},
+          refUploading?'Загрузка…':'🖼️ Добавить эталонное фото',
+          !refUploading&&e('input',{type:'file',accept:'image/*',style:{display:'none'},
+            onChange:ev=>ev.target.files[0]&&uploadPhoto(ev.target.files[0],true)})
+        )
+      ),
+      // Кнопки сохранения
+      task.status!=='done'&&e('div',{style:{display:'flex',gap:8}},
+        e('button',{onClick:()=>saveTask('done'),disabled:saving||!allFilled,
+          style:{padding:'9px 20px',border:'none',background:allFilled?'var(--ok)':'var(--border)',
+            color:'white',borderRadius:9,fontWeight:700,cursor:allFilled?'pointer':'default'}},
+          saving?'Сохранение…':'✓ Выполнено'),
+        e('button',{onClick:()=>saveTask('pending'),disabled:saving,
+          style:{padding:'9px 16px',border:'1.5px solid var(--border)',background:'transparent',
+            color:'var(--text)',borderRadius:9,cursor:'pointer'}},'Сохранить черновик')
+      ),
+      e('button',{onClick:()=>onDelete(task.id),
+        style:{marginTop:8,padding:'7px 14px',border:'1.5px solid #EF4444',background:'transparent',
+          color:'#EF4444',borderRadius:8,cursor:'pointer',fontSize:13}},'Удалить задание')
+    )
+  );
+}
+
+// Вкладка Готовая еда
+function ReadyFoodTab({onCountChange}) {
+  const [subTab,setSubTab]=useState('dishes'); // 'dishes' | 'wrappers'
+  const [date,setDate]=useState(todayISO());
+  const [allTasks,setAllTasks]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [openTaskId,setOpenTaskId]=useState(null);
+  const [showAdd,setShowAdd]=useState(false); // 'dishes'|'wrappers'|false
+  const [dishStandards,setDishStandards]=useState(null);
+  const [wrapperStandards,setWrapperStandards]=useState(null);
+  const [addSearch,setAddSearch]=useState('');
+  const [adding,setAdding]=useState(false);
+
+  const loadTasks=async(d)=>{
+    setLoading(true);
+    if(d===todayISO()){
+      // Синхронизируем план из Google Sheets (создаём эталоны и задания если нет)
+      await fetch(`/api/ready-food/today-plan?date=${d}`).catch(()=>{});
+    }
+    const r=await fetch(`/api/quality/tasks?date=${d}`).then(r=>r.json()).catch(()=>({tasks:[]}));
+    const tasks=(r.tasks||[]).filter(t=>t.company==='блюдо'||t.company==='ГЕ');
+    setAllTasks(tasks);
+    if(onCountChange){
+      const done=tasks.filter(t=>t.status==='done').length;
+      onCountChange([done,tasks.length]);
+    }
+    setLoading(false);
+  };
+
+  useEffect(()=>{loadTasks(date);},[date]);
+
+  const openAdd=async(type)=>{
+    setAddSearch('');
+    setShowAdd(type);
+    if(type==='dishes'&&!dishStandards){
+      const r=await fetch('/api/quality/standards?company=блюдо').then(r=>r.json()).catch(()=>({standards:[]}));
+      setDishStandards(r.standards||[]);
+    }
+    if(type==='wrappers'&&!wrapperStandards){
+      const r=await fetch('/api/quality/standards?company=%D0%93%D0%95').then(r=>r.json()).catch(()=>({standards:[]}));
+      setWrapperStandards(r.standards||[]);
+    }
+  };
+
+  const addTask=async(std)=>{
+    setAdding(true);
+    try{
+      await fetch('/api/quality/tasks',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({date,standard_id:std.id})});
+      await loadTasks(date);
+      setShowAdd(false);
+    }finally{setAdding(false);}
+  };
+
+  const tasks=allTasks.filter(t=>subTab==='dishes'?t.company==='блюдо':t.company==='ГЕ');
+  const pending=tasks.filter(t=>t.status==='pending'||t.status==='overdue'||!t.status);
+  const done=tasks.filter(t=>t.status==='done');
+
+  const dishesDone=allTasks.filter(t=>t.company==='блюдо'&&t.status==='done').length;
+  const dishesTotal=allTasks.filter(t=>t.company==='блюдо').length;
+  const wrDone=allTasks.filter(t=>t.company==='ГЕ'&&t.status==='done').length;
+  const wrTotal=allTasks.filter(t=>t.company==='ГЕ').length;
+
+  const onSave=(taskId,status,results)=>{
+    setAllTasks(prev=>prev.map(t=>t.id===taskId?{...t,status,results}:t));
+  };
+  const onPhotosChanged=(taskId,photos)=>{
+    setAllTasks(prev=>prev.map(t=>t.id===taskId?{...t,photos}:t));
+  };
+  const onReferenceAdded=(stdId,photo,delFilename)=>{
+    setAllTasks(prev=>prev.map(t=>{
+      if(t.standard_id!==stdId) return t;
+      const rp=delFilename
+        ?(t.ref_photos||[]).filter(p=>p.filename!==delFilename)
+        :(t.ref_photos||[]).some(p=>p.filename===photo?.filename)?t.ref_photos:[...(t.ref_photos||[]),photo];
+      return {...t,ref_photos:rp};
+    }));
+  };
+  const deleteTask=async(id)=>{
+    if(!confirm('Удалить задание?')) return;
+    await fetch(`/api/quality/tasks/${id}`,{method:'DELETE'});
+    setAllTasks(prev=>prev.filter(t=>t.id!==id));
+  };
+
+  const tabBtn=(key,label)=>e('button',{
+    className:'mgr-tab'+(subTab===key?' active':''),
+    onClick:()=>setSubTab(key)
+  },label);
+
+  const existingDishStdIds=new Set(allTasks.filter(t=>t.company==='блюдо').map(t=>t.standard_id));
+  const existingWrStdIds=new Set(allTasks.filter(t=>t.company==='ГЕ').map(t=>t.standard_id));
+  const filterAvailable=(list,existingIds)=>(list||[]).filter(s=>{
+    if(existingIds.has(s.id)) return false;
+    if(!addSearch) return true;
+    return s.name.toLowerCase().includes(addSearch.toLowerCase());
+  });
+  const availableDishes=filterAvailable(dishStandards,existingDishStdIds);
+  const availableWrappers=filterAvailable(wrapperStandards,existingWrStdIds);
+  const addDialogStandards=showAdd==='dishes'?availableDishes:availableWrappers;
+  const addDialogLoaded=showAdd==='dishes'?dishStandards!==null:wrapperStandards!==null;
+
+  return e('div',null,
+    // Диалог добавления блюда / заготовки
+    showAdd&&e('div',{style:{position:'fixed',inset:0,background:'rgba(0,0,0,0.45)',
+        display:'flex',alignItems:'center',justifyContent:'center',padding:'5vh 16px',zIndex:1000}},
+      e('div',{style:{background:'var(--bg)',borderRadius:16,padding:24,width:'100%',maxWidth:480,
+          maxHeight:'80vh',display:'flex',flexDirection:'column',gap:12}},
+        e('div',{style:{fontWeight:700,fontSize:16,marginBottom:4}},
+          showAdd==='dishes'?'Добавить блюдо':'Добавить заготовку'),
+        e('input',{type:'text',className:'filter-input',placeholder:'Поиск…',
+          value:addSearch,onChange:ev=>setAddSearch(ev.target.value),autoFocus:true}),
+        !addDialogLoaded
+          ?e('div',{className:'empty-state'},'Загрузка…')
+          :addDialogStandards.length===0
+            ?e('div',{style:{color:'var(--muted)',fontSize:13,textAlign:'center',padding:'20px 0'}},
+              'Нет доступных '+(showAdd==='dishes'?'блюд':'заготовок'))
+            :e('div',{style:{overflowY:'auto',flex:1,display:'flex',flexDirection:'column',gap:6}},
+              addDialogStandards.map(s=>e('button',{key:s.id,
+                onClick:()=>!adding&&addTask(s),
+                disabled:adding,
+                style:{padding:'10px 14px',textAlign:'left',border:'1.5px solid var(--border)',
+                  background:'var(--bg)',color:'var(--text)',borderRadius:10,cursor:'pointer',fontSize:13}},
+                s.name))
+            ),
+        e('button',{onClick:()=>setShowAdd(false),
+          style:{marginTop:4,padding:'8px 16px',border:'1.5px solid var(--border)',
+            background:'transparent',color:'var(--text)',borderRadius:9,cursor:'pointer',fontSize:13}},
+          'Отмена')
+      )
+    ),
+
+    e('div',{style:{display:'flex',gap:0,borderBottom:'2px solid var(--border)',marginBottom:16}},
+      tabBtn('dishes',`🍽️ Блюда${dishesTotal>0?' '+dishesDone+'/'+dishesTotal:''}`),
+      tabBtn('wrappers',`🥣 Заготовки${wrTotal>0?' '+wrDone+'/'+wrTotal:''}`)
+    ),
+
+    e('div',{style:{display:'flex',alignItems:'center',gap:12,marginBottom:16}},
+      e('input',{type:'date',className:'filter-input',value:date,
+        onChange:ev=>setDate(ev.target.value),style:{fontSize:15}}),
+      e('button',{onClick:()=>setDate(todayISO()),
+        style:{padding:'7px 14px',borderRadius:8,border:'1.5px solid var(--border)',
+          background:'transparent',color:'var(--text)',fontSize:13,cursor:'pointer'}},'Сегодня'),
+      e('button',{onClick:()=>openAdd(subTab==='dishes'?'dishes':'wrappers'),
+        style:{marginLeft:'auto',padding:'7px 16px',border:'none',background:'var(--accent)',
+          color:'white',borderRadius:9,fontWeight:700,cursor:'pointer',fontSize:13}},
+        subTab==='dishes'?'+ Добавить блюдо':'+ Добавить заготовку')
+    ),
+
+    loading?e('div',{className:'empty-state'},'Загрузка…'):e(React.Fragment,null,
+      pending.length===0&&done.length===0
+        ?e('div',{style:{padding:'30px',textAlign:'center',color:'var(--muted)',fontSize:14,
+            border:'1.5px dashed var(--border)',borderRadius:12}},
+          subTab==='dishes'
+            ?e(React.Fragment,null,'Нет заданий на этот день. ',
+              e('span',{style:{color:'var(--accent)',cursor:'pointer'},onClick:()=>openAdd('dishes')},'Добавить блюдо'))
+            :e(React.Fragment,null,'Нет заданий на этот день. ',
+              e('span',{style:{color:'var(--accent)',cursor:'pointer'},onClick:()=>openAdd('wrappers')},'Добавить заготовку')))
+        :null,
+      pending.length>0&&e('div',{style:{marginBottom:20}},
+        e('div',{style:{fontWeight:600,fontSize:15,marginBottom:10,color:'var(--muted)'}},
+          `К проверке (${pending.length})`),
+        e('div',{style:{display:'flex',flexDirection:'column',gap:10}},
+          pending.map(t=>e(QualityTaskCard,{key:t.id,task:t,isOpen:openTaskId===t.id,
+            onToggle:()=>setOpenTaskId(v=>v===t.id?null:t.id),
+            onDelete:deleteTask,onSave,onReferenceAdded,onPhotosChanged}))
+        )
+      ),
+      done.length>0&&e('div',null,
+        e('div',{style:{fontWeight:600,fontSize:15,marginBottom:10,color:'var(--muted)'}},
+          `Выполнено (${done.length})`),
+        e('div',{style:{display:'flex',flexDirection:'column',gap:10}},
+          done.map(t=>e(QualityTaskCard,{key:t.id,task:t,isOpen:openTaskId===t.id,
+            onToggle:()=>setOpenTaskId(v=>v===t.id?null:t.id),
+            onDelete:deleteTask,onSave,onReferenceAdded,onPhotosChanged}))
+        )
+      )
     )
   );
 }
@@ -12305,6 +13525,9 @@ function TechnologistPage({initialActId=null}) {
   const [showAdd,setShowAdd]=useState(false);
   const [openActId,setOpenActId]=useState(initialActId);
   const [actBySheetId,setActBySheetId]=useState({});
+  const [managerTaskCount,setManagerTaskCount]=useState(null); // [done,total]
+  const [prorabotkaCount,setProrabotkaCount]=useState(null); // [done,total]
+  const [readyFoodCount,setReadyFoodCount]=useState(null); // [done,total]
   const [showScrollTop,setShowScrollTop]=useState(false);
   useEffect(()=>{
     const onScroll=()=>setShowScrollTop(window.scrollY>300);
@@ -12346,6 +13569,28 @@ function TechnologistPage({initialActId=null}) {
   };
 
   useEffect(()=>{loadData(date);},[date]);
+
+  // Предзагрузка счётчика вкладки "От управляющего"
+  useEffect(()=>{
+    technologistTaskRequest('/','technologist').then(data=>{
+      const list=data.tasks||[];
+      const done=list.filter(t=>t.status==='completed').length;
+      setManagerTaskCount([done,list.length]);
+    }).catch(()=>{});
+  },[]);
+
+  // Предзагрузка счётчика Готовой еды (только для сегодняшней даты)
+  useEffect(()=>{
+    const d=todayISO();
+    (async()=>{
+      try{
+        await fetch(`/api/ready-food/today-plan?date=${d}`);
+        const r=await fetch(`/api/quality/tasks?date=${d}`).then(r=>r.json()).catch(()=>({tasks:[]}));
+        const tasks=(r.tasks||[]).filter(t=>t.company==='блюдо'||t.company==='ГЕ');
+        setReadyFoodCount([tasks.filter(t=>t.status==='done').length,tasks.length]);
+      }catch(e){}
+    })();
+  },[]);
 
   // Авто-создание заданий для "проверять всегда" — только если позиция есть в сегодняшней смене
   useEffect(()=>{
@@ -12399,10 +13644,13 @@ function TechnologistPage({initialActId=null}) {
     }));
   };
 
+  const mainTasks=tasks.filter(t=>t.company!=='блюдо'&&t.company!=='ГЕ');
   const todayStandardIds=new Set(tasks.map(t=>t.standard_id));
-  const pending=tasks.filter(t=>t.status==='pending'||t.status==='overdue');
-  const done=tasks.filter(t=>t.status==='done');
-  const filteredCarryover=carryoverTasks.filter(t=>!todayStandardIds.has(t.standard_id));
+  const pending=mainTasks.filter(t=>t.status==='pending'||t.status==='overdue');
+  const done=mainTasks.filter(t=>t.status==='done');
+  const filteredCarryover=carryoverTasks.filter(t=>!todayStandardIds.has(t.standard_id)&&t.company!=='блюдо'&&t.company!=='ГЕ');
+  const tasksDoneAll=done.length+filteredCarryover.filter(t=>t.status==='done').length;
+  const tasksTotalAll=mainTasks.length+filteredCarryover.length;
 
   const reloadStandards=async()=>{
     const sr=await fetch('/api/quality/standards').then(r=>r.json());
@@ -12414,11 +13662,19 @@ function TechnologistPage({initialActId=null}) {
     e('div',{style:{padding:'16px',maxWidth:tab==='prorabotki'?1600:960,margin:'0 auto'}},
     // Табы
     e('div',{className:'mgr-tabs',style:{marginBottom:20}},
-      e('button',{className:'mgr-tab'+(tab==='tasks'?' active':''),onClick:()=>setTab('tasks')},'📋 Задания'),
-      e('button',{className:'mgr-tab'+(tab==='managerTasks'?' active':''),onClick:()=>setTab('managerTasks')},'📝 От управляющего'),
+      e('button',{className:'mgr-tab'+(tab==='tasks'?' active':''),onClick:()=>setTab('tasks')},
+        '📋 Задания'+(tasksTotalAll>0?` ${tasksDoneAll}/${tasksTotalAll}`:'')
+      ),
+      e('button',{className:'mgr-tab'+(tab==='managerTasks'?' active':''),onClick:()=>setTab('managerTasks')},
+        '📝 От управляющего'+(managerTaskCount!=null?` ${managerTaskCount[0]}/${managerTaskCount[1]}`:'')
+      ),
+      e('button',{className:'mgr-tab'+(tab==='readyFood'?' active':''),onClick:()=>setTab('readyFood')},
+        '🍽️ Готовая еда'+(readyFoodCount!=null?` ${readyFoodCount[0]}/${readyFoodCount[1]}`:'')),
       e('button',{className:'mgr-tab'+(tab==='library'?' active':''),onClick:()=>setTab('library')},'📚 Библиотека эталонов'),
       e('button',{className:'mgr-tab'+(tab==='acts'?' active':''),onClick:()=>{setOpenActId(null);setTab('acts');}},'🧪 Акты проработки'),
-      e('button',{className:'mgr-tab'+(tab==='prorabotki'?' active':''),onClick:()=>setTab('prorabotki')},'🔬 Проработки')
+      e('button',{className:'mgr-tab'+(tab==='prorabotki'?' active':''),onClick:()=>setTab('prorabotki')},
+        '🔬 Проработки'+(prorabotkaCount!=null?` ${prorabotkaCount[0]}/${prorabotkaCount[1]}`:'')
+      )
     ),
 
     // Вкладка Задания
@@ -12488,13 +13744,15 @@ function TechnologistPage({initialActId=null}) {
         )
       )
     ),
-    tab==='managerTasks'&&e(TechnologistManagerTasks),
+    tab==='managerTasks'&&e(TechnologistManagerTasks,{onCountChange:(d,t)=>setManagerTaskCount([d,t])}),
+    tab==='readyFood'&&e(ReadyFoodTab,{onCountChange:c=>setReadyFoodCount(c)}),
 
     // Вкладка Библиотека
     tab==='library'&&e(LibraryTab,{standards,onReload:async()=>{await reloadStandards();}}),
     tab==='acts'&&e(ActsPage,{key:openActId||'acts',initialActId:openActId,
-      onActDeleted:(id)=>setActBySheetId(prev=>{const next={...prev};Object.keys(next).forEach(k=>{if(next[k]?.id===id)delete next[k];});return next;})}),
-    tab==='prorabotki'&&e(ProrabotkaTab,{actBySheetId,setActBySheetId,onActCreated:(actId)=>{setOpenActId(actId);setTab('acts');}}),
+      onActDeleted:(id)=>setActBySheetId(prev=>{const next={...prev};Object.keys(next).forEach(k=>{if(next[k]?.id===id)delete next[k];});return next;}),
+      onCountChange:(d,t)=>setActsCount([d,t])}),
+    tab==='prorabotki'&&e(ProrabotkaTab,{actBySheetId,setActBySheetId,onActCreated:(actId)=>{setOpenActId(actId);setTab('acts');},onCountChange:(d,t)=>setProrabotkaCount([d,t])}),
 
     // Модалка добавления
     showAdd&&e('div',{style:{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',
@@ -13524,7 +14782,7 @@ function ActForm({actId, templateId, onBack, onSaved}) {
 }
 
 // ── Главная страница Актов ────────────────────────────────────────────────────
-function ActsPage({isManager=false, initialActId=null, onActDeleted}) {
+function ActsPage({isManager=false, initialActId=null, onActDeleted, onCountChange}) {
   const [view, setView] = useState(initialActId?'fill-act':'list');
   const [templates, setTemplates] = useState([]);
   const [acts, setActs] = useState([]);
@@ -13552,7 +14810,11 @@ function ActsPage({isManager=false, initialActId=null, onActDeleted}) {
     setFilteredActs(f);
   };
   const loadActs = () =>
-    fetch('/api/acts/acts').then(r=>r.json()).then(d=>{setActs(d.acts||[]);setFilteredActs(null);setListFilterRaw('');setListFilterTemplate('');setListFilterStatus('');setListFilterManufacturer('');setListFilterConclusion('');});
+    fetch('/api/acts/acts').then(r=>r.json()).then(d=>{
+      const list=d.acts||[];
+      setActs(list);setFilteredActs(null);setListFilterRaw('');setListFilterTemplate('');setListFilterStatus('');setListFilterManufacturer('');setListFilterConclusion('');
+      if(onCountChange){const done=list.filter(a=>a.status==='done').length;onCountChange(done,list.length);}
+    });
 
   useEffect(()=>{ loadTemplates(); loadActs(); },[]);
 
@@ -13782,10 +15044,14 @@ function ActsPage({isManager=false, initialActId=null, onActDeleted}) {
 // ============================================================
 // APP ROOT
 // ============================================================
+
 function App() {
-  // Tablet lock: ?shop=KEY pins this device to one workshop
+  return e(AppInner, {});
+}
+
+function AppInner({}) {
   const shopParam=useMemo(()=>new URLSearchParams(location.search).get('shop'),[]);
-  const roleParam=useMemo(()=>new URLSearchParams(location.search).get('role'),[]);
+  const roleParam=useMemo(()=>new URLSearchParams(location.search).get('role')||'manager',[]);
   const actIdParam=useMemo(()=>{ const v=new URLSearchParams(location.search).get('actId'); return v?Number(v):null; },[]);
   const isManager=roleParam==='manager';
   const isTechnologist=roleParam==='technologist';
@@ -13960,14 +15226,20 @@ function App() {
   if(isTechnologist) return e('div',null,
     e('div',{className:'topnav'},
       e('div',null,e('span',{className:'topnav-brand'},'🔬 Технолог')),
-      e('div',{className:'topnav-right'},e('div',{className:'date-pill'},formatDateRu(today)))
+      e('div',{className:'topnav-right'},
+        e('div',{className:'date-pill'},formatDateRu(today)),
+        
+      )
     ),
     e(TechnologistPage,{initialActId:actIdParam})
   );
   if(isProduct) return e('div',null,
     e('div',{className:'topnav'},
       e('div',null,e('span',{className:'topnav-brand'},'📋 Продуктовая команда')),
-      e('div',{className:'topnav-right'},e('div',{className:'date-pill'},formatDateRu(today)))
+      e('div',{className:'topnav-right'},
+        e('div',{className:'date-pill'},formatDateRu(today)),
+        
+      )
     ),
     e(ProductJournalPage,{initialActId:actIdParam})
   );
@@ -13980,7 +15252,8 @@ function App() {
         e('span',{className:'topnav-brand'},'🍳 Менеджер кухни')
       ),
       e('div',{className:'topnav-right'},
-        e('div',{className:'date-pill'},formatDateRu(today))
+        e('div',{className:'date-pill'},formatDateRu(today)),
+        
       )
     ),
     e(KitchenManagerPage,{
@@ -14027,10 +15300,12 @@ function App() {
               color:'white',fontSize:14,fontWeight:700,minHeight:40},
             onClick:()=>{setViewDate(today);loadShift(today).then(d=>{if(d)setShift(d);});setMode('manager');}
           },'📊 Управляющий'),
-          e('div',{className:'date-pill'},isArchive?'Архив: '+formatDateRu(viewDate):formatDateRu(today))
+          e('div',{className:'date-pill'},isArchive?'Архив: '+formatDateRu(viewDate):formatDateRu(today)),
         ) :
-        // Кухня: только дата
-        e('div',{className:'date-pill'},formatDateRu(today))
+        // Кухня: только дата + выход
+        e(React.Fragment,null,
+          e('div',{className:'date-pill'},formatDateRu(today)),
+        )
       )
     ),
 
@@ -14050,6 +15325,7 @@ function App() {
       allEmployees,
       isManager,
       dateKey:viewDate,
+      activeTcEE, activeTcUD,
       shopGroups: (shopParam||!isManager) ? null : workshopGroups,
       precutConfig,
       onPrecutConfigChange: async(newSet)=>{

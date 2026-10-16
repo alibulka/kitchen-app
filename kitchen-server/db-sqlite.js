@@ -231,6 +231,15 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS shift_dh_storage (
   if (!dhCols.includes('label_date')) sqlite.exec('ALTER TABLE shift_dh_storage ADD COLUMN label_date TEXT');
 }
 
+// Миграция: process_description в ready_food_wrappers
+{
+  const rfwCols = sqlite.prepare("PRAGMA table_info(ready_food_wrappers)").all().map(c => c.name);
+  if (rfwCols.length > 0 && !rfwCols.includes('process_description')) {
+    sqlite.exec('ALTER TABLE ready_food_wrappers ADD COLUMN process_description TEXT');
+    console.log('Migration: added process_description to ready_food_wrappers');
+  }
+}
+
 // ─── SQL: pg → SQLite ────────────────────────────────────────────────────────
 
 // Конвертируем подмножество pg-синтаксиса в SQLite.
@@ -249,7 +258,7 @@ function normalize(sql, params = []) {
       .replace(/NOW\(\)/gi,       "datetime('now')")
       .replace(/SERIAL PRIMARY KEY/gi, 'INTEGER PRIMARY KEY AUTOINCREMENT')
       .replace(/SMALLINT/gi, 'INTEGER')
-      .replace(/RETURNING id/gi, ''),
+      .replace(/\bRETURNING\b[^;]*/gi, ''),
     params: outParams.length > 0 ? outParams : params,
   };
 }
@@ -261,9 +270,14 @@ function execQuery(sql, params = []) {
       const rows = p.length ? sqlite.prepare(s).all(...p) : sqlite.prepare(s).all();
       return { rows };
     }
-    // INSERT ... RETURNING id — возвращаем lastInsertRowid
+    // INSERT ... RETURNING ... — выполняем INSERT, затем SELECT вставленной строки
     if (/returning/i.test(sql)) {
+      const tableMatch = s.match(/INSERT\s+INTO\s+(\w+)/i);
       const info = p.length ? sqlite.prepare(s).run(...p) : sqlite.prepare(s).run();
+      if (tableMatch) {
+        const rows = sqlite.prepare(`SELECT * FROM ${tableMatch[1]} WHERE rowid=?`).all(info.lastInsertRowid);
+        return { rows: rows.length ? rows : [{ id: info.lastInsertRowid }] };
+      }
       return { rows: [{ id: info.lastInsertRowid }] };
     }
     // INSERT / UPDATE / DELETE
